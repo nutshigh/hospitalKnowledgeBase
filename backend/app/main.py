@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.api.health import router as health_router
+from app.api.auth import router as auth_router
 
 
 def create_app() -> FastAPI:
@@ -18,6 +19,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router, prefix="/api/v1", tags=["health"])
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
