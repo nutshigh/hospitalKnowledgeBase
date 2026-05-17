@@ -1,0 +1,10 @@
+{
+  "name": "hospital-ai-frontend",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/user-portal",
+    "packages/doctor-portal",
+    "packages/admin-portal"
+  ]
+}
