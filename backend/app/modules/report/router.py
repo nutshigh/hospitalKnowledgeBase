@@ -72,7 +72,7 @@ def get_task_status(task_id: int, db: Session = Depends(_get_db)):
     return task
 
 
-@router.get("/reports", response_model=schemas.ReportListResponse)
+@router.get("", response_model=schemas.ReportListResponse)
 def list_reports(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -85,7 +85,7 @@ def list_reports(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/reports/{report_id}", response_model=schemas.ReportDetailResponse)
+@router.get("/{report_id}", response_model=schemas.ReportDetailResponse)
 def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
     report = service.get_report_detail(db, report_id)
     if not report:
@@ -107,7 +107,7 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
     }
 
 
-@router.delete("/reports/{report_id}")
+@router.delete("/{report_id}")
 def delete_report(report_id: int, db: Session = Depends(_get_db)):
     report = service.get_report_detail(db, report_id)
     if not report:
