@@ -8,6 +8,7 @@ from app.api.auth import router as auth_router
 from app.modules.knowledge.router import router as knowledge_router
 from app.modules.knowledge.internal import router as knowledge_internal_router
 from app.modules.report.router import router as report_router
+from app.modules.interpretation.router import router as interpretation_router
 
 
 def create_app() -> FastAPI:
@@ -26,6 +27,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_router, prefix="/api/v1/knowledge", tags=["knowledge"])
     app.include_router(knowledge_internal_router, prefix="/api/v1/knowledge/internal", tags=["knowledge-internal"])
     app.include_router(report_router, prefix="/api/v1/reports", tags=["reports"])
+    app.include_router(interpretation_router, prefix="/api/v1/interpretations", tags=["interpretations"])
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
