@@ -1,0 +1,28 @@
+routes:
+  - id: backend-api
+    uri: /api/v1/*
+    upstream:
+      type: roundrobin
+      nodes:
+        "backend:8000": 1
+    plugins:
+      cors:
+        allow_origins: "*"
+        allow_methods: "GET,POST,PUT,DELETE"
+        allow_headers: "Authorization,Content-Type"
+      limit-req:
+        rate: 100
+        burst: 50
+        key: remote_addr
+
+  - id: user-portal
+    uri: /*
+    upstream:
+      type: roundrobin
+      nodes:
+        "user-portal:3001": 1
+
+upstreams:
+  - id: backend
+    nodes:
+      "backend:8000": 1
