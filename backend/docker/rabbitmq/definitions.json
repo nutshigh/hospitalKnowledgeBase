@@ -1,0 +1,26 @@
+{
+  "rabbit_version": "3.12",
+  "users": [
+    {"name": "guest", "password_hash": "guest", "tags": "administrator"}
+  ],
+  "vhosts": [{"name": "/"}],
+  "permissions": [
+    {"user": "guest", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*"}
+  ],
+  "exchanges": [
+    {"name": "hospital.tasks", "vhost": "/", "type": "topic", "durable": true}
+  ],
+  "queues": [
+    {"name": "parsing.urgent", "vhost": "/", "durable": true},
+    {"name": "parsing.normal", "vhost": "/", "durable": true},
+    {"name": "interpretation.urgent", "vhost": "/", "durable": true},
+    {"name": "interpretation.normal", "vhost": "/", "durable": true},
+    {"name": "dead.letter", "vhost": "/", "durable": true}
+  ],
+  "bindings": [
+    {"source": "hospital.tasks", "vhost": "/", "destination": "parsing.urgent", "routing_key": "parsing.urgent"},
+    {"source": "hospital.tasks", "vhost": "/", "destination": "parsing.normal", "routing_key": "parsing.normal"},
+    {"source": "hospital.tasks", "vhost": "/", "destination": "interpretation.urgent", "routing_key": "interpretation.urgent"},
+    {"source": "hospital.tasks", "vhost": "/", "destination": "interpretation.normal", "routing_key": "interpretation.normal"}
+  ]
+}
