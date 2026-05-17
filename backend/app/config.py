@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
 
+    # vLLM
+    VLLM_BASE_URL: str = "http://localhost:8000/v1"
+    VLLM_CHAT_MODEL: str = "qwen2.5"
+    VLLM_VISION_MODEL: str = "qwen-vl"
+    VLLM_EMBED_MODEL: str = "bge-m3"
+
     # JWT
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480

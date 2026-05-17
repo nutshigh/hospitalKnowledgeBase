@@ -1,6 +1,8 @@
 from httpx import Client, Timeout
+from app.config import settings
 
-INTERPRETATION_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，
+
+SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，
 为体检者撰写易懂的指标解读和健康建议。
 
 规则:
@@ -13,28 +15,27 @@ INTERPRETATION_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手�
 
 
 class LLMClient:
-    def __init__(self, base_url: str = "http://localhost:11434"):
-        self.base_url = base_url
-        self.client = Client(timeout=Timeout(120.0))
+    def __init__(self, base_url: str = settings.VLLM_BASE_URL):
+        self.base_url = base_url.rstrip("/")
+        self.model = settings.VLLM_CHAT_MODEL
+        self.client = Client(timeout=Timeout(300.0))
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
+    def chat(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 1024) -> str:
         response = self.client.post(
-            f"{self.base_url}/api/chat",
+            f"{self.base_url}/chat/completions",
             json={
-                "model": "qwen2.5",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "stream": False,
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
             },
         )
         response.raise_for_status()
         data = response.json()
-        return data["message"]["content"]
+        return data["choices"][0]["message"]["content"]
 
     def interpret_indicator(self, indicator: dict, knowledge_context: str) -> str:
-        prompt = f"""## 报告数据
+        prompt = f"""## 本次报告数据
 | 指标 | 结果 | 参考区间 | 判定 |
 |------|------|----------|------|
 | {indicator.get('item_name', '')} | {indicator.get('result_value', '')} | {indicator.get('ref_range_low', '')}-{indicator.get('ref_range_high', '')} | {indicator.get('deviation', '')}({indicator.get('color_level', '')}) |
@@ -43,7 +44,10 @@ class LLMClient:
 {knowledge_context if knowledge_context else '无相关知识库条目'}
 
 请解读这个指标，给出健康建议。"""
-        return self.generate(INTERPRETATION_SYSTEM_PROMPT, prompt)
+        return self.chat([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
 
     def generate_summary(self, report_summary: str, knowledge_context: str) -> str:
         prompt = f"""## 报告概况
@@ -53,7 +57,10 @@ class LLMClient:
 {knowledge_context if knowledge_context else '无相关知识库条目'}
 
 请生成综合健康小结。"""
-        return self.generate(INTERPRETATION_SYSTEM_PROMPT, prompt)
+        return self.chat([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
 
 
 llm_client = LLMClient()
