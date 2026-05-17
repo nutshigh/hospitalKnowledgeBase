@@ -253,3 +253,106 @@ hospitalKnowledgeBase/
 | 解读 | `/api/v1/interpretations` | 解读查询, high-risk, rules |
 | 统计 | `/api/v1/statistics` | dashboard, health-profile, trend, export |
 | 调度 | `/api/v1/dispatch` | metrics, queues, config |
+
+---
+
+## 常见问题 (Troubleshooting)
+
+### 1. Docker 镜像拉取失败 (Docker Hub 不可达)
+
+**现象：** `docker pull` 报 `connection timed out` 或 `content size of zero`。
+
+**原因：** Docker Hub 在某些网络环境下不可达（例如中国大陆网络），且部分国内镜像源已停止服务。
+
+**解决：** 使用可用的镜像代理拉取，然后打标签：
+
+```bash
+# 测试当前可用的代理
+curl -sI --connect-timeout 5 https://dockerproxy.net/v2/ | head -1
+
+# 通过代理拉取镜像
+docker pull dockerproxy.net/library/mysql:8.0
+docker pull dockerproxy.net/library/rabbitmq:3.12-management
+
+# 打回原始标签
+docker tag dockerproxy.net/library/mysql:8.0 mysql:8.0
+docker tag dockerproxy.net/library/rabbitmq:3.12-management rabbitmq:3.12-management
+```
+
+备选代理地址（按可用性测试顺序）：
+- `dockerproxy.net`
+- `docker.m.daocloud.io`
+- `docker.1ms.run`
+
+> **注意：** 不要将代理地址写入 `/etc/docker/daemon.json` 的 `registry-mirrors` 再重启 Docker Desktop — 重启后可能导致 Milvus/etcd 等已有容器丢失配置。
+
+### 2. MySQL 端口 3306 冲突
+
+**现象：** 后端启动后注册/登录接口报 `Access denied for user 'root'@'localhost'`，但 `docker exec` 进容器用相同密码可以连接。
+
+**排查步骤：**
+```bash
+# 检查 3306 端口实际响应的 MySQL 版本
+echo "SELECT VERSION();" | timeout 3 nc localhost 3306
+
+# 对比 Docker 容器内的版本
+docker exec docker-mysql-1 mysql -uroot -proot123 -e "SELECT VERSION();"
+```
+
+如果两个版本号不一致（如前者 8.0.33，后者 8.0.46），说明宿主机上有另一个 MySQL 实例占用了 3306 端口，Docker Desktop 的端口转发优先路由到了那个实例。
+
+**解决：** 将 Docker MySQL 映射到其他端口（如 3307），同步修改 `.env` 中的 `MYSQL_PORT`。
+
+```bash
+# 停止并重建容器到新端口
+docker stop docker-mysql-1 && docker rm docker-mysql-1
+docker run -d --name docker-mysql-1 \
+  --network docker_default \
+  -e MYSQL_ROOT_PASSWORD=root123 \
+  -e MYSQL_CHARACTER_SET_SERVER=utf8mb4 \
+  -e MYSQL_COLLATION_SERVER=utf8mb4_unicode_ci \
+  -p 3307:3306 \
+  -v docker_mysql_data:/var/lib/mysql \
+  mysql:8.0
+```
+
+### 3. MySQL 认证插件兼容性
+
+**现象：** PyMySQL 连接 MySQL 8.0 报 `Access denied`，即使密码正确。
+
+**原因：** MySQL 8.0 默认使用 `caching_sha2_password` 插件，PyMySQL 在某些场景下不兼容。
+
+**解决：** 创建专用用户并指定 `mysql_native_password` 插件：
+
+```sql
+CREATE USER IF NOT EXISTS 'app'@'%' IDENTIFIED WITH mysql_native_password BY 'root123';
+GRANT ALL PRIVILEGES ON *.* TO 'app'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+```
+
+### 4. passlib 与 bcrypt 5.x 不兼容
+
+**现象：** 注册接口报 `ValueError: password cannot be longer than 72 bytes`。
+
+**原因：** `passlib` 已停止维护，不兼容 `bcrypt >= 4.1`。本项目已改用原生 `bcrypt` 库（见 `backend/app/core/security.py`）。
+
+如果遇到类似问题，替换方案：
+```python
+# 废弃写法 (passlib)
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+hash = pwd_context.hash(password)
+
+# 推荐写法 (原生 bcrypt)
+import bcrypt
+hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+check = bcrypt.checkpw(password.encode(), hash.encode())
+```
+
+### 5. MySQL 存储过程不支持 PREPARE 协议
+
+**现象：** 通过 `mysql -e` 调用存储过程 `CALL hospital_template.create_hospital_database('H001')` 报 `ERROR 1295: This command is not supported in the prepared statement protocol yet`。
+
+**原因：** MySQL CLI 默认使用 prepared statement 协议，但存储过程内部的 `PREPARE` 不支持嵌套。
+
+**解决：** 使用 heredoc 方式传 SQL，或手动执行建库建表语句（参考 `backend/docker/mysql/init/` 下的 SQL 脚本）。

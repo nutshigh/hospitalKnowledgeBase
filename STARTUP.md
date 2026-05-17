@@ -109,3 +109,36 @@ cd backend && cp -n .env.example .env && uv run uvicorn app.main:app --reload --
 # 4. 前端（新终端窗口）
 cd frontend && npm run dev -w @hospital/doctor-portal
 ```
+
+---
+
+## 常见问题
+
+### Docker 镜像拉取失败
+如果 `docker pull` 超时或报错（Docker Hub 不可达），通过代理拉取：
+```bash
+docker pull dockerproxy.net/library/mysql:8.0
+docker pull dockerproxy.net/library/rabbitmq:3.12-management
+docker tag dockerproxy.net/library/mysql:8.0 mysql:8.0
+docker tag dockerproxy.net/library/rabbitmq:3.12-management rabbitmq:3.12-management
+```
+备选代理：`docker.m.daocloud.io`, `docker.1ms.run`。
+
+### 端口 3306 冲突
+如果连接 MySQL 报 `Access denied` 但 docker exec 可以连接，检查 3306 是否被宿主机 MySQL 占用：
+```bash
+echo "SELECT VERSION();" | timeout 3 nc localhost 3306   # 看版本号
+docker exec docker-mysql-1 mysql -uroot -proot123 -e "SELECT VERSION();"
+```
+版本不一致说明端口被占用，改用 3307 端口启动容器，并修改 `.env` 中 `MYSQL_PORT=3307`。
+
+### MySQL 认证插件
+PyMySQL 连 MySQL 8.0 可能因 `caching_sha2_password` 认证失败。创建 `mysql_native_password` 用户：
+```sql
+CREATE USER 'app'@'%' IDENTIFIED WITH mysql_native_password BY 'root123';
+GRANT ALL PRIVILEGES ON *.* TO 'app'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+```
+
+### passlib / bcrypt 不兼容
+`passlib` 与 `bcrypt >= 4.1` 不兼容，已改用原生 `bcrypt` 库（`backend/app/core/security.py`）。
