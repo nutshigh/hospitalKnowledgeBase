@@ -1,10 +1,58 @@
-import { Typography } from "antd";
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { FloatButton, Spin } from 'antd';
+import { PlusOutlined, LogoutOutlined } from '@ant-design/icons';
+import { useUserStore } from '../stores/userStore';
+import Layout from '../components/Layout';
+import ReportCard from '../components/ReportCard';
 
 export default function HomePage() {
+  const { api, logout } = useUserStore();
+  const nav = useNavigate();
+  const [reports, setReports] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get('/reports').then(r => setReports(r.data.items || [])).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
   return (
-    <div style={{ padding: 24 }}>
-      <Typography.Title level={3}>我的体检报告</Typography.Title>
-      <Typography.Text type="secondary">用户端 — 开发中</Typography.Text>
-    </div>
+    <Layout title="我的报告">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
+        <Button type="text" icon={<LogoutOutlined />} onClick={() => { logout(); nav('/login'); }}
+          style={{ color: 'var(--color-text-secondary)' }}>退出</Button>
+      </div>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>
+      ) : reports.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--color-text-secondary)' }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
+          <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 8 }}>暂无报告</div>
+          <div style={{ fontSize: 13 }}>点击右下角上传您的第一份体检报告</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {reports.map((r: any) => (
+            <ReportCard key={r.id} id={r.id} name={r.name || '体检报告'} report_date={r.report_date || ''} />
+          ))}
+        </div>
+      )}
+      <FloatButton
+        icon={<PlusOutlined />} type="primary"
+        style={{ right: 24, bottom: 24, background: 'var(--color-primary)' }}
+        onClick={() => nav('/upload')}
+      />
+    </Layout>
+  );
+}
+
+function Button({ type, icon, onClick, children, style }: any) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, border: 'none', background: 'none',
+      cursor: 'pointer', fontSize: 13, padding: '4px 8px', borderRadius: 6, ...style,
+    }}>
+      {icon} {children}
+    </button>
   );
 }
