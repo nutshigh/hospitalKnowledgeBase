@@ -7,6 +7,8 @@ import Layout from '../components/Layout';
 import ColorBadge from '../components/ColorBadge';
 import IndicatorRow from '../components/IndicatorRow';
 import StatusTag from '../components/StatusTag';
+import ChatPanel from '../components/ChatPanel';
+import { useChatStore } from '../stores/chatStore';
 
 export default function ReportDetailPage() {
   const { id } = useParams();
@@ -16,6 +18,8 @@ export default function ReportDetailPage() {
   const [interpretation, setInterpretation] = useState<any>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const chatStore = useChatStore();
+  const [chatSessionId, setChatSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -25,6 +29,26 @@ export default function ReportDetailPage() {
       setReport(r.data);
       setInterpretation(i.data);
     }).finally(() => setLoading(false));
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    api.get('/chat/sessions')
+      .then(r => {
+        const sessions = r.data || [];
+        const existing = sessions.find((s: any) => s.report_id === Number(id));
+        if (existing) {
+          setChatSessionId(existing.id);
+          chatStore.setCurrentSession(existing.id);
+        } else {
+          api.post('/chat/sessions', { report_id: Number(id) })
+            .then(r2 => {
+              setChatSessionId(r2.data.id);
+              chatStore.setCurrentSession(r2.data.id);
+            }).catch(() => {});
+        }
+      })
+      .catch(() => {});
   }, [id]);
 
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
@@ -99,6 +123,15 @@ export default function ReportDetailPage() {
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-secondary)', fontSize: 13 }}>暂无指标数据</div>
         )}
       </div>
+
+      {chatSessionId && (
+        <div style={{ marginTop: 24, borderTop: '1px solid #E5E7EB', paddingTop: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14, color: '#0D9488' }}>
+            💬 AI 健康咨询（基于本报告）
+          </div>
+          <ChatPanel sessionId={chatSessionId} placeholder="基于本报告提问..." compact />
+        </div>
+      )}
     </Layout>
   );
 }
