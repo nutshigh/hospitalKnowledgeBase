@@ -30,6 +30,19 @@ class Settings(BaseSettings):
     VLLM_VISION_MODEL: str = "qwen-vl"
     VLLM_EMBED_MODEL: str = "bge-m3"
 
+    # LLM Provider
+    LLM_PROVIDER: str = "local"  # local | remote
+
+    # Remote LLM (OpenAI 兼容 API)
+    REMOTE_LLM_BASE_URL: str = "https://api.deepseek.com/v1"
+    REMOTE_LLM_API_KEY: str = ""
+    REMOTE_LLM_MODEL: str = "deepseek-chat"
+    REMOTE_LLM_MAX_TOKENS: int = 4096
+    REMOTE_LLM_TEMPERATURE: float = 0.1
+
+    # LLM 通用
+    LLM_TIMEOUT_SECONDS: int = 120
+
     # JWT
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
