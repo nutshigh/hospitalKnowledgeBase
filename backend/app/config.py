@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     MYSQL_PASSWORD: str = ""
     MYSQL_TEMPLATE_DB: str = "hospital_template"
 
-    # Milvus
+    # Milvus (Milvus Lite embedded server)
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
 

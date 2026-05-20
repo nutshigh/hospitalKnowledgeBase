@@ -7,6 +7,7 @@ dependencies = [
     "alembic>=1.18.4",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
+    "milvus-lite",
     "opencv-python-headless>=4.13.0.92",
     "openpyxl>=3.1.5",
     "passlib[bcrypt]>=1.7.4",
