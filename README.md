@@ -13,7 +13,7 @@
 | 关系型数据库 | MySQL 8（按医院数据库级隔离） |
 | 向量数据库 | Milvus（按医院命名空间隔离） |
 | 消息队列 | RabbitMQ |
-| 大语言模型 | 本地部署（Ollama 兼容 API） |
+| 大语言模型 | 本地部署 vLLM / 远端 OpenAI 兼容 API（可切换） |
 | 前端框架 | React 18 + TypeScript |
 | UI 组件库 | Ant Design 5 |
 | 构建工具 | Vite |

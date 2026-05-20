@@ -4,7 +4,7 @@ interface Message {
   id?: number;
   role: 'user' | 'assistant';
   content: string;
-  knowledgeRefs?: Array<{ entry_id: number; title: string }>;
+  knowledge_refs?: Array<{ entry_id: number; title: string }>;
   streaming?: boolean;
 }
 
@@ -49,18 +49,20 @@ export const useChatStore = create<ChatStore>((set) => ({
   appendToken: (token) =>
     set((state) => {
       const msgs = [...state.messages];
-      const last = msgs[msgs.length - 1];
+      const idx = msgs.length - 1;
+      const last = msgs[idx];
       if (last && last.role === 'assistant' && last.streaming) {
-        last.content += token;
+        msgs[idx] = { ...last, content: last.content + token };
       }
       return { messages: msgs };
     }),
   finishStreaming: () =>
     set((state) => {
       const msgs = [...state.messages];
-      const last = msgs[msgs.length - 1];
+      const idx = msgs.length - 1;
+      const last = msgs[idx];
       if (last && last.role === 'assistant') {
-        last.streaming = false;
+        msgs[idx] = { ...last, streaming: false };
       }
       return { messages: msgs, streaming: false };
     }),
