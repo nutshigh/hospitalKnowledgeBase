@@ -104,8 +104,11 @@ def _load_report_context(db: Session, report_id: int) -> str:
 
 
 def _build_knowledge_context(hospital_id: str, query: str, top_k: int = 5) -> str:
-    """检索知识库并格式化为 LLM 上下文"""
-    results = knowledge_service.search(hospital_id, query, top_k=top_k)
+    """检索知识库并格式化为 LLM 上下文（降级: embedding 不可用时跳过 RAG）"""
+    try:
+        results = knowledge_service.search(hospital_id, query, top_k=top_k)
+    except Exception:
+        return ""
     if not results:
         return ""
     lines = []
@@ -115,9 +118,12 @@ def _build_knowledge_context(hospital_id: str, query: str, top_k: int = 5) -> st
 
 
 def _get_knowledge_refs(hospital_id: str, query: str, top_k: int = 5) -> List[dict]:
-    """检索知识库并返回结构化引用"""
-    results = knowledge_service.search(hospital_id, query, top_k=top_k)
-    return [{"entry_id": r.entry_id, "title": r.title} for r in results]
+    """检索知识库并返回结构化引用（降级: embedding 不可用时返回空）"""
+    try:
+        results = knowledge_service.search(hospital_id, query, top_k=top_k)
+        return [{"entry_id": r.entry_id, "title": r.title} for r in results]
+    except Exception:
+        return []
 
 
 # ---- Chat Flow ----

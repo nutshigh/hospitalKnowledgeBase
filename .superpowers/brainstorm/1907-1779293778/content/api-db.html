@@ -1,0 +1,110 @@
+<h2>API 接口 & 数据库设计</h2>
+<p class="subtitle">Chat 模块的 REST API 和数据表结构</p>
+
+<div class="section">
+  <h3>API 接口</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="background:var(--surface-alt);">
+      <th style="padding:8px;text-align:left;">方法</th>
+      <th style="padding:8px;text-align:left;">路径</th>
+      <th style="padding:8px;text-align:left;">说明</th>
+    </tr>
+    <tr>
+      <td style="padding:8px;"><span class="label">POST</span></td>
+      <td style="padding:8px;">/api/v1/chat/sessions</td>
+      <td style="padding:8px;">创建新会话 (body: report_id 可选)</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;"><span class="label">GET</span></td>
+      <td style="padding:8px;">/api/v1/chat/sessions</td>
+      <td style="padding:8px;">会话列表</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;"><span class="label">GET</span></td>
+      <td style="padding:8px;">/api/v1/chat/sessions/{id}/messages</td>
+      <td style="padding:8px;">获取历史消息</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;"><span class="label">POST</span></td>
+      <td style="padding:8px;">/api/v1/chat/sessions/{id}/messages</td>
+      <td style="padding:8px;">发送消息 (SSE 流式响应)</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;"><span class="label">DELETE</span></td>
+      <td style="padding:8px;">/api/v1/chat/sessions/{id}</td>
+      <td style="padding:8px;">删除会话</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>SSE 流式响应格式</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <pre style="font-size:12px;line-height:1.6;background:var(--surface-card);padding:16px;border-radius:8px;">
+POST /api/v1/chat/sessions/{id}/messages
+Content-Type: application/json
+{
+  "content": "我的空腹血糖8.2，这个严重吗？"
+}
+
+--- 响应 (Server-Sent Events) ---
+
+event: token
+data: {"content": "您"}
+
+event: token
+data: {"content": "的"}
+
+event: token
+data: {"content": "空腹"}
+
+... (逐token推送)
+
+event: done
+data: {"message_id": 42, "knowledge_refs": [{"entry_id": 5, "title": "血糖标准"}]}</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>数据库表设计</h3>
+  <div class="mockup">
+    <div class="mockup-header">chat_session — 会话表</div>
+    <div class="mockup-body">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr style="background:var(--surface-alt);">
+          <th style="padding:6px;text-align:left;">字段</th>
+          <th style="padding:6px;text-align:left;">类型</th>
+          <th style="padding:6px;text-align:left;">说明</th>
+        </tr>
+        <tr><td style="padding:6px;">id</td><td style="padding:6px;">BIGINT PK</td><td style="padding:6px;">主键</td></tr>
+        <tr><td style="padding:6px;">user_id</td><td style="padding:6px;">BIGINT</td><td style="padding:6px;">所属用户</td></tr>
+        <tr><td style="padding:6px;">hospital_id</td><td style="padding:6px;">VARCHAR(32)</td><td style="padding:6px;">所属医院</td></tr>
+        <tr><td style="padding:6px;">report_id</td><td style="padding:6px;">BIGINT (可空)</td><td style="padding:6px;">关联报告 (报告内嵌聊天时绑定)</td></tr>
+        <tr><td style="padding:6px;">title</td><td style="padding:6px;">VARCHAR(200)</td><td style="padding:6px;">会话标题 (首条消息自动生成)</td></tr>
+        <tr><td style="padding:6px;">created_at</td><td style="padding:6px;">DATETIME</td><td style="padding:6px;">创建时间</td></tr>
+        <tr><td style="padding:6px;">updated_at</td><td style="padding:6px;">DATETIME</td><td style="padding:6px;">最后活跃时间</td></tr>
+      </table>
+    </div>
+  </div>
+  <br>
+  <div class="mockup">
+    <div class="mockup-header">chat_message — 消息表</div>
+    <div class="mockup-body">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr style="background:var(--surface-alt);">
+          <th style="padding:6px;text-align:left;">字段</th>
+          <th style="padding:6px;text-align:left;">类型</th>
+          <th style="padding:6px;text-align:left;">说明</th>
+        </tr>
+        <tr><td style="padding:6px;">id</td><td style="padding:6px;">BIGINT PK</td><td style="padding:6px;">主键</td></tr>
+        <tr><td style="padding:6px;">session_id</td><td style="padding:6px;">BIGINT FK</td><td style="padding:6px;">所属会话</td></tr>
+        <tr><td style="padding:6px;">role</td><td style="padding:6px;">VARCHAR(10)</td><td style="padding:6px;">user / assistant</td></tr>
+        <tr><td style="padding:6px;">content</td><td style="padding:6px;">TEXT</td><td style="padding:6px;">消息内容</td></tr>
+        <tr><td style="padding:6px;">knowledge_refs</td><td style="padding:6px;">JSON (可空)</td><td style="padding:6px;">引用的知识条目 [{entry_id, title}]</td></tr>
+        <tr><td style="padding:6px;">created_at</td><td style="padding:6px;">DATETIME</td><td style="padding:6px;">发送时间</td></tr>
+      </table>
+    </div>
+  </div>
+</div>

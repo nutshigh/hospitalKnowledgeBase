@@ -1,0 +1,99 @@
+<h2>Chat 模块 — 系统架构</h2>
+<p class="subtitle">在现有架构中新增 Chat 模块，复用知识库检索 + LLM 客户端</p>
+
+<div class="section">
+  <h3>模块位置</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <pre style="font-size:12px;line-height:1.6;background:var(--surface-card);padding:16px;border-radius:8px;">
+┌──────────────────────────────────────────────────┐
+│                    接入层                          │
+│   医生端 Web   │   用户端(移动/Web)   │   管理后台    │
+├──────────────────────────────────────────────────┤
+│                  API 网关 (APISIX)                 │
+├──────────────────────────────────────────────────┤
+│                    业务模块层                       │
+│  ┌──────────┬──────────┬──────────┬──────────┐    │
+│  │ 知识库模块 │ 报告解析模块│ AI解读模块 │ 统计分析模块│    │
+│  └──────────┴──────────┴──────────┴──────────┘    │
+│  ┌──────────┬──────────┐                          │
+│  │ Chat 模块 │ 调度管理模块│    ← Chat 模块(新增)     │
+│  └──────────┴──────────┘                          │
+├──────────────────────────────────────────────────┤
+│               基础设施层                            │
+│  文件存储  │  RabbitMQ  │  Milvus向量库  │  LLM    │
+├──────────────────────────────────────────────────┤
+│               数据层                               │
+│     MySQL(按医院分库)  │  Milvus(按命名空间隔离)     │
+└──────────────────────────────────────────────────┘</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Chat 请求数据流</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <pre style="font-size:12px;line-height:1.8;background:var(--surface-card);padding:16px;border-radius:8px;">
+用户发送消息
+      │
+      ▼
+┌─────────────────┐
+│ 1. 加载上下文     │  ← 根据 chat_type:
+│                  │     • "report": 从 DB 读取该报告的结构化数据
+│                  │     • "general": 可选，用户最近报告摘要
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ 2. 知识库检索     │  ← 将最近 N 轮对话 + 当前消息作为 query
+│                  │     POST /api/v1/knowledge/internal/search
+│                  │     返回 Top-K 医学知识
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ 3. 构建 Prompt   │  ← System: 角色设定 + 报告数据 + 知识上下文
+│                  │     Messages: 历史对话 + 当前消息
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ 4. LLM 流式生成  │  ← 调用 LLM (Ollama API, stream=true)
+│                  │     SSE 逐 token 推送给前端
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ 5. 保存对话记录   │  ← 用户消息 + AI 回复写入 chat_message 表
+└─────────────────┘</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>依赖关系</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="background:var(--surface-alt);">
+      <th style="padding:8px;text-align:left;">依赖</th>
+      <th style="padding:8px;text-align:left;">内容</th>
+      <th style="padding:8px;text-align:left;">已有/新增</th>
+    </tr>
+    <tr>
+      <td style="padding:8px;">知识库模块</td>
+      <td style="padding:8px;">调用 search API 检索医学知识</td>
+      <td style="padding:8px;color:#0D9488;">✅ 已有</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;">LLM Client</td>
+      <td style="padding:8px;">chat() 方法，增加 stream 参数</td>
+      <td style="padding:8px;color:#D97706;">🔧 改造</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;">报告数据</td>
+      <td style="padding:8px;">读取结构化报告 + 指标数据</td>
+      <td style="padding:8px;color:#0D9488;">✅ 已有</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;">MySQL</td>
+      <td style="padding:8px;">chat_session + chat_message 表</td>
+      <td style="padding:8px;color:#EF4444;">🆕 新增</td>
+    </tr>
+  </table>
+</div>

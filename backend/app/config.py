@@ -59,8 +59,7 @@ class Settings(BaseSettings):
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"
 
-    class Config:
-        env_file = ".env"
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

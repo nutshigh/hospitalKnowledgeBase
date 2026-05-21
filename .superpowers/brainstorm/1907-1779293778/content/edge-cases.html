@@ -1,0 +1,75 @@
+<h2>错误处理 & 边界情况</h2>
+<p class="subtitle">Chat 模块的异常场景处理策略</p>
+
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+  <tr style="background:var(--surface-alt);">
+    <th style="padding:10px;text-align:left;">场景</th>
+    <th style="padding:10px;text-align:left;">处理方式</th>
+  </tr>
+  <tr>
+    <td style="padding:10px;">LLM 调用超时 / 报错</td>
+    <td style="padding:10px;">SSE 推 error 事件，前端显示 "AI 响应失败，请重试"。已接收的部分 token 不入库</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">知识库检索无结果</td>
+    <td style="padding:10px;">不带知识上下文调用 LLM，依赖报告数据 + LLM 自身知识回答。记录 knowledge_miss 日志</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">SSE 连接中断</td>
+    <td style="padding:10px;">前端 EventSource 自动重连；重连时检查消息是否已入库，避免重复展示</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">未关联报告时提问报告相关问题</td>
+    <td style="padding:10px;">System prompt 中说明"用户无当前报告"，LLM 引导用户先上传报告</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">用户上传了报告但解析未完成</td>
+    <td style="padding:10px;">报告数据为空时提示"报告正在解析中，完成后可获取更精准的解读"</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">对话过长超出 LLM 上下文窗口</td>
+    <td style="padding:10px;">保留最近 20 轮对话 + 总结早期对话摘要，保持 token 不超限</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">医院数据库连接失败</td>
+    <td style="padding:10px;">仅影响该医院用户，返回 503 并提示稍后重试</td>
+  </tr>
+  <tr>
+    <td style="padding:10px;">并发流式请求</td>
+    <td style="padding:10px;">同一会话同时只能有一个活跃请求，新请求返回 429</td>
+  </tr>
+</table>
+
+<div class="section" style="margin-top:32px;">
+  <h3>测试计划</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="background:var(--surface-alt);">
+      <th style="padding:10px;text-align:left;">层级</th>
+      <th style="padding:10px;text-align:left;">内容</th>
+    </tr>
+    <tr>
+      <td style="padding:10px;"><span class="label">单元测试</span></td>
+      <td style="padding:10px;">
+        • Chat service: 会话创建/消息存储/上下文构建逻辑<br/>
+        • Prompt 构建器: 不同场景(report/general)的 prompt 拼装<br/>
+        • 知识检索 query 构建
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:10px;"><span class="label">集成测试</span></td>
+      <td style="padding:10px;">
+        • SSE 端点: 流式响应完整性、错误事件推送<br/>
+        • 知识库检索集成: mock search 验证上下文注入<br/>
+        • 会话 CRUD: 完整生命周期
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:10px;"><span class="label">E2E 测试</span></td>
+      <td style="padding:10px;">
+        • 报告详情页聊天: 上传报告 → 打开详情 → 提问 → 验证回复<br/>
+        • 独立聊天: 新建会话 → 多轮对话 → 切换历史会话<br/>
+        • 流式展示: 验证逐字输出效果
+      </td>
+    </tr>
+  </table>
+</div>

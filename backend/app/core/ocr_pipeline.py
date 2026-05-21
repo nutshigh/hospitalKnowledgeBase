@@ -1,7 +1,11 @@
 import re
+import os
 import numpy as np
 from typing import Optional
 
+# Model cache directory - centralized on F drive
+if not os.environ.get("PADDLE_PDX_CACHE_HOME"):
+    os.environ["PADDLE_PDX_CACHE_HOME"] = "F:/model/paddlex"
 
 COLUMN_KEYWORDS = {
     "item_name": ["项目", "检验项目", "指标名称", "检查项目", "测定项目", "项目名称", "检查指标"],
