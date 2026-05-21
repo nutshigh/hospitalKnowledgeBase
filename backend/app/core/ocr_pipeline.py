@@ -30,25 +30,106 @@ class OcrPipeline:
         self._initialized = True
 
     def extract_from_pdf(self, file_path: str) -> dict:
-        raise NotImplementedError
+        images = self._pdf_to_images(file_path)
+        all_indicators = []
+        personal_info = {}
+
+        for i, img in enumerate(images):
+            page_result = self._process_page(img, page_index=i)
+            if i == 0 and page_result.get("personal_info"):
+                personal_info = page_result["personal_info"]
+            all_indicators.extend(page_result.get("indicators", []))
+
+        return {"personal_info": personal_info, "indicators": all_indicators}
 
     def extract_from_image(self, file_path: str) -> dict:
-        raise NotImplementedError
+        import cv2
+        img = cv2.imread(file_path)
+        return self._process_page(img, page_index=0)
 
     def _pdf_to_images(self, file_path: str) -> list:
-        raise NotImplementedError
+        import fitz
+        doc = fitz.open(file_path)
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=200)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, pix.n
+            )
+            if pix.n == 4:
+                img = img[:, :, :3]
+            images.append(img)
+        doc.close()
+        return images
 
     def _process_page(self, image, page_index: int) -> dict:
-        raise NotImplementedError
+        self._init()
+        result = self._ocr.ocr(image, cls=True)
+
+        personal_info = {}
+        if page_index == 0:
+            personal_info = self._extract_personal_info(image)
+
+        indicators = self._extract_table_indicators(result, image)
+        return {"personal_info": personal_info, "indicators": indicators}
 
     def _extract_personal_info(self, image) -> dict:
-        raise NotImplementedError
+        self._init()
+        result = self._ocr.ocr(image, cls=True)
+        all_text = self._flatten_text(result)
+
+        info = {}
+        patterns = {
+            "name": r"姓名[:：\s]*(\S+)",
+            "gender": r"性别[:：\s]*(男|女)",
+            "age": r"年龄[:：\s]*(\d+)",
+            "check_date": r"(?:检查|体检|报告)?日期[:：\s]*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2})",
+        }
+        full = "\n".join(all_text)
+        for key, pat in patterns.items():
+            m = re.search(pat, full)
+            if m:
+                info[key] = m.group(1)
+        return info
 
     def _flatten_text(self, ocr_result) -> list:
-        raise NotImplementedError
+        texts = []
+        if ocr_result and ocr_result[0]:
+            for line in ocr_result[0]:
+                if len(line) >= 2:
+                    texts.append(str(line[1][0]))
+        return texts
 
     def _extract_table_indicators(self, ocr_result, image) -> list:
-        raise NotImplementedError
+        lines = self._group_text_lines(ocr_result)
+        if len(lines) < 2:
+            return []
+
+        header_idx = 0
+        all_keywords = set()
+        for aliases in COLUMN_KEYWORDS.values():
+            all_keywords.update(aliases)
+
+        best_score = 0
+        for i, row in enumerate(lines[:min(5, len(lines))]):
+            text = " ".join(cell["text"] for cell in row)
+            score = sum(1 for kw in all_keywords if kw in text)
+            if score > best_score:
+                best_score = score
+                header_idx = i
+
+        if best_score == 0:
+            return []
+
+        headers = lines[header_idx]
+        col_mapping = self._match_header_columns(headers)
+
+        indicators = []
+        for row in lines[header_idx + 1:]:
+            indicator = self._row_to_indicator(row, col_mapping)
+            if indicator and indicator.get("item_name"):
+                indicators.append(indicator)
+        return indicators
 
     def _group_text_lines(self, ocr_result) -> list[list[dict]]:
         if not ocr_result or not ocr_result[0]:
