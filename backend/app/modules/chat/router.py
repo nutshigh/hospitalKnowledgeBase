@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_hospital_db
 from app.core.dependencies import get_current_user, CurrentUser
-from app.middleware.hospital_context import get_current_hospital_id
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.chat import service
 from app.modules.chat.stream import sse_stream
@@ -17,15 +16,12 @@ from app.modules.chat.schemas import (
 router = APIRouter()
 
 
-def _get_hospital_id() -> str:
-    hid = get_current_hospital_id()
-    if not hid:
+def _get_db(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if not current_user.hospital_id:
         raise ValidationException(detail="Hospital context required")
-    return hid
-
-
-def _get_db(hospital_id: str = Depends(_get_hospital_id)):
-    return next(get_hospital_db(hospital_id))
+    return next(get_hospital_db(current_user.hospital_id))
 
 
 @router.get("/sessions", response_model=list[SessionResponse])
@@ -40,10 +36,9 @@ def list_sessions(
 def create_session(
     data: CreateSessionRequest,
     db: Session = Depends(_get_db),
-    hospital_id: str = Depends(_get_hospital_id),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    return service.create_session(db, current_user.user_id, hospital_id, data.report_id)
+    return service.create_session(db, current_user.user_id, current_user.hospital_id, data.report_id)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
