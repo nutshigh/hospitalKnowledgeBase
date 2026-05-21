@@ -64,7 +64,13 @@ def get_task_status(task_id: int, db: Session = Depends(_get_db)):
     task = service.get_task_status(db, task_id)
     if not task:
         raise NotFoundException(detail="Task not found")
-    return task
+    return schemas.TaskStatusResponse(
+        task_id=task.id,
+        status=task.status,
+        error_message=task.error_message,
+        created_at=task.created_at,
+        completed_at=task.completed_at,
+    )
 
 
 @router.get("", response_model=schemas.ReportListResponse)

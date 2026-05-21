@@ -21,8 +21,8 @@ export default function UploadPage() {
       const res = await api.post('/reports/upload', form, {
         onUploadProgress: (e: any) => setProgress(Math.round((e.loaded / e.total) * 100)),
       });
-      message.success('上传成功，正在解析中...');
-      nav(`/report/${res.data.report_id || 0}`, { state: { taskId: res.data.task_id } });
+      message.success('上传成功，报告解析中，请稍后刷新查看');
+      nav('/');
     } catch {
       message.error('上传失败');
     } finally {

@@ -23,10 +23,7 @@ class OcrPipeline:
         if self._initialized:
             return
         from paddleocr import PaddleOCR
-        self._ocr = PaddleOCR(
-            use_angle_cls=True, lang="ch",
-            use_gpu=self._use_gpu, show_log=False,
-        )
+        self._ocr = PaddleOCR(lang="ch")
         self._initialized = True
 
     def extract_from_pdf(self, file_path: str) -> dict:
