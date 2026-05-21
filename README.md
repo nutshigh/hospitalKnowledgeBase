@@ -26,24 +26,37 @@
 
 ### 环境要求
 
-- Docker Desktop
 - Python 3.12+ / [uv](https://docs.astral.sh/uv/)
 - Node.js 18+ / npm
+- MySQL 8.0 / RabbitMQ 3.12+（本地安装）
 
 ### 1. 启动基础设施
 
 ```bash
-cd backend/docker
-docker-compose up -d
-```
+# 一键启动（Docker-free）
+bash start_local.sh
 
-启动 MySQL (3306)、RabbitMQ (5672)、Milvus (19530)。
+# 或手动启动各服务：
+# MySQL
+sudo service mysql start
+
+# RabbitMQ
+RABBITMQ_NODE_IP_ADDRESS=127.0.0.1 ERL_EPMD_ADDRESS=127.0.0.1 \
+  rabbitmq-server -detached
+sleep 3 && rabbitmqctl start_app
+
+# Milvus 随 Python 嵌入式启动（milvus-lite），无需单独启动
+```
 
 ### 2. 初始化数据库
 
 ```bash
-docker exec -i $(docker ps -qf "name=mysql") mysql -uroot -proot123 \
-  -e "CALL hospital_template.create_hospital_database('H001');"
+mysql -uroot -proot -e "
+  CREATE DATABASE IF NOT EXISTS hospital_template
+    DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;
+  CREATE DATABASE IF NOT EXISTS hospital_H001
+    DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;
+"
 ```
 
 ### 3. 启动后端
@@ -176,6 +189,7 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
 | 报告列表 | `/` | 我的体检报告 |
 | 上传报告 | `/upload` | 拍照/上传文件 |
 | 报告详情 | `/report/:id` | 指标解读 + AI 建议 |
+| AI 健康咨询 | `/chat` | 智能问答 + 报告解读 |
 | 个人中心 | `/profile` | 设置 + 退出 |
 
 ### 医生端（端口 3002）
@@ -226,6 +240,7 @@ hospitalKnowledgeBase/
 │   │       ├── knowledge/          # 知识库模块
 │   │       ├── report/             # 报告解析模块
 │   │       ├── interpretation/     # AI 解读模块
+│   │       ├── chat/               # 聊天问答模块（RAG + SSE）
 │   │       ├── statistics/         # 统计分析模块
 │   │       └── dispatch/           # 调度管理模块
 │   ├── docker/                     # Docker Compose + SQL 初始化
@@ -247,6 +262,7 @@ hospitalKnowledgeBase/
 | 模块 | 前缀 | 主要端点 |
 |------|------|----------|
 | 认证 | `/api/v1/auth` | login, register, me |
+| 聊天 | `/api/v1/chat` | sessions, messages (SSE 流式) |
 | 知识库 | `/api/v1/knowledge` | categories, entries, import, reindex |
 | 知识库(内部) | `/api/v1/knowledge/internal` | search |
 | 报告 | `/api/v1/reports` | upload, tasks, reports |
@@ -258,65 +274,13 @@ hospitalKnowledgeBase/
 
 ## 常见问题 (Troubleshooting)
 
-### 1. Docker 镜像拉取失败 (Docker Hub 不可达)
+### 1. MySQL 端口 3306 冲突
 
-**现象：** `docker pull` 报 `connection timed out` 或 `content size of zero`。
+**现象：** 后端启动后注册/登录接口报 `Access denied for user 'root'@'localhost'`，但命令行用相同密码可以连接。
 
-**原因：** Docker Hub 在某些网络环境下不可达（例如中国大陆网络），且部分国内镜像源已停止服务。
+**解决：** 检查是否有其他 MySQL 实例占用 3306 端口，修改 `.env` 中的 `MYSQL_PORT` 到另一个端口后重启。
 
-**解决：** 使用可用的镜像代理拉取，然后打标签：
-
-```bash
-# 测试当前可用的代理
-curl -sI --connect-timeout 5 https://dockerproxy.net/v2/ | head -1
-
-# 通过代理拉取镜像
-docker pull dockerproxy.net/library/mysql:8.0
-docker pull dockerproxy.net/library/rabbitmq:3.12-management
-
-# 打回原始标签
-docker tag dockerproxy.net/library/mysql:8.0 mysql:8.0
-docker tag dockerproxy.net/library/rabbitmq:3.12-management rabbitmq:3.12-management
-```
-
-备选代理地址（按可用性测试顺序）：
-- `dockerproxy.net`
-- `docker.m.daocloud.io`
-- `docker.1ms.run`
-
-> **注意：** 不要将代理地址写入 `/etc/docker/daemon.json` 的 `registry-mirrors` 再重启 Docker Desktop — 重启后可能导致 Milvus/etcd 等已有容器丢失配置。
-
-### 2. MySQL 端口 3306 冲突
-
-**现象：** 后端启动后注册/登录接口报 `Access denied for user 'root'@'localhost'`，但 `docker exec` 进容器用相同密码可以连接。
-
-**排查步骤：**
-```bash
-# 检查 3306 端口实际响应的 MySQL 版本
-echo "SELECT VERSION();" | timeout 3 nc localhost 3306
-
-# 对比 Docker 容器内的版本
-docker exec docker-mysql-1 mysql -uroot -proot123 -e "SELECT VERSION();"
-```
-
-如果两个版本号不一致（如前者 8.0.33，后者 8.0.46），说明宿主机上有另一个 MySQL 实例占用了 3306 端口，Docker Desktop 的端口转发优先路由到了那个实例。
-
-**解决：** 将 Docker MySQL 映射到其他端口（如 3307），同步修改 `.env` 中的 `MYSQL_PORT`。
-
-```bash
-# 停止并重建容器到新端口
-docker stop docker-mysql-1 && docker rm docker-mysql-1
-docker run -d --name docker-mysql-1 \
-  --network docker_default \
-  -e MYSQL_ROOT_PASSWORD=root123 \
-  -e MYSQL_CHARACTER_SET_SERVER=utf8mb4 \
-  -e MYSQL_COLLATION_SERVER=utf8mb4_unicode_ci \
-  -p 3307:3306 \
-  -v docker_mysql_data:/var/lib/mysql \
-  mysql:8.0
-```
-
-### 3. MySQL 认证插件兼容性
+### 2. MySQL 认证插件兼容性
 
 **现象：** PyMySQL 连接 MySQL 8.0 报 `Access denied`，即使密码正确。
 
@@ -330,7 +294,7 @@ GRANT ALL PRIVILEGES ON *.* TO 'app'@'%' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 ```
 
-### 4. passlib 与 bcrypt 5.x 不兼容
+### 3. passlib 与 bcrypt 5.x 不兼容
 
 **现象：** 注册接口报 `ValueError: password cannot be longer than 72 bytes`。
 
@@ -349,10 +313,3 @@ hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 check = bcrypt.checkpw(password.encode(), hash.encode())
 ```
 
-### 5. MySQL 存储过程不支持 PREPARE 协议
-
-**现象：** 通过 `mysql -e` 调用存储过程 `CALL hospital_template.create_hospital_database('H001')` 报 `ERROR 1295: This command is not supported in the prepared statement protocol yet`。
-
-**原因：** MySQL CLI 默认使用 prepared statement 协议，但存储过程内部的 `PREPARE` 不支持嵌套。
-
-**解决：** 使用 heredoc 方式传 SQL，或手动执行建库建表语句（参考 `backend/docker/mysql/init/` 下的 SQL 脚本）。
