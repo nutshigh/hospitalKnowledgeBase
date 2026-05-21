@@ -56,11 +56,63 @@ class OcrPipeline:
     def _find_header_row(self, rows: list) -> list:
         raise NotImplementedError
 
-    def _match_header_columns(self, headers: list) -> dict:
-        raise NotImplementedError
+    def _match_header_columns(self, headers: list[dict]) -> dict:
+        mapping = {}
 
-    def _row_to_indicator(self, row_cells: list, col_mapping: dict) -> dict:
-        raise NotImplementedError
+        def _jaccard(a: str, b: str) -> float:
+            sa, sb = set(a), set(b)
+            if not sa or not sb:
+                return 0.0
+            return len(sa & sb) / len(sa | sb)
+
+        for i, cell in enumerate(headers):
+            text = cell["text"].strip()
+            best_key, best_score = None, 0.0
+            for key, aliases in COLUMN_KEYWORDS.items():
+                for alias in aliases:
+                    score = _jaccard(text, alias)
+                    if score > best_score:
+                        best_score = score
+                        best_key = key
+            if best_score > 0.35:
+                mapping[i] = best_key
+            else:
+                mapping[i] = "unknown"
+        return mapping
+
+    def _row_to_indicator(self, row_cells: list[dict], col_mapping: dict) -> dict:
+        result = {}
+        for i, cell in enumerate(row_cells):
+            key = col_mapping.get(i, "unknown")
+            text = cell["text"].strip()
+
+            if key == "item_name":
+                result["item_name"] = text
+            elif key == "item_code":
+                result["item_code"] = text
+            elif key == "result":
+                result["result_value"] = text
+            elif key == "unit":
+                result["unit"] = text
+            elif key == "ref_range":
+                low, high = self._parse_ref_range(text)
+                result["ref_range_low"] = low
+                result["ref_range_high"] = high
+            elif key == "flag":
+                pass
+            else:
+                if self._looks_like_number(text) and "result_value" not in result:
+                    result["result_value"] = text
+                elif self._looks_like_ref_range(text) and "ref_range_low" not in result:
+                    low, high = self._parse_ref_range(text)
+                    result["ref_range_low"] = low
+                    result["ref_range_high"] = high
+
+        result["confidence"] = min(
+            c["confidence"] for c in row_cells
+        ) if row_cells else 1.0
+
+        return result if result.get("item_name") else {}
 
     def _parse_ref_range(self, text: str) -> tuple:
         text = text.strip()
