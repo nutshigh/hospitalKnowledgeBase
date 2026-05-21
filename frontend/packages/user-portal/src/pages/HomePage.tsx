@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FloatButton, Spin } from 'antd';
+import { Spin } from 'antd';
 import { PlusOutlined, LogoutOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
@@ -37,11 +37,19 @@ export default function HomePage() {
           ))}
         </div>
       )}
-      <FloatButton
-        icon={<PlusOutlined />} type="primary"
-        style={{ right: 24, bottom: 76, zIndex: 101, background: 'var(--color-primary)' }}
+      <button
         onClick={() => nav('/upload')}
-      />
+        style={{
+          position: 'fixed', right: 24, bottom: 80, zIndex: 101,
+          width: 48, height: 48, borderRadius: '50%',
+          border: 'none', background: 'var(--color-primary)',
+          color: '#fff', fontSize: 24, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+        }}
+      >
+        <PlusOutlined />
+      </button>
     </Layout>
   );
 }
