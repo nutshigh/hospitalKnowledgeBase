@@ -50,11 +50,59 @@ class OcrPipeline:
     def _extract_table_indicators(self, ocr_result, image) -> list:
         raise NotImplementedError
 
-    def _group_text_lines(self, ocr_result) -> list:
-        raise NotImplementedError
+    def _group_text_lines(self, ocr_result) -> list[list[dict]]:
+        if not ocr_result or not ocr_result[0]:
+            return []
 
-    def _find_header_row(self, rows: list) -> list:
-        raise NotImplementedError
+        items = []
+        for line in ocr_result[0]:
+            if len(line) >= 2:
+                bbox = line[0]
+                text = str(line[1][0])
+                conf = float(line[1][1])
+                items.append({
+                    "text": text,
+                    "bbox": bbox,
+                    "confidence": conf,
+                    "cx": (bbox[0][0] + bbox[2][0]) / 2,
+                    "cy": (bbox[0][1] + bbox[2][1]) / 2,
+                })
+
+        items.sort(key=lambda x: x["cy"])
+        if not items:
+            return []
+
+        avg_h = sum(abs(it["bbox"][2][1] - it["bbox"][0][1]) for it in items) / len(items)
+        rows = []
+        current_row = [items[0]]
+        for it in items[1:]:
+            if abs(it["cy"] - current_row[-1]["cy"]) < avg_h * 1.5:
+                current_row.append(it)
+            else:
+                current_row.sort(key=lambda x: x["cx"])
+                rows.append(current_row)
+                current_row = [it]
+        if current_row:
+            current_row.sort(key=lambda x: x["cx"])
+            rows.append(current_row)
+        return rows
+
+    def _find_header_row(self, rows: list) -> list[dict]:
+        best_row, best_score = [], 0
+        all_keywords = set()
+        for aliases in COLUMN_KEYWORDS.values():
+            all_keywords.update(aliases)
+
+        for row in rows[:min(5, len(rows))]:
+            text = " ".join(cell["text"] for cell in row)
+            score = 0
+            for kw in all_keywords:
+                if kw in text:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_row = row
+        return best_row
 
     def _match_header_columns(self, headers: list[dict]) -> dict:
         mapping = {}
