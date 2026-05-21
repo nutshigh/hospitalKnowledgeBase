@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # LLM Provider
     LLM_PROVIDER: str = "local"  # local | remote
 
+    # Report Parsing Engine: ocr | vlm
+    REPORT_PARSING_ENGINE: str = "ocr"
+
     # Remote LLM (OpenAI 兼容 API)
     REMOTE_LLM_BASE_URL: str = "https://api.deepseek.com/v1"
     REMOTE_LLM_API_KEY: str = ""
