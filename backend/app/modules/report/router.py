@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.core.database import get_hospital_db
-from app.middleware.hospital_context import get_current_hospital_id
 from app.core.dependencies import get_current_user, CurrentUser
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.report import schemas, service
@@ -20,21 +19,17 @@ ALLOWED_TYPES = {
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
 
-def _get_hospital_id() -> str:
-    hid = get_current_hospital_id()
-    if not hid:
+def _get_db(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if not current_user.hospital_id:
         raise ValidationException(detail="Hospital context required")
-    return hid
-
-
-def _get_db(hospital_id: str = Depends(_get_hospital_id)):
-    return next(get_hospital_db(hospital_id))
+    return next(get_hospital_db(current_user.hospital_id))
 
 
 @router.post("/upload")
 def upload_report(
     file: UploadFile = File(...),
-    hospital_id: str = Depends(_get_hospital_id),
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -43,7 +38,7 @@ def upload_report(
     if not file_type:
         raise ValidationException(detail=f"Unsupported format. Allowed: {list(ALLOWED_TYPES.keys())}")
 
-    storage_dir = os.path.join(settings.FILE_STORAGE_ROOT, hospital_id, "reports", str(current_user.user_id))
+    storage_dir = os.path.join(settings.FILE_STORAGE_ROOT, current_user.hospital_id, "reports", str(current_user.user_id))
     os.makedirs(storage_dir, exist_ok=True)
     file_id = uuid.uuid4().hex
     file_path = os.path.join(storage_dir, f"{file_id}.{ext}")
@@ -54,7 +49,7 @@ def upload_report(
         f.write(content)
 
     task = service.create_task(
-        db=db, hospital_id=hospital_id, user_id=current_user.user_id,
+        db=db, hospital_id=current_user.hospital_id, user_id=current_user.user_id,
         file_path=file_path, filename=file.filename, file_type=file_type,
         file_size=os.path.getsize(file_path),
     )
@@ -77,11 +72,10 @@ def list_reports(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(_get_db),
-    hospital_id: str = Depends(_get_hospital_id),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     user_id = None if current_user.role != "user" else current_user.user_id
-    items, total = service.list_reports(db, hospital_id, user_id, page, page_size)
+    items, total = service.list_reports(db, current_user.hospital_id, user_id, page, page_size)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
