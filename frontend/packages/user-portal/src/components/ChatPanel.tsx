@@ -80,7 +80,7 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
               key={i}
               role={msg.role}
               content={msg.content}
-              knowledgeRefs={msg.knowledgeRefs}
+              knowledgeRefs={msg.knowledge_refs}
               streaming={msg.streaming}
             />
           ))
