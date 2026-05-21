@@ -39,7 +39,7 @@ export default function HomePage() {
       )}
       <FloatButton
         icon={<PlusOutlined />} type="primary"
-        style={{ right: 24, bottom: 76, background: 'var(--color-primary)' }}
+        style={{ right: 24, bottom: 76, zIndex: 101, background: 'var(--color-primary)' }}
         onClick={() => nav('/upload')}
       />
     </Layout>
