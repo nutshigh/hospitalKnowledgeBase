@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # LLM Provider
     LLM_PROVIDER: str = "local"  # local | remote
 
+    # Embedding Provider
+    EMBED_PROVIDER: str = "local"  # local | remote
+    REMOTE_EMBED_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    REMOTE_EMBED_API_KEY: str = ""
+    REMOTE_EMBED_MODEL: str = "text-embedding-v3"
+
     # Report Parsing Engine: ocr | vlm
     REPORT_PARSING_ENGINE: str = "ocr"
 
