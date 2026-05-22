@@ -56,16 +56,8 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         else:
             processed_path = task.original_file_path
 
-        if settings.REPORT_PARSING_ENGINE == "ocr":
-            from app.core.ocr_pipeline import OcrPipeline
-            ocr = OcrPipeline(use_gpu=False)
-            if task.file_type == "pdf":
-                result = ocr.extract_from_pdf(processed_path)
-            else:
-                result = ocr.extract_from_image(processed_path)
-        else:
-            images_b64 = _file_to_base64_list(processed_path, task.file_type)
-            result = vlm_client.extract_from_images(images_b64)
+        images_b64 = _file_to_base64_list(processed_path, task.file_type)
+        result = vlm_client.extract_from_images(images_b64)
         indicators = normalize_indicators(result.get("indicators", []))
         personal_info = result.get("personal_info", {})
 

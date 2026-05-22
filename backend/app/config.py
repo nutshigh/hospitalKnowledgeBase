@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
 
+    # OCR (DeepSeek-OCR-2 本地部署 via vLLM serve)
+    OCR_BASE_URL: str = "http://localhost:8001/v1"
+    OCR_MODEL: str = "deepseek-ai/DeepSeek-OCR-2"
+    OCR_PROMPT: str = ""  # 自定义 OCR prompt，空则用内置默认 prompt
+
     # vLLM
     VLLM_BASE_URL: str = "http://localhost:8000/v1"
     VLLM_CHAT_MODEL: str = "qwen2.5"
@@ -38,9 +43,6 @@ class Settings(BaseSettings):
     REMOTE_EMBED_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     REMOTE_EMBED_API_KEY: str = ""
     REMOTE_EMBED_MODEL: str = "text-embedding-v3"
-
-    # Report Parsing Engine: ocr | vlm
-    REPORT_PARSING_ENGINE: str = "ocr"
 
     # Remote LLM (OpenAI 兼容 API)
     REMOTE_LLM_BASE_URL: str = "https://api.deepseek.com/v1"
