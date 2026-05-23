@@ -10,8 +10,8 @@ class EmbeddingClient:
             self.model = settings.REMOTE_EMBED_MODEL
             self.api_key = settings.REMOTE_EMBED_API_KEY
         else:
-            self.base_url = settings.VLLM_BASE_URL.rstrip("/")
-            self.model = settings.VLLM_EMBED_MODEL
+            self.base_url = settings.EMBED_BASE_URL.rstrip("/")
+            self.model = settings.EMBED_MODEL_NAME
             self.api_key = ""
         self.client = Client(timeout=Timeout(60.0))
 

@@ -19,7 +19,13 @@ def handle_interpretation_task(message: dict):
 
 
 def start_worker():
-    rabbitmq.consume("interpretation.urgent", handle_interpretation_task)
-    rabbitmq.consume("interpretation.normal", handle_interpretation_task)
-    print("Interpretation worker started, waiting for tasks...")
-    rabbitmq.start_consuming()
+    while True:
+        try:
+            rabbitmq.consume("interpretation.urgent", handle_interpretation_task)
+            rabbitmq.consume("interpretation.normal", handle_interpretation_task)
+            print("Interpretation worker started, waiting for tasks...")
+            rabbitmq.start_consuming()
+        except Exception as e:
+            print(f"Worker disconnected: {e}, reconnecting in 3s...")
+            import time
+            time.sleep(3)

@@ -29,7 +29,7 @@ class OpenAICompatProvider(LLMProvider):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
-        self.client = Client(timeout=Timeout(timeout))
+        self.client = Client(timeout=Timeout(connect=10.0, read=float(timeout), write=30.0, pool=10.0))
 
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}

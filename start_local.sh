@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 
+# Model cache & HuggingFace mirror
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HOME=/root/autodl-tmp/model/huggingface
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -17,6 +21,10 @@ err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 cleanup() {
     log "Stopping services..."
     kill $BACKEND_PID 2>/dev/null || true
+    kill $OCR_PID 2>/dev/null || true
+    kill $EMBED_PID 2>/dev/null || true
+    kill $PARSING_WORKER_PID 2>/dev/null || true
+    kill $INTERP_WORKER_PID 2>/dev/null || true
     kill $FPID1 $FPID2 $FPID3 2>/dev/null || true
     log "Done."
     exit 0
@@ -54,6 +62,10 @@ if ! rabbitmqctl status 2>/dev/null | grep -q "OS PID"; then
     sleep 3
     rabbitmqctl start_app 2>&1 | sed 's/^/  /' || true
 fi
+# Ensure root/root user matches .env
+rabbitmqctl add_user root root 2>/dev/null || true
+rabbitmqctl set_user_tags root administrator 2>/dev/null || true
+rabbitmqctl set_permissions -p / root ".*" ".*" ".*" 2>/dev/null || true
 log "RabbitMQ is running"
 
 # ── 4. Ensure databases exist ──────────────────────────────────────
@@ -105,6 +117,8 @@ CREATE TABLE IF NOT EXISTS report_template (id BIGINT AUTO_INCREMENT PRIMARY KEY
 CREATE TABLE IF NOT EXISTS statistic_cache (id BIGINT AUTO_INCREMENT PRIMARY KEY, stat_type VARCHAR(50) NOT NULL, params_hash VARCHAR(64) NOT NULL, result_json JSON DEFAULT NULL, expired_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS dispatch_config (id BIGINT AUTO_INCREMENT PRIMARY KEY, config_key VARCHAR(50) NOT NULL, config_value VARCHAR(500) NOT NULL, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS resource_metric (id BIGINT AUTO_INCREMENT PRIMARY KEY, metric_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, cpu_percent DECIMAL(5,1) DEFAULT NULL, memory_percent DECIMAL(5,1) DEFAULT NULL, gpu_percent DECIMAL(5,1) DEFAULT NULL, gpu_memory_percent DECIMAL(5,1) DEFAULT NULL, queue_depth INT DEFAULT NULL, active_workers INT DEFAULT NULL) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS chat_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, hospital_id VARCHAR(32) NOT NULL, report_id BIGINT DEFAULT NULL, title VARCHAR(200) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS chat_message (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_id BIGINT NOT NULL, role VARCHAR(10) NOT NULL, content TEXT NOT NULL, knowledge_refs JSON DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (session_id) REFERENCES chat_session(id)) ENGINE=InnoDB;
 EOSQL
 fi
 log "Databases ready"
@@ -121,6 +135,8 @@ log "Checking Python dependencies..."
 pushd "$BACKEND_DIR" >/dev/null
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --quiet 2>&1 | sed 's/^/  /'
+# Ensure vllm is installed for OCR (not in lockfile, installed separately)
+uv pip install vllm --python .venv/bin/python3 --quiet 2>&1 | sed 's/^/  /' || true
 popd >/dev/null
 
 log "Checking frontend dependencies..."
@@ -130,7 +146,50 @@ if [[ ! -d node_modules ]]; then
 fi
 popd >/dev/null
 
-# ── 7. Start backend ───────────────────────────────────────────────
+# ── 7. Start vLLM OCR server (optional, use --no-ocr to skip) ──────
+if [[ "${1:-}" != "--no-ocr" ]] && [[ "${2:-}" != "--no-ocr" ]]; then
+    log "Starting vLLM OCR server (port 8001)..."
+    if command -v vllm &>/dev/null || uv run python3 -c "import vllm" 2>/dev/null; then
+        pushd "$BACKEND_DIR" >/dev/null
+        export HF_ENDPOINT=https://hf-mirror.com
+        nohup uv run vllm serve deepseek-ai/DeepSeek-OCR-2 \
+            --port 8001 \
+            --trust-remote-code \
+            --max-model-len 8192 \
+            --gpu-memory-utilization 0.6 \
+            --no-enable-prefix-caching \
+            --mm-processor-cache-gb 0 \
+            > /tmp/vllm-ocr.log 2>&1 &
+        OCR_PID=$!
+        popd >/dev/null
+        log "vLLM OCR starting (PID: $OCR_PID, log: /tmp/vllm-ocr.log)"
+    else
+        warn "vLLM not installed, skipping OCR server"
+    fi
+else
+    log "Skipping vLLM OCR (--no-ocr)"
+fi
+
+# ── 7.5 Start vLLM Embedding server (BGE-M3, port 8002) ───────────
+log "Starting vLLM Embedding server (port 8002)..."
+if command -v vllm &>/dev/null || uv run python3 -c "import vllm" 2>/dev/null; then
+    pushd "$BACKEND_DIR" >/dev/null
+    export HF_ENDPOINT=https://hf-mirror.com
+    nohup uv run vllm serve BAAI/bge-m3 \
+        --port 8002 \
+        --trust-remote-code \
+        --max-model-len 8192 \
+        --gpu-memory-utilization 0.3 \
+        --no-enable-prefix-caching \
+        > /tmp/vllm-embed.log 2>&1 &
+    EMBED_PID=$!
+    popd >/dev/null
+    log "vLLM Embedding starting (PID: $EMBED_PID, log: /tmp/vllm-embed.log)"
+else
+    warn "vLLM not installed, skipping Embedding server"
+fi
+
+# ── 8. Start backend ────────────────────────────────────────────────
 log "Starting backend (port 8000)..."
 pushd "$BACKEND_DIR" >/dev/null
 PATH="$HOME/.local/bin:$PATH" nohup uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
@@ -146,7 +205,28 @@ for i in $(seq 1 20); do
     sleep 1
 done
 
-# ── 8. Start frontend (optional, use --no-frontend to skip) ────────
+# ── 8.5 Start RabbitMQ workers ──────────────────────────────────────
+log "Starting report parsing worker..."
+pushd "$BACKEND_DIR" >/dev/null
+nohup uv run python3 -c "
+from app.modules.report.worker import start_worker
+start_worker()
+" > /tmp/worker-parsing.log 2>&1 &
+PARSING_WORKER_PID=$!
+popd >/dev/null
+log "Parsing worker started (PID: $PARSING_WORKER_PID)"
+
+log "Starting interpretation worker..."
+pushd "$BACKEND_DIR" >/dev/null
+nohup uv run python3 -c "
+from app.modules.interpretation.worker import start_worker
+start_worker()
+" > /tmp/worker-interpretation.log 2>&1 &
+INTERP_WORKER_PID=$!
+popd >/dev/null
+log "Interpretation worker started (PID: $INTERP_WORKER_PID)"
+
+# ── 9. Start frontend (optional, use --no-frontend to skip) ─────────
 if [[ "${1:-}" != "--no-frontend" ]]; then
     log "Starting frontends..."
     pushd "$FRONTEND_DIR" >/dev/null
@@ -164,12 +244,15 @@ else
     log "Skipping frontend (--no-frontend)"
 fi
 
-# ── 9. Summary ─────────────────────────────────────────────────────
+# ── 10. Summary ──────────────────────────────────────────────────────
 echo ""
 echo "=============================================="
 echo "  All services started (Docker-free mode)"
 echo "=============================================="
 echo "  Backend API:  http://localhost:8000"
+echo "  vLLM OCR:    http://localhost:8001  (log: /tmp/vllm-ocr.log)"
+echo "  vLLM Embed:  http://localhost:8002  (log: /tmp/vllm-embed.log)"
+echo "  Workers:     parsing + interpretation (logs: /tmp/worker-*.log)"
 if [[ "${1:-}" != "--no-frontend" ]]; then
     echo "  User Portal:  http://localhost:3001"
     echo "  Doctor Portal: http://localhost:3002"

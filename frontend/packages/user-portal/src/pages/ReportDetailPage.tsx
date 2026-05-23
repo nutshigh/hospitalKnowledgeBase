@@ -21,6 +21,8 @@ export default function ReportDetailPage() {
   const chatStore = useChatStore();
   const [chatSessionId, setChatSessionId] = useState<number | null>(null);
 
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
+
   useEffect(() => {
     Promise.all([
       api.get(`/reports/${id}`).catch(() => ({ data: null })),
@@ -28,6 +30,13 @@ export default function ReportDetailPage() {
     ]).then(([r, i]) => {
       setReport(r.data);
       setInterpretation(i.data);
+      // Fetch task status if report has a task_id
+      const taskId = r.data?.task_id;
+      if (taskId) {
+        api.get(`/reports/tasks/${taskId}`).then(t => {
+          setTaskStatus(t.data?.status);
+        }).catch(() => {});
+      }
     }).finally(() => setLoading(false));
   }, [id]);
 
@@ -53,6 +62,25 @@ export default function ReportDetailPage() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
   if (!report) return <Layout title="报告详情"><p>报告不存在</p></Layout>;
+
+  const isProcessing = taskStatus && taskStatus !== 'completed' && taskStatus !== 'failed';
+  if (isProcessing) {
+    return (
+      <Layout title="报告详情">
+        <div style={{ textAlign: 'center', padding: '80px 20px' }}>
+          <Spin size="large" />
+          <h3 style={{ marginTop: 24, marginBottom: 8 }}>报告处理中</h3>
+          <p style={{ color: '#888', marginBottom: 16 }}>
+            AI 正在解析这份报告，请稍后回来查看
+          </p>
+          <StatusTag status={taskStatus!} />
+          <div style={{ marginTop: 32 }}>
+            <Button onClick={() => nav('/')}>返回首页</Button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   const overallLevel = interpretation?.overall_level;
   const indicators = interpretation?.indicators || report?.indicators || [];

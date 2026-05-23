@@ -24,6 +24,11 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
     db.commit()
     db.refresh(task)
 
+    # Create report_info immediately so it appears on home page
+    report = ReportInfo(task_id=task.id, user_id=user_id)
+    db.add(report)
+    db.commit()
+
     rabbitmq.publish(TaskMessage(
         task_type="parsing", hospital_id=hospital_id, priority=priority,
         payload={"task_id": task.id, "hospital_id": hospital_id, "file_path": file_path},
@@ -61,16 +66,17 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         indicators = normalize_indicators(result.get("indicators", []))
         personal_info = result.get("personal_info", {})
 
-        report = ReportInfo(
-            task_id=task.id, user_id=task.user_id,
-            name=personal_info.get("name"),
-            gender=personal_info.get("gender"),
-            age=personal_info.get("age"),
-            report_date=personal_info.get("check_date"),
-            check_type=personal_info.get("check_type"),
-            unit_name=personal_info.get("unit_name"),
-        )
-        db.add(report)
+        # Update existing report_info (created in create_task), or create if missing
+        report = db.query(ReportInfo).filter(ReportInfo.task_id == task.id).first()
+        if not report:
+            report = ReportInfo(task_id=task.id, user_id=task.user_id)
+            db.add(report)
+        report.name = personal_info.get("name")
+        report.gender = personal_info.get("gender")
+        report.age = personal_info.get("age")
+        report.report_date = personal_info.get("check_date")
+        report.check_type = personal_info.get("check_type")
+        report.unit_name = personal_info.get("unit_name")
         db.commit()
         db.refresh(report)
 
@@ -125,12 +131,34 @@ def _file_to_base64_list(file_path: str, file_type: str) -> list[str]:
 
 def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
                  page: int = 1, page_size: int = 20) -> tuple:
+    from sqlalchemy.orm import joinedload
     q = db.query(ReportInfo)
     if user_id:
         q = q.filter(ReportInfo.user_id == user_id)
     total = q.count()
     items = q.order_by(ReportInfo.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return items, total
+    # Attach task status to each report
+    task_ids = [r.task_id for r in items if r.task_id]
+    if task_ids:
+        tasks = {t.id: t for t in db.query(ReportTask).filter(ReportTask.id.in_(task_ids)).all()}
+    else:
+        tasks = {}
+    results = []
+    for r in items:
+        task = tasks.get(r.task_id)
+        results.append({
+            "id": r.id,
+            "task_id": r.task_id,
+            "name": r.name,
+            "gender": r.gender,
+            "age": r.age,
+            "report_date": r.report_date,
+            "check_type": r.check_type,
+            "unit_name": r.unit_name,
+            "task_status": task.status if task else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return results, total
 
 
 def get_report_detail(db: Session, report_id: int) -> Optional[ReportInfo]:

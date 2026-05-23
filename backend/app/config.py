@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "local"  # local | remote
 
     # Embedding Provider
-    EMBED_PROVIDER: str = "local"  # local | remote
+    EMBED_PROVIDER: str = "local"  # local (vLLM) | remote (API)
+    EMBED_BASE_URL: str = "http://localhost:8002/v1"  # local vLLM embedding server
+    EMBED_MODEL_NAME: str = "BAAI/bge-m3"
+    # Remote embedding (EMBED_PROVIDER=remote)
     REMOTE_EMBED_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     REMOTE_EMBED_API_KEY: str = ""
     REMOTE_EMBED_MODEL: str = "text-embedding-v3"

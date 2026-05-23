@@ -170,7 +170,7 @@ class VLMClient:
         self.model = settings.OCR_MODEL
         custom_prompt = getattr(settings, "OCR_PROMPT", None)
         self.prompt = custom_prompt.strip() if custom_prompt else OCR_PROMPT
-        self.client = Client(timeout=Timeout(300.0))
+        self.client = Client(timeout=Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0))
 
     def extract_from_image(self, image_base64: str) -> dict:
         response = self.client.post(
@@ -187,7 +187,7 @@ class VLMClient:
                     },
                 ],
                 "temperature": 0,
-                "max_tokens": 8192,
+                "max_tokens": 4096,
                 "skip_special_tokens": False,
             },
         )

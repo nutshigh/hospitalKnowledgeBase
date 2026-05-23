@@ -73,7 +73,7 @@ def get_task_status(task_id: int, db: Session = Depends(_get_db)):
     )
 
 
-@router.get("", response_model=schemas.ReportListResponse)
+@router.get("")
 def list_reports(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
