@@ -62,6 +62,20 @@ def process_interpretation(db: Session, report_id: int, hospital_id: str):
     if not report:
         return
 
+    # Skip if already completed
+    existing = db.query(ReportInterpretation).filter(
+        ReportInterpretation.report_id == report_id,
+        ReportInterpretation.status == "completed",
+    ).first()
+    if existing:
+        return
+
+    # Delete any incomplete previous interpretations for this report
+    db.query(ReportInterpretation).filter(
+        ReportInterpretation.report_id == report_id,
+    ).delete()
+    db.commit()
+
     interp = ReportInterpretation(report_id=report_id, status="processing")
     db.add(interp)
     db.commit()

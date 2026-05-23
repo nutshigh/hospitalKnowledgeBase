@@ -22,6 +22,7 @@ interface ChatStore {
   messages: Message[];
   loading: boolean;
   streaming: boolean;
+  selectedReports: Record<number, number | null>;  // sessionId -> reportId
 
   setSessions: (sessions: ChatSession[]) => void;
   setCurrentSession: (id: number | null) => void;
@@ -32,6 +33,8 @@ interface ChatStore {
   setLoading: (loading: boolean) => void;
   setStreaming: (streaming: boolean) => void;
   removeLastAssistantMessage: () => void;
+  getSelectedReport: (sessionId: number) => number | null;
+  setSelectedReport: (sessionId: number, reportId: number | null) => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -41,8 +44,17 @@ export const useChatStore = create<ChatStore>((set) => ({
   loading: false,
   streaming: false,
 
+  selectedReports: {},
+
   setSessions: (sessions) => set({ sessions }),
   setCurrentSession: (id) => set({ currentSessionId: id }),
+  getSelectedReport: (sessionId) => {
+    return useChatStore.getState().selectedReports[sessionId] ?? null;
+  },
+  setSelectedReport: (sessionId, reportId) =>
+    set((state) => ({
+      selectedReports: { ...state.selectedReports, [sessionId]: reportId },
+    })),
   setMessages: (messages) => set({ messages }),
   addMessage: (msg) =>
     set((state) => ({ messages: [...state.messages, msg] })),

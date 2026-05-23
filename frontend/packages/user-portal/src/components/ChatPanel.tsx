@@ -57,20 +57,20 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
     );
   };
 
-  const maxHeight = compact ? 280 : 'calc(100vh - 200px)';
+  const containerHeight = compact ? 280 : 'calc(100vh - 260px)';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: containerHeight }}>
       <div style={{
         flex: 1, overflowY: 'auto', padding: '0 4px',
-        maxHeight, minHeight: 160,
+        minHeight: 0,
+        display: 'flex', flexDirection: 'column',
       }}>
         {store.loading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}><Spin size="small" /></div>
+          <div style={{ textAlign: 'center', padding: 40, margin: 'auto' }}><Spin size="small" /></div>
         ) : store.messages.length === 0 ? (
           <div style={{
-            textAlign: 'center', padding: 40,
-            color: 'var(--color-text-secondary)', fontSize: 13,
+            margin: 'auto', color: 'var(--color-text-secondary)', fontSize: 13,
           }}>
             基于您的体检报告，我可以帮您解答健康疑问
           </div>

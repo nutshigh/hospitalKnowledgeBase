@@ -61,10 +61,33 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         else:
             processed_path = task.original_file_path
 
-        images_b64 = _file_to_base64_list(processed_path, task.file_type)
-        result = vlm_client.extract_from_images(images_b64)
-        indicators = normalize_indicators(result.get("indicators", []))
-        personal_info = result.get("personal_info", {})
+        # For text-based PDFs, use direct text extraction + LLM parsing
+        if task.file_type == "pdf" and _pdf_has_text(processed_path):
+            text = _extract_pdf_text(processed_path)
+            parsed = _parse_text_with_llm(text)
+            personal_info = {
+                "name": parsed.get("name"),
+                "gender": parsed.get("gender"),
+                "age": parsed.get("age"),
+                "check_date": parsed.get("report_date"),
+            }
+            # LLM already returns ref_low/ref_high — normalize names
+            raw_indicators = parsed.get("indicators", [])
+            indicators = normalize_indicators([
+                {
+                    "item_name": ind.get("item_name", ""),
+                    "result": ind.get("result", ""),
+                    "unit": ind.get("unit", ""),
+                    "ref_low": ind.get("ref_low"),
+                    "ref_high": ind.get("ref_high"),
+                }
+                for ind in raw_indicators
+            ])
+        else:
+            images_b64 = _file_to_base64_list(processed_path, task.file_type)
+            result = vlm_client.extract_from_images(images_b64)
+            indicators = normalize_indicators(result.get("indicators", []))
+            personal_info = result.get("personal_info", {})
 
         # Update existing report_info (created in create_task), or create if missing
         report = db.query(ReportInfo).filter(ReportInfo.task_id == task.id).first()
@@ -108,6 +131,74 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         task.status = "failed" if task.retry_count >= 3 else "queued"
         task.error_message = str(e)
         db.commit()
+
+
+def _pdf_has_text(file_path: str) -> bool:
+    """Check if PDF has enough embedded text for direct extraction."""
+    try:
+        import fitz
+        doc = fitz.open(file_path)
+        total = sum(len(page.get_text().strip()) for page in doc)
+        doc.close()
+        return total > 200  # 200+ chars → text-based PDF
+    except Exception:
+        return False
+
+
+def _extract_pdf_text(file_path: str) -> str:
+    """Extract all text from a text-based PDF."""
+    import fitz
+    doc = fitz.open(file_path)
+    texts = []
+    for i, page in enumerate(doc):
+        t = page.get_text().strip()
+        if t:
+            texts.append(f"--- Page {i+1} ---\n{t}")
+    doc.close()
+    return "\n\n".join(texts)
+
+
+def _parse_text_with_llm(text: str) -> dict:
+    """Send extracted PDF text to LLM for indicator parsing."""
+    from app.core.llm_client import llm_client
+    prompt = f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
+
+{{
+  "name": "姓名",
+  "gender": "男或女",
+  "age": 年龄数字或null,
+  "report_date": "YYYY-MM-DD或null",
+  "indicators": [
+    {{"item_name": "指标名称", "result": "检测结果", "unit": "单位", "ref_low": "参考下限", "ref_high": "参考上限"}}
+  ]
+}}
+
+规则：
+1. 姓名从"尊敬的XXX先生/女士"或"姓名:XXX"提取
+2. 性别："先生"→男，"女士"→女
+3. 年龄：从"XX岁"提取数字
+4. 参考范围如"3.5-9.5"→ref_low="3.5", ref_high="9.5"；如"<5.0"→ref_low="", ref_high="5.0"
+5. 只提取化验指标数据（血常规、生化、免疫等），不提取问卷、个人信息
+6. 没有的字段填 null
+
+体检报告文本：
+{text[:12000]}
+"""
+    resp = llm_client.chat([{"role": "user", "content": prompt}], temperature=0.1, max_tokens=4096)
+    import json, re
+    match = re.search(r'\{[\s\S]*\}', resp)
+    if not match:
+        raise ValueError(f"LLM did not return valid JSON: {resp[:200]}")
+    data = json.loads(match.group())
+    # Ensure indicators have ref_low/ref_high
+    for ind in data.get("indicators", []):
+        ref = ind.pop("ref_range", None)
+        if ref and "ref_low" not in ind:
+            from app.core.vlm_client import _parse_ref_range
+            lo, hi = _parse_ref_range(str(ref))
+            ind["ref_low"] = lo
+            ind["ref_high"] = hi
+    return data
 
 
 def _file_to_base64_list(file_path: str, file_type: str) -> list[str]:

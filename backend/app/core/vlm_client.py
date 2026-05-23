@@ -2,7 +2,7 @@ import re
 from httpx import Client, Timeout
 from app.config import settings
 
-OCR_PROMPT = """<image>\n<|grounding|>Extract all lab test indicators from this medical report and output as a Markdown table.
+OCR_PROMPT = """<image>\n<|grounding|>Extract all lab test indicators from this medical report as a Markdown table.
 
 ## Personal Info
 **Name:** <patient name>
@@ -20,17 +20,35 @@ Rules:
 2. "<5.0": ref_high="5.0", ref_low empty
 3. ">1.0": ref_low="1.0", ref_high empty
 4. Null fields: leave cell empty
-5. Output EXACTLY one indicators table with the specified columns
+5. Output EXACTLY one indicators table, do NOT repeat rows
 6. Keep result values exactly as shown in the report"""
 
 
 def _clean_markdown(text: str) -> str:
-    """Strip special tokens from DeepSeek-OCR-2 output."""
+    """Strip special tokens and truncate hallucinated repetition."""
     text = text.replace("<｜end▁of▁sentence｜>", "")
     text = re.sub(r"<\|ref\|>.*?<\|/ref\|><\|det\|>.*?<\|/det\|>", "", text)
     text = re.sub(r"<\|ref\|>.*?<\|/ref\|>", "", text)
     text = re.sub(r"<\|det\|>.*?<\|/det\|>", "", text)
     text = text.replace("\\coloneqq", ":=").replace("\\eqqcolon", "=:")
+    # Truncate at first sign of hallucination (repeated non-table lines)
+    lines = text.split("\n")
+    clean_lines = []
+    repeat_count = 0
+    for line in lines:
+        stripped = line.strip()
+        # Detect repeated non-table content
+        if stripped and not stripped.startswith("|"):
+            if clean_lines and stripped == clean_lines[-1].strip():
+                repeat_count += 1
+                if repeat_count >= 3:
+                    break
+            else:
+                repeat_count = 0
+        elif stripped.startswith("|"):
+            repeat_count = 0
+        clean_lines.append(line)
+    text = "\n".join(clean_lines)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -74,10 +92,26 @@ def _parse_markdown_table(text: str) -> list[dict]:
     col_map = _match_header_columns(header)
 
     indicators = []
+    seen = set()
     for row in table_rows[1:]:
         indicator = _row_to_indicator(row, col_map)
-        if indicator.get("item_name"):
-            indicators.append(indicator)
+        name = indicator.get("item_name", "").strip()
+        if not name or name in ("(each indicator)", "项目名称", "结果"):
+            continue
+        # Deduplicate: same name + same value → skip
+        key = (name, indicator.get("result", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        # If ref_low/ref_high still contain a range, parse them
+        for ref_key in ("ref_low", "ref_high"):
+            val = indicator.get(ref_key)
+            if val and re.search(r"[\d.]+\s*[-~—到至]\s*[\d.]+", str(val)):
+                lo, hi = _parse_ref_range(str(val))
+                indicator["ref_low"] = lo
+                indicator["ref_high"] = hi
+                break
+        indicators.append(indicator)
 
     return indicators
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Spin, Button } from 'antd';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { Spin, Button, Popconfirm, message } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
 import ColorBadge from '../components/ColorBadge';
@@ -87,12 +87,35 @@ export default function ReportDetailPage() {
 
   return (
     <Layout title={report.name || '报告详情'}>
-      <button onClick={() => nav(-1)} style={{
-        border: 'none', background: 'none', fontSize: 14, color: 'var(--color-primary)',
-        cursor: 'pointer', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 4,
-      }}>
-        <ArrowLeftOutlined /> 返回
-      </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+        <button onClick={() => nav(-1)} style={{
+          border: 'none', background: 'none', fontSize: 14, color: 'var(--color-primary)',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          <ArrowLeftOutlined /> 返回
+        </button>
+        <Popconfirm
+          title="确定删除这份报告吗？"
+          description="删除后将无法恢复"
+          onConfirm={async () => {
+            try {
+              await api.delete(`/reports/${id}`);
+              message.success('已删除');
+              nav('/');
+            } catch { message.error('删除失败'); }
+          }}
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+        >
+          <button style={{
+            border: 'none', background: 'none', fontSize: 14, color: '#ff4d4f',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            <DeleteOutlined /> 删除
+          </button>
+        </Popconfirm>
+      </div>
 
       {/* Info card */}
       <div style={{
@@ -160,6 +183,7 @@ export default function ReportDetailPage() {
           <ChatPanel sessionId={chatSessionId} placeholder="基于本报告提问..." compact />
         </div>
       )}
+
     </Layout>
   );
 }

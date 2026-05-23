@@ -5,6 +5,9 @@ from app.modules.interpretation.service import process_interpretation
 
 def handle_interpretation_task(message: dict):
     payload = message.get("payload", {})
+    # Skip event notifications — only process real interpretation requests
+    if payload.get("event"):
+        return
     report_id = payload.get("report_id")
     hospital_id = payload.get("hospital_id")
 

@@ -112,6 +112,14 @@ def delete_report(report_id: int, db: Session = Depends(_get_db)):
     report = service.get_report_detail(db, report_id)
     if not report:
         raise NotFoundException(detail="Report not found")
+    from sqlalchemy import text
+    db.execute(text("DELETE FROM indicator_judgment WHERE interpretation_id IN (SELECT id FROM report_interpretation WHERE report_id = :rid)"), {"rid": report_id})
+    db.execute(text("DELETE FROM report_interpretation WHERE report_id = :rid"), {"rid": report_id})
+    db.execute(text("DELETE FROM report_indicator WHERE report_id = :rid"), {"rid": report_id})
+    db.execute(text("DELETE FROM chat_message WHERE session_id IN (SELECT id FROM chat_session WHERE report_id = :rid)"), {"rid": report_id})
+    db.execute(text("DELETE FROM chat_session WHERE report_id = :rid"), {"rid": report_id})
+    if report.task_id:
+        db.execute(text("DELETE FROM report_task WHERE id = :tid"), {"tid": report.task_id})
     db.delete(report)
     db.commit()
     return {"status": "deleted"}

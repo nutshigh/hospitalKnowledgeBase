@@ -53,6 +53,21 @@ def get_session(
     return session
 
 
+@router.patch("/sessions/{session_id}")
+def update_session(
+    session_id: int,
+    data: "CreateSessionRequest",
+    db: Session = Depends(_get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    session = service.update_session_report(
+        db, session_id, current_user.user_id, data.report_id
+    )
+    if not session:
+        raise NotFoundException(detail="Session not found")
+    return {"status": "ok", "report_id": session.report_id}
+
+
 @router.delete("/sessions/{session_id}")
 def delete_session(
     session_id: int,

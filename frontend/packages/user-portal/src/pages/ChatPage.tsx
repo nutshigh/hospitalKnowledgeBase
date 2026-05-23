@@ -5,6 +5,7 @@ import { MenuOutlined } from '@ant-design/icons';
 import Layout from '../components/Layout';
 import ChatPanel from '../components/ChatPanel';
 import SessionDrawer from '../components/SessionDrawer';
+import ReportSelector from '../components/ReportSelector';
 import { useUserStore } from '../stores/userStore';
 import { useChatStore } from '../stores/chatStore';
 
@@ -37,9 +38,10 @@ export default function ChatPage() {
 
   return (
     <Layout title="AI 健康咨询">
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        {store.currentSessionId && <ReportSelector sessionId={store.currentSessionId} />}
         <Button type="text" icon={<MenuOutlined />} onClick={() => setDrawerOpen(true)}
-          style={{ color: 'var(--color-text-secondary)' }}>
+          style={{ color: 'var(--color-text-secondary)', flexShrink: 0 }}>
           历史对话
         </Button>
       </div>

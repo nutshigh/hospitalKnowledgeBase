@@ -25,11 +25,54 @@ _session_locks: set[int] = set()
 
 def create_session(db: Session, user_id: int, hospital_id: str,
                    report_id: Optional[int] = None) -> ChatSession:
+    # If no report specified, auto-associate the user's latest report
+    if report_id is None:
+        latest = _get_latest_report(db, user_id)
+        if latest:
+            report_id = latest["id"]
     session = ChatSession(user_id=user_id, hospital_id=hospital_id, report_id=report_id)
     db.add(session)
     db.commit()
     db.refresh(session)
     return session
+
+
+def update_session_report(db: Session, session_id: int, user_id: int,
+                          report_id: Optional[int]) -> Optional[ChatSession]:
+    session = get_session(db, session_id, user_id)
+    if not session:
+        return None
+    session.report_id = report_id
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def _get_report_date_note(db: Session, report_id: int) -> str:
+    """获取报告日期标注，用于告知 AI 和用户当前引用的报告"""
+    row = db.execute(
+        text("SELECT report_date, created_at FROM report_info WHERE id = :rid"),
+        {"rid": report_id},
+    ).fetchone()
+    if not row:
+        return ""
+    date_str = row[0] or row[1]
+    if hasattr(date_str, 'strftime'):
+        date_str = date_str.strftime("%Y-%m-%d")
+    return f"（当前引用的报告日期：{date_str}，请在你的回答中提及此日期以便用户知晓数据来源）"
+
+
+def _get_latest_report(db: Session, user_id: int) -> Optional[dict]:
+    row = db.execute(
+        text(
+            "SELECT id, report_date, created_at FROM report_info "
+            "WHERE user_id = :uid ORDER BY COALESCE(report_date, created_at) DESC LIMIT 1"
+        ),
+        {"uid": user_id},
+    ).fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "report_date": row[1], "created_at": row[2]}
 
 
 def list_sessions(db: Session, user_id: int) -> List[ChatSession]:
@@ -148,8 +191,10 @@ def process_chat_stream(
 
         # 2. 加载报告上下文
         report_context = "用户未关联报告"
+        report_date_note = ""
         if session.report_id:
             report_context = _load_report_context(db, session.report_id)
+            report_date_note = _get_report_date_note(db, session.report_id)
 
         # 3. 知识库检索
         knowledge_context = _build_knowledge_context(session.hospital_id, user_message)
@@ -161,7 +206,7 @@ def process_chat_stream(
             chat_messages.append({"role": msg.role, "content": msg.content})
 
         # 5. 构建完整 messages
-        system_content = f"{CHAT_SYSTEM_PROMPT}\n\n## 当前报告数据\n{report_context}\n\n## 参考知识库\n{knowledge_context or '无相关知识库条目'}"
+        system_content = f"{CHAT_SYSTEM_PROMPT}\n\n## 当前报告数据{report_date_note}\n{report_context}\n\n## 参考知识库\n{knowledge_context or '无相关知识库条目'}"
         full_messages = [{"role": "system", "content": system_content}] + chat_messages
 
         # 6. 流式调用 LLM
