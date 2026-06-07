@@ -1,6 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
+from app.core.database import get_hospital_db
 from app.core.milvus import milvus_client
 from app.core.embedding import embedding_client
 from app.modules.knowledge.models import KnowledgeCategory, KnowledgeEntry
@@ -174,12 +175,22 @@ def search(hospital_id: str, query: str, top_k: int = 5,
 
     results = milvus_client.search(hospital_id, query_vector, top_k=top_k, filter_expr=filter_expr)
 
+    entry_ids = [r["entry_id"] for r in results]
+    content_map = {}
+    if entry_ids:
+        db = next(get_hospital_db(hospital_id))
+        try:
+            entries = db.query(KnowledgeEntry).filter(KnowledgeEntry.id.in_(entry_ids)).all()
+            content_map = {e.id: e.content for e in entries}
+        finally:
+            db.close()
+
     out = []
     for r in results:
         out.append(SearchResult(
             entry_id=r["entry_id"],
             title=r["title"],
-            content="",
+            content=content_map.get(r["entry_id"], ""),
             category_id=r.get("category_id"),
             score=r["score"],
         ))

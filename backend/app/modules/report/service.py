@@ -1,6 +1,6 @@
 import base64
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy.orm import Session
 
@@ -98,8 +98,8 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         report.gender = personal_info.get("gender")
         report.age = personal_info.get("age")
         report.report_date = personal_info.get("check_date")
-        report.check_type = personal_info.get("check_type")
-        report.unit_name = personal_info.get("unit_name")
+        # report.check_type = personal_info.get("check_type")
+        # report.unit_name = personal_info.get("unit_name")
         db.commit()
         db.refresh(report)
 
@@ -118,7 +118,7 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         db.commit()
 
         task.status = "completed"
-        task.completed_at = datetime.utcnow()
+        task.completed_at = datetime.now(timezone.utc)
         db.commit()
 
         rabbitmq.publish(TaskMessage(
