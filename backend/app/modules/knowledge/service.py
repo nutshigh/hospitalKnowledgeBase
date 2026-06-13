@@ -117,6 +117,8 @@ def delete_entry(db: Session, hospital_id: str, entry_id: int) -> bool:
     return True
 
 
+
+
 def _vectorize_entry(hospital_id: str, entry: KnowledgeEntry):
     vector = embedding_client.embed_single(entry.content)
     meta = {
