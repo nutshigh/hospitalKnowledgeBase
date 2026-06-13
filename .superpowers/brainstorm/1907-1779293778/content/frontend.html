@@ -1,0 +1,104 @@
+<h2>前端设计 — Chat 组件 & 页面</h2>
+<p class="subtitle">用户端新增：报告详情页内嵌聊天 + 独立聊天页面</p>
+
+<div class="section">
+  <h3>场景一：报告详情页 — 内嵌聊天</h3>
+  <div class="mockup">
+    <div class="mockup-header">报告详情页面底部新增 AI 解读对话区</div>
+    <div class="mockup-body">
+      <div style="display:flex;flex-direction:column;gap:0;font-size:12px;">
+        <div style="background:var(--surface-alt);padding:8px 12px;font-weight:600;">← 返回 &nbsp;&nbsp; 2024年度体检报告 &nbsp;&nbsp; <span style="color:#0D9488;font-size:11px;">已解读</span></div>
+        <div style="padding:8px 12px;border-bottom:1px solid var(--border-light);">
+          <span class="label">个人信息</span><br/>
+          张三 | 男 | 35岁
+        </div>
+        <div style="padding:8px 12px;max-height:200px;overflow-y:auto;border-bottom:1px solid var(--border-light);">
+          <span class="label">指标摘要</span>
+          <table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:4px;">
+            <tr style="border-bottom:1px solid var(--border-light);"><td>空腹血糖</td><td>8.2</td><td>3.9-6.1</td><td style="color:#EF4444;">🔴 偏高</td></tr>
+            <tr style="border-bottom:1px solid var(--border-light);"><td>总胆固醇</td><td>5.8</td><td>3.0-5.7</td><td style="color:#D97706;">🟡 偏高</td></tr>
+            <tr style="border-bottom:1px solid var(--border-light);"><td>ALT</td><td>28</td><td>9-50</td><td style="color:#0D9488;">🟢 正常</td></tr>
+            <tr><td colspan="4" style="color:var(--color-text-secondary);text-align:center;padding:4px;">... 共 25 项</td></tr>
+          </table>
+        </div>
+        <div style="background:var(--surface-alt);padding:4px 12px;font-weight:600;font-size:12px;">💬 AI 健康咨询 (基于本报告)</div>
+        <div style="padding:8px 12px;min-height:160px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;gap:6px;align-items:flex-start;">
+            <div style="background:#E5E7EB;border-radius:8px;padding:6px 10px;max-width:80%;font-size:12px;">我的空腹血糖偏高，这个严重吗？需要注意什么？</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start;justify-content:flex-end;">
+            <div style="background:#CCFBF1;border-radius:8px;padding:6px 10px;max-width:80%;font-size:12px;">您的空腹血糖 8.2 mmol/L，超出正常范围 (3.9-6.1)，属于<span style="color:#EF4444;">偏高(红区)</span>。建议：<br/>1. 复查空腹血糖和糖化血红蛋白<br/>2. 控制主食摄入，少食多餐<br/>3. 每周至少150分钟中等强度运动...</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--border-light);">
+          <input class="mock-input" style="flex:1;" placeholder="基于本报告提问..."/>
+          <button class="mock-button" style="width:60px;">发送</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>场景二：独立聊天页面</h3>
+  <div class="mockup">
+    <div class="mockup-header">新增底部导航 "AI咨询" Tab，进入独立聊天</div>
+    <div class="mockup-body">
+      <div style="display:flex;flex-direction:column;gap:0;font-size:12px;min-height:400px;">
+        <div style="background:var(--surface-alt);padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:600;">AI 健康咨询</span>
+          <span style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;">+ 新对话</span>
+        </div>
+        <div style="padding:8px 12px;flex:1;min-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+          <div style="text-align:center;color:var(--color-text-secondary);padding:20px 0;">
+            <div style="font-size:36px;">🤖</div>
+            <div style="font-weight:500;">AI 健康助手</div>
+            <div style="font-size:11px;">基于医学知识库和您的体检报告为您答疑</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start;">
+            <div style="background:#E5E7EB;border-radius:8px;padding:6px 10px;max-width:80%;">最近体检说我尿酸偏高，饮食上应该注意什么？</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start;justify-content:flex-end;">
+            <div style="background:#CCFBF1;border-radius:8px;padding:6px 10px;max-width:80%;">尿酸偏高需要注意：<br/>1. 避免高嘌呤食物：动物内脏、海鲜、浓汤<br/>2. 多饮水，每日2000ml以上<br/>3. 限制饮酒，特别是啤酒<br/>4. 控制体重...</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--border-light);">
+          <input class="mock-input" style="flex:1;" placeholder="输入健康问题..."/>
+          <button class="mock-button">发送</button>
+        </div>
+        <div style="display:flex;justify-content:space-around;padding:6px 0;border-top:1px solid var(--border-light);background:white;">
+          <div style="text-align:center;font-size:10px;color:var(--color-text-secondary);">🏠 首页</div>
+          <div style="text-align:center;font-size:10px;color:var(--color-text-secondary);">📋 报告</div>
+          <div style="text-align:center;font-size:10px;color:#0D9488;">💬 AI咨询</div>
+          <div style="text-align:center;font-size:10px;color:var(--color-text-secondary);">👤 我的</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>前端组件拆分</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <pre style="font-size:12px;line-height:1.7;background:var(--surface-card);padding:16px;border-radius:8px;">
+src/
+├── pages/
+│   └── ChatPage.tsx          ← 新页面：独立聊天（含会话列表抽屉）
+│
+├── components/
+│   ├── ChatBubble.tsx        ← 消息气泡（user/assistant，支持流式渲染）
+│   ├── ChatInput.tsx         ← 输入框 + 发送按钮
+│   ├── ChatPanel.tsx         ← 聊天面板（消息列表 + 输入框）
+│   └── SessionDrawer.tsx     ← 会话列表侧边抽屉
+│
+├── hooks/
+│   └── useChatStream.ts      ← SSE 流式消息 hook
+│
+├── stores/
+│   └── chatStore.ts          ← 会话状态管理
+│
+└── router.tsx                ← 新增 /chat 和 /chat/:sessionId 路由</pre>
+    </div>
+  </div>
+</div>

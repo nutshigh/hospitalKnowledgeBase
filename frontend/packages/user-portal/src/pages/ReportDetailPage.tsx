@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Spin, Button } from 'antd';
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { Spin, Button, Popconfirm, message } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
 import ColorBadge from '../components/ColorBadge';
 import IndicatorRow from '../components/IndicatorRow';
 import StatusTag from '../components/StatusTag';
+import ChatPanel from '../components/ChatPanel';
+import { useChatStore } from '../stores/chatStore';
 
 export default function ReportDetailPage() {
   const { id } = useParams();
@@ -16,6 +18,10 @@ export default function ReportDetailPage() {
   const [interpretation, setInterpretation] = useState<any>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const chatStore = useChatStore();
+  const [chatSessionId, setChatSessionId] = useState<number | null>(null);
+
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -24,23 +30,92 @@ export default function ReportDetailPage() {
     ]).then(([r, i]) => {
       setReport(r.data);
       setInterpretation(i.data);
+      // Fetch task status if report has a task_id
+      const taskId = r.data?.task_id;
+      if (taskId) {
+        api.get(`/reports/tasks/${taskId}`).then(t => {
+          setTaskStatus(t.data?.status);
+        }).catch(() => {});
+      }
     }).finally(() => setLoading(false));
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    api.get('/chat/sessions')
+      .then(r => {
+        const sessions = r.data || [];
+        const existing = sessions.find((s: any) => s.report_id === Number(id));
+        if (existing) {
+          setChatSessionId(existing.id);
+          chatStore.setCurrentSession(existing.id);
+        } else {
+          api.post('/chat/sessions', { report_id: Number(id) })
+            .then(r2 => {
+              setChatSessionId(r2.data.id);
+              chatStore.setCurrentSession(r2.data.id);
+            }).catch(() => {});
+        }
+      })
+      .catch(() => {});
   }, [id]);
 
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
   if (!report) return <Layout title="报告详情"><p>报告不存在</p></Layout>;
+
+  const isProcessing = taskStatus && taskStatus !== 'completed' && taskStatus !== 'failed';
+  if (isProcessing) {
+    return (
+      <Layout title="报告详情">
+        <div style={{ textAlign: 'center', padding: '80px 20px' }}>
+          <Spin size="large" />
+          <h3 style={{ marginTop: 24, marginBottom: 8 }}>报告处理中</h3>
+          <p style={{ color: '#888', marginBottom: 16 }}>
+            AI 正在解析这份报告，请稍后回来查看
+          </p>
+          <StatusTag status={taskStatus!} />
+          <div style={{ marginTop: 32 }}>
+            <Button onClick={() => nav('/')}>返回首页</Button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   const overallLevel = interpretation?.overall_level;
   const indicators = interpretation?.indicators || report?.indicators || [];
 
   return (
     <Layout title={report.name || '报告详情'}>
-      <button onClick={() => nav(-1)} style={{
-        border: 'none', background: 'none', fontSize: 14, color: 'var(--color-primary)',
-        cursor: 'pointer', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 4,
-      }}>
-        <ArrowLeftOutlined /> 返回
-      </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+        <button onClick={() => nav(-1)} style={{
+          border: 'none', background: 'none', fontSize: 14, color: 'var(--color-primary)',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          <ArrowLeftOutlined /> 返回
+        </button>
+        <Popconfirm
+          title="确定删除这份报告吗？"
+          description="删除后将无法恢复"
+          onConfirm={async () => {
+            try {
+              await api.delete(`/reports/${id}`);
+              message.success('已删除');
+              nav('/');
+            } catch { message.error('删除失败'); }
+          }}
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+        >
+          <button style={{
+            border: 'none', background: 'none', fontSize: 14, color: '#ff4d4f',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            <DeleteOutlined /> 删除
+          </button>
+        </Popconfirm>
+      </div>
 
       {/* Info card */}
       <div style={{
@@ -99,6 +174,16 @@ export default function ReportDetailPage() {
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-secondary)', fontSize: 13 }}>暂无指标数据</div>
         )}
       </div>
+
+      {chatSessionId && (
+        <div style={{ marginTop: 24, borderTop: '1px solid #E5E7EB', paddingTop: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14, color: '#0D9488' }}>
+            💬 AI 健康咨询（基于本报告）
+          </div>
+          <ChatPanel sessionId={chatSessionId} placeholder="基于本报告提问..." compact />
+        </div>
+      )}
+
     </Layout>
   );
 }

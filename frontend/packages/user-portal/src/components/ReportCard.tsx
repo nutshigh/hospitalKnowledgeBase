@@ -8,10 +8,12 @@ interface ReportCardProps {
   report_date: string;
   overall_level?: string;
   status?: string;
+  task_status?: string;
 }
 
-export default function ReportCard({ id, name, report_date, overall_level, status }: ReportCardProps) {
+export default function ReportCard({ id, name, report_date, overall_level, status, task_status }: ReportCardProps) {
   const nav = useNavigate();
+  const displayStatus = status || task_status;
   return (
     <div
       onClick={() => nav(`/report/${id}`)}
@@ -27,13 +29,15 @@ export default function ReportCard({ id, name, report_date, overall_level, statu
       onMouseEnter={(e) => (e.currentTarget.style.boxShadow = 'var(--shadow-md)')}
       onMouseLeave={(e) => (e.currentTarget.style.boxShadow = 'var(--shadow-sm)')}
     >
-      <div>
-        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{name || '体检报告'}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {name || '体检报告'}
+        </div>
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{report_date}</div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         {overall_level ? <ColorBadge level={overall_level} /> : null}
-        {status ? <StatusTag status={status} /> : null}
+        {displayStatus ? <StatusTag status={displayStatus} /> : null}
         <span style={{ color: 'var(--color-text-secondary)', fontSize: 18 }}>›</span>
       </div>
     </div>

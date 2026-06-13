@@ -1,8 +1,8 @@
 const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-  queued:    { label: '排队中', color: '#A8A29E', bg: '#F5F5F4' },
-  parsing:   { label: '解析中', color: '#0D9488', bg: '#CCFBF1' },
-  completed: { label: '已完成', color: '#16A34A', bg: '#DCFCE7' },
-  failed:    { label: '失败',   color: '#DC2626', bg: '#FEE2E2' },
+  queued:    { label: '等待分析', color: '#A8A29E', bg: '#F5F5F4' },
+  parsing:   { label: '正在分析', color: '#0D9488', bg: '#CCFBF1' },
+  completed: { label: '分析完成', color: '#16A34A', bg: '#DCFCE7' },
+  failed:    { label: '分析失败', color: '#DC2626', bg: '#FEE2E2' },
 };
 
 export default function StatusTag({ status }: { status: string }) {

@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.core.database import get_template_db
 from app.core.security import decode_access_token
+from app.middleware.hospital_context import set_current_hospital_id
 from app.utils.exceptions import UnauthorizedException, ForbiddenException
 
 
@@ -30,6 +31,8 @@ async def get_current_user(
     hospital_id = payload.get("hospital_id")
     if not user_id or not role:
         raise UnauthorizedException(detail="Invalid token payload")
+    if hospital_id:
+        set_current_hospital_id(hospital_id)
     return CurrentUser(user_id=user_id, role=role, hospital_id=hospital_id)
 
 

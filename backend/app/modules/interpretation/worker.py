@@ -5,6 +5,9 @@ from app.modules.interpretation.service import process_interpretation
 
 def handle_interpretation_task(message: dict):
     payload = message.get("payload", {})
+    # Skip event notifications — only process real interpretation requests
+    if payload.get("event"):
+        return
     report_id = payload.get("report_id")
     hospital_id = payload.get("hospital_id")
 
@@ -19,7 +22,13 @@ def handle_interpretation_task(message: dict):
 
 
 def start_worker():
-    rabbitmq.consume("interpretation.urgent", handle_interpretation_task)
-    rabbitmq.consume("interpretation.normal", handle_interpretation_task)
-    print("Interpretation worker started, waiting for tasks...")
-    rabbitmq.start_consuming()
+    while True:
+        try:
+            rabbitmq.consume("interpretation.urgent", handle_interpretation_task)
+            rabbitmq.consume("interpretation.normal", handle_interpretation_task)
+            print("Interpretation worker started, waiting for tasks...")
+            rabbitmq.start_consuming()
+        except Exception as e:
+            print(f"Worker disconnected: {e}, reconnecting in 3s...")
+            import time
+            time.sleep(3)

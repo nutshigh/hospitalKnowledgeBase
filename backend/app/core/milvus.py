@@ -10,9 +10,18 @@ VECTOR_DIM = 1024
 class MilvusClient:
     def __init__(self):
         self._connected = False
+        self._server_started = False
+
+    def _start_server(self):
+        if self._server_started:
+            return
+        from milvus_lite import server_manager
+        server_manager.start(port=settings.MILVUS_PORT)
+        self._server_started = True
 
     def _ensure_connection(self):
         if not self._connected:
+            self._start_server()
             connections.connect(host=settings.MILVUS_HOST, port=settings.MILVUS_PORT)
             self._connected = True
 

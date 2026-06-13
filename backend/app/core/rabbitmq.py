@@ -48,16 +48,30 @@ class RabbitMQClient:
             self._connect()
             self._ensure_resources()
         routing_key = f"{task.task_type}.{'urgent' if task.priority else 'normal'}"
-        self.channel.basic_publish(
-            exchange=self.EXCHANGE,
-            routing_key=routing_key,
-            body=json.dumps({
-                "task_type": task.task_type,
-                "hospital_id": task.hospital_id,
-                "payload": task.payload,
-            }),
-            properties=pika.BasicProperties(delivery_mode=2),
-        )
+        try:
+            self.channel.basic_publish(
+                exchange=self.EXCHANGE,
+                routing_key=routing_key,
+                body=json.dumps({
+                    "task_type": task.task_type,
+                    "hospital_id": task.hospital_id,
+                    "payload": task.payload,
+                }),
+                properties=pika.BasicProperties(delivery_mode=2),
+            )
+        except (pika.exceptions.ConnectionClosed, pika.exceptions.StreamLostError, pika.exceptions.ChannelClosed):
+            self._connect()
+            self._ensure_resources()
+            self.channel.basic_publish(
+                exchange=self.EXCHANGE,
+                routing_key=routing_key,
+                body=json.dumps({
+                    "task_type": task.task_type,
+                    "hospital_id": task.hospital_id,
+                    "payload": task.payload,
+                }),
+                properties=pika.BasicProperties(delivery_mode=2),
+            )
 
     def consume(self, queue: str, callback: Callable, prefetch_count: int = 1):
         if not self.connection or self.connection.is_closed:

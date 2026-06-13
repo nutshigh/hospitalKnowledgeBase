@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Button, message, Progress } from 'antd';
-import { CameraOutlined, FileOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import { Upload, Button, message } from 'antd';
+import { InboxOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
 
@@ -9,22 +9,27 @@ export default function UploadPage() {
   const { api } = useUserStore();
   const nav = useNavigate();
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const fileRef = useRef<File | null>(null);
+  const [file, setFile] = useState<File | null>(null);
 
-  const handleUpload = async () => {
-    if (!fileRef.current) return;
+  const doUpload = async () => {
+    if (!file) return;
     setUploading(true);
-    const form = new FormData();
-    form.append('file', fileRef.current);
     try {
-      const res = await api.post('/reports/upload', form, {
-        onUploadProgress: (e: any) => setProgress(Math.round((e.loaded / e.total) * 100)),
-      });
-      message.success('上传成功，正在解析中...');
-      nav(`/report/${res.data.report_id || 0}`, { state: { taskId: res.data.task_id } });
-    } catch {
-      message.error('上传失败');
+      const form = new FormData();
+      form.append('file', file);
+      const res = await api.post('/reports/upload', form);
+      if (res.data?.task_id) {
+        message.success('提交成功，报告分析中');
+        nav('/');
+      } else {
+        message.error('提交失败，请重试');
+      }
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        message.error('登录已过期，请重新登录');
+      } else {
+        message.error('上传失败，请重试');
+      }
     } finally {
       setUploading(false);
     }
@@ -32,43 +37,39 @@ export default function UploadPage() {
 
   return (
     <Layout title="上传报告">
-      <button onClick={() => nav(-1)} style={{
-        border: 'none', background: 'none', fontSize: 14, color: 'var(--color-primary)',
-        cursor: 'pointer', marginBottom: 24, display: 'flex', alignItems: 'center', gap: 4,
-      }}>
-        <ArrowLeftOutlined /> 返回
-      </button>
       <div style={{
-        border: '2px dashed var(--color-border)', borderRadius: 'var(--radius-lg)',
-        padding: 48, textAlign: 'center', marginBottom: 24,
-        background: fileRef.current ? 'var(--color-primary-light)' : 'var(--color-bg)',
-        transition: '0.2s',
+        border: file ? '2px solid #0D9488' : '2px dashed #d9d9d9',
+        borderRadius: 12, padding: '40px 20px', textAlign: 'center', marginBottom: 24,
+        background: file ? '#f0fdfa' : '#fafafa', transition: '0.2s',
       }}>
         <Upload.Dragger
-          beforeUpload={(f) => { fileRef.current = f; return false; }}
+          beforeUpload={(f) => { setFile(f); return false; }}
           showUploadList={false}
           accept=".pdf,.docx,.doc,.jpg,.jpeg,.png"
+          disabled={uploading}
           style={{ background: 'transparent', border: 'none' }}
         >
-          <div style={{ fontSize: 40, marginBottom: 16 }}>
-            {fileRef.current ? <FileOutlined style={{ color: 'var(--color-primary)' }} /> : <CameraOutlined />}
-          </div>
-          <p style={{ fontWeight: 600, marginBottom: 4 }}>
-            {fileRef.current ? fileRef.current.name : '点击或拖拽上传体检报告'}
+          <InboxOutlined style={{ fontSize: 48, color: file ? '#0D9488' : '#bfbfbf', marginBottom: 16 }} />
+          <p style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+            {file ? file.name : '点击或拖拽上传体检报告'}
           </p>
-          <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-            支持 PDF、Word、JPG、PNG 格式
-          </p>
+          <p style={{ fontSize: 12, color: '#999' }}>PDF / Word / JPG / PNG，最大 20MB</p>
         </Upload.Dragger>
       </div>
-      {uploading && <Progress percent={progress} style={{ marginBottom: 16 }} strokeColor="var(--color-primary)" />}
+
       <Button
-        type="primary" block size="large" onClick={handleUpload}
-        disabled={!fileRef.current} loading={uploading}
-        style={{ height: 48, borderRadius: 'var(--radius-sm)', background: 'var(--color-primary)', border: 'none', fontWeight: 600 }}
+        type="primary" block size="large" onClick={doUpload}
+        disabled={!file || uploading} loading={uploading}
+        style={{ height: 48, borderRadius: 8, background: '#0D9488', border: 'none', fontWeight: 600, fontSize: 16 }}
       >
-        开始解析
+        {uploading ? '上传中...' : '提交解析'}
       </Button>
+
+      <div style={{ textAlign: 'center', marginTop: 16 }}>
+        <button onClick={() => nav(-1)} style={{
+          border: 'none', background: 'none', color: '#0D9488', cursor: 'pointer', fontSize: 14,
+        }}>← 返回首页</button>
+      </div>
     </Layout>
   );
 }

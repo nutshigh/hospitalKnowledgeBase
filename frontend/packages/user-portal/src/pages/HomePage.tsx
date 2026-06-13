@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FloatButton, Spin } from 'antd';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Spin } from 'antd';
 import { PlusOutlined, LogoutOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
@@ -9,12 +9,14 @@ import ReportCard from '../components/ReportCard';
 export default function HomePage() {
   const { api, logout } = useUserStore();
   const nav = useNavigate();
+  const loc = useLocation();
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     api.get('/reports').then(r => setReports(r.data.items || [])).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  }, [loc.key]);
 
   return (
     <Layout title="我的报告">
@@ -32,16 +34,34 @@ export default function HomePage() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {reports.map((r: any) => (
-            <ReportCard key={r.id} id={r.id} name={r.name || '体检报告'} report_date={r.report_date || ''} />
-          ))}
+          {reports.map((r: any) => {
+            const d = r.created_at ? new Date(r.created_at) : null;
+            const dateStr = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` : '';
+            return (
+              <ReportCard
+                key={r.id}
+                id={r.id}
+                name={r.name || `体检报告 ${dateStr}`}
+                report_date={dateStr}
+                task_status={r.task_status}
+              />
+            );
+          })}
         </div>
       )}
-      <FloatButton
-        icon={<PlusOutlined />} type="primary"
-        style={{ right: 24, bottom: 24, background: 'var(--color-primary)' }}
+      <button
         onClick={() => nav('/upload')}
-      />
+        style={{
+          position: 'fixed', right: 24, bottom: 80, zIndex: 101,
+          width: 48, height: 48, borderRadius: '50%',
+          border: 'none', background: 'var(--color-primary)',
+          color: '#fff', fontSize: 24, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+        }}
+      >
+        <PlusOutlined />
+      </button>
     </Layout>
   );
 }
