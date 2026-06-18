@@ -17,6 +17,9 @@ from app.modules.chat.router import router as chat_router
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
 
+    from app.ai.config import ensure_milvus_started
+    ensure_milvus_started()
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

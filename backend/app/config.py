@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Milvus (Milvus Lite embedded server)
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
+    MILVUS_DATA_DIR: str = "./milvus_data"
 
     # RabbitMQ
     RABBITMQ_HOST: str = "localhost"

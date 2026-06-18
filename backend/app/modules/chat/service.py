@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.modules.chat.models import ChatSession, ChatMessage
-from app.core.llm_client import llm_client  # noqa: F401 — 将在 Task 17 删除
 from app.ai.agents import run_chat_agent
 
 MAX_HISTORY_ROUNDS = 20

@@ -12,9 +12,9 @@ def ensure_milvus_started():
     global _milvus_started
     if _milvus_started:
         return
-    from milvus_lite import server_manager
-    server_manager.start(port=settings.MILVUS_PORT)
-    connections.connect(host=settings.MILVUS_HOST, port=settings.MILVUS_PORT)
+    from milvus_lite.server_manager import ServerManager
+    uri = ServerManager().start_and_get_uri(settings.MILVUS_DATA_DIR)
+    connections.connect(uri=uri)
     _milvus_started = True
 
 
