@@ -185,7 +185,7 @@ def _parse_text_with_llm(text: str) -> dict:
 {text[:12000]}
 """
     model = get_chat_model()
-    resp = model.invoke([("user", prompt)]).content
+    resp = model.invoke([("user", prompt)], max_tokens=4096).content
     import json, re
     match = re.search(r'\{[\s\S]*\}', resp)
     if not match:

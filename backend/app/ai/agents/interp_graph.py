@@ -10,13 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.llm import get_chat_model
 from app.ai.agents.tools import make_tools
-from app.modules.interpretation.rules_engine import rules_engine
-from app.modules.interpretation.service import list_rules
-from app.modules.interpretation.models import (
-    ReportInterpretation, IndicatorJudgment,
-)
-from app.modules.report.models import ReportInfo, ReportIndicator
-from app.core.rabbitmq import rabbitmq, TaskMessage
+from app.config import settings
 
 INTERP_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，
 为体检者撰写易懂的指标解读和健康建议。
@@ -75,6 +69,9 @@ def build_interp_graph(hospital_id: str, db: Session):
         return {"indicators": indicators}
 
     def run_rules(state: InterpState) -> dict:
+        from app.modules.interpretation.rules_engine import rules_engine
+        from app.modules.interpretation.service import list_rules
+
         rules = list_rules(db)
         rules_engine.load_rules(state["hospital_id"], [{
             "id": r.id, "rule_name": r.rule_name, "rule_type": r.rule_type,
@@ -181,16 +178,19 @@ def build_interp_graph(hospital_id: str, db: Session):
 {indicators_text}
 
 对每个指标调用 search_knowledge 查询相关知识，然后输出 JSON 数组，每个元素：
-{{"indicator_id": int, "explanation": "解读文字", "suggestion": "建议文字"}}"""
+{{"indicator_id": int, "explanation": "解读文字", "suggestion": "建议文字", "knowledge_ref_ids": [int, ...]}}
+其中 knowledge_ref_ids 是你在解读该指标时实际引用的 search_knowledge 结果中的 entry_id 列表。"""
 
         messages = [
             SystemMessage(content=INTERP_SYSTEM_PROMPT),
             HumanMessage(content=user_content),
         ]
 
-        max_iter = 8
+        max_iter = settings.AGENT_MAX_ITERATIONS
         knowledge_refs = {}
-        for _ in range(max_iter):
+        iterations_used = 0
+        for i in range(max_iter):
+            iterations_used = i + 1
             resp = model.invoke(messages)
             messages.append(resp)
             if not (hasattr(resp, "tool_calls") and resp.tool_calls):
@@ -215,7 +215,15 @@ def build_interp_graph(hospital_id: str, db: Session):
                     "tool_call_id": call["id"],
                 })
 
+        if iterations_used >= max_iter and hasattr(resp, "tool_calls") and resp.tool_calls:
+            import logging
+            logging.getLogger(__name__).warning(
+                "interp_graph agent_batch exhausted %d iterations without final answer for report_id=%s",
+                max_iter, state["report_id"]
+            )
+
         explanations = {}
+        mapped_refs = {}
         raw = resp.content if hasattr(resp, "content") else str(resp)
         try:
             match = re.search(r'\[.*\]', raw, re.DOTALL)
@@ -228,6 +236,11 @@ def build_interp_graph(hospital_id: str, db: Session):
                             "explanation": item.get("explanation", ""),
                             "suggestion": item.get("suggestion", ""),
                         }
+                        ref_ids = set(item.get("knowledge_ref_ids", []))
+                        mapped_refs[iid] = [
+                            r for r in (knowledge_refs.get(iid, []) or [])
+                            if r.get("entry_id") in ref_ids
+                        ] or knowledge_refs.get(iid, [])
         except (json.JSONDecodeError, AttributeError):
             pass
 
@@ -235,10 +248,17 @@ def build_interp_graph(hospital_id: str, db: Session):
             iid = ind["indicator_id"]
             if iid not in explanations:
                 explanations[iid] = {"explanation": "", "suggestion": ""}
+            if iid not in mapped_refs:
+                mapped_refs[iid] = knowledge_refs.get(iid, [])
 
-        return {"agent_explanations": explanations, "knowledge_refs": knowledge_refs}
+        return {"agent_explanations": explanations, "knowledge_refs": mapped_refs}
 
     def persist(state: InterpState) -> dict:
+        from app.modules.interpretation.models import (
+            ReportInterpretation, IndicatorJudgment,
+        )
+        from app.core.rabbitmq import rabbitmq, TaskMessage
+
         report_id = state["report_id"]
 
         db.query(ReportInterpretation).filter(
@@ -302,6 +322,9 @@ def build_interp_graph(hospital_id: str, db: Session):
 
 def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> dict:
     """同步运行 interpretation 图，返回最终状态"""
+    from app.modules.report.models import ReportInfo
+    from app.modules.interpretation.models import ReportInterpretation
+
     report = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
     if not report:
         return {}
@@ -330,6 +353,7 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
         })
         return final_state
     except Exception as e:
+        from app.modules.interpretation.models import ReportInterpretation
         interp = db.query(ReportInterpretation).filter(
             ReportInterpretation.report_id == report_id,
             ReportInterpretation.status == "processing",

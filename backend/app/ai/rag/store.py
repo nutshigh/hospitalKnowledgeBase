@@ -1,6 +1,6 @@
 from typing import Optional
 
-from app.ai.config import ensure_milvus_started, get_embedding_model, VECTOR_DIM
+from app.ai.config import ensure_milvus_started, get_milvus_uri, get_embedding_model, VECTOR_DIM
 from app.config import settings
 
 
@@ -11,6 +11,7 @@ class RAGStore:
         self._stores: dict[str, "MilvusVectorStore"] = {}
         self._indices: dict[str, "VectorStoreIndex"] = {}
         self._nodes_cache: dict[str, list] = {}
+        self._docstores: dict[str, "SimpleDocumentStore"] = {}
 
     def get(self, hospital_id: str):
         """获取或创建某医院的 MilvusVectorStore"""
@@ -19,7 +20,7 @@ class RAGStore:
             from llama_index.vector_stores.milvus import MilvusVectorStore
 
             self._stores[hospital_id] = MilvusVectorStore(
-                uri=f"http://{settings.MILVUS_HOST}:{settings.MILVUS_PORT}",
+                uri=get_milvus_uri(),
                 collection_name=f"hospital_{hospital_id}_knowledge",
                 dim=VECTOR_DIM,
                 overwrite=False,
@@ -42,11 +43,21 @@ class RAGStore:
             )
         return self._indices[hospital_id]
 
+    def get_docstore(self, hospital_id: str):
+        """获取或创建某医院的 docstore（与 IngestionPipeline 共享，供 BM25 读节点）"""
+        if hospital_id not in self._docstores:
+            from llama_index.core.storage.docstore import SimpleDocumentStore
+            self._docstores[hospital_id] = SimpleDocumentStore()
+        return self._docstores[hospital_id]
+
     def get_nodes(self, hospital_id: str) -> list:
         """拉取所有节点供 BM25Retriever 构建"""
         if hospital_id not in self._nodes_cache:
-            index = self.get_index(hospital_id)
-            self._nodes_cache[hospital_id] = list(index.docstore.docs.values())
+            docstore = self._docstores.get(hospital_id)
+            if docstore:
+                self._nodes_cache[hospital_id] = list(docstore.docs.values())
+            else:
+                self._nodes_cache[hospital_id] = []
         return self._nodes_cache[hospital_id]
 
     def refresh(self, hospital_id: str):
@@ -63,6 +74,7 @@ class RAGStore:
         if utility.has_collection(collection_name):
             utility.drop_collection(collection_name)
         self._stores.pop(hospital_id, None)
+        self._docstores.pop(hospital_id, None)
         self.refresh(hospital_id)
 
 

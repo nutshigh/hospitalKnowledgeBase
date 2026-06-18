@@ -1,4 +1,4 @@
-from typing import Iterator, List, Optional, AsyncIterator
+from typing import List, Optional, AsyncIterator
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -6,8 +6,6 @@ from app.modules.chat.models import ChatSession, ChatMessage
 from app.ai.agents import run_chat_agent
 
 MAX_HISTORY_ROUNDS = 20
-
-_session_locks: set[int] = set()
 
 
 # ---- Session CRUD ----
@@ -120,17 +118,10 @@ async def process_chat_stream(
     user_message: str,
     user_id: int,
 ) -> AsyncIterator[dict]:
-    """处理一条用户消息，异步 yield SSE 事件 dict"""
-
-    if session.id in _session_locks:
-        yield {"event": "error", "data": {"message": "正在处理上一条消息，请稍候"}}
-        return
-    _session_locks.add(session.id)
-
-    try:
-        async for event in run_chat_agent(
-            session.hospital_id, db, session, user_message, user_id,
-        ):
-            yield event
-    finally:
-        _session_locks.discard(session.id)
+    """处理一条用户消息，异步 yield SSE 事件 dict。
+    并发控制由 run_chat_agent 内部的 _session_locks 管理。
+    """
+    async for event in run_chat_agent(
+        session.hospital_id, db, session, user_message, user_id,
+    ):
+        yield event

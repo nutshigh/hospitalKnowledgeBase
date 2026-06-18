@@ -72,12 +72,8 @@ class SearchRequest(BaseModel):
     category_ids: Optional[List[int]] = None
 
 
-class SearchResult(BaseModel):
-    entry_id: int
-    title: str
-    content: str
-    category_id: Optional[int] = None
-    score: float
+# SearchResult 已迁移到 app.ai.rag.types，此处重新导出以保持向后兼容
+from app.ai.rag.types import SearchResult  # noqa: E402
 
 
 class SearchResponse(BaseModel):

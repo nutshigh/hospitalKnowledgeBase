@@ -95,6 +95,8 @@ def build_chat_graph(hospital_id: str, db: Session):
     return g.compile()
 
 
+MAX_HISTORY_ROUNDS = 20
+
 _session_locks: set[int] = set()
 
 
@@ -123,7 +125,7 @@ async def run_chat_agent(
         history_msgs = [
             (HumanMessage(content=m.content) if m.role == "user"
              else AIMessage(content=m.content))
-            for m in history[-settings.AGENT_MAX_ITERATIONS * 2:-1]
+            for m in history[-MAX_HISTORY_ROUNDS * 2:-1]
         ]
 
         graph = build_chat_graph(hospital_id, db)
@@ -138,6 +140,7 @@ async def run_chat_agent(
         }
 
         final_response = ""
+        final_state = None
         async for event in graph.astream_events(initial_state, version="v2"):
             kind = event.get("event")
             if kind == "on_tool_start":
@@ -152,9 +155,10 @@ async def run_chat_agent(
                     if not hasattr(chunk, "tool_call_chunks") or not chunk.tool_call_chunks:
                         final_response += chunk.content
                         yield {"event": "token", "data": {"content": chunk.content}}
+            elif kind == "on_chain_end" and event.get("name") == "LangGraph":
+                final_state = event.get("data", {}).get("output")
 
-        final_state = await graph.ainvoke(initial_state)
-        refs = final_state.get("knowledge_refs", [])
+        refs = (final_state or {}).get("knowledge_refs", [])
 
         msg = chat_service.save_message(
             db, session_id, "assistant", final_response, knowledge_refs=refs or None

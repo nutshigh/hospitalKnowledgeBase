@@ -4,7 +4,7 @@ from llama_index.core import Document
 
 from app.ai.rag.indexer import RAGIndexer
 from app.ai.rag.retriever import RAGRetriever
-from app.modules.knowledge.schemas import SearchResult
+from app.ai.rag.types import SearchResult
 
 
 def index_documents(

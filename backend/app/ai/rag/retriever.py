@@ -1,4 +1,3 @@
-import os
 from typing import List, Optional
 
 import httpx
@@ -10,8 +9,18 @@ from llama_index.retrievers.bm25 import BM25Retriever
 
 from app.ai.config import get_embedding_model
 from app.ai.rag.store import rag_store
+from app.ai.rag.types import SearchResult
 from app.config import settings
-from app.modules.knowledge.schemas import SearchResult
+
+# 共享 httpx.Client，避免每次 RAGRetriever 构造时泄漏连接池
+_shared_http_client: httpx.Client | None = None
+
+
+def _get_http_client() -> httpx.Client:
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        _shared_http_client = httpx.Client(timeout=30.0)
+    return _shared_http_client
 
 
 class HttpReranker(BaseNodePostprocessor):
@@ -22,13 +31,15 @@ class HttpReranker(BaseNodePostprocessor):
     top_n: int = Field(default=5, description="Number of nodes to return.")
     base_url: str = Field(default="", description="Reranker HTTP service base URL.")
     model: str = Field(default="", description="Reranker model name.")
-    _client: httpx.Client = PrivateAttr()
 
     def __init__(self, top_n: int = 5, base_url: str = "", model: str = ""):
         base_url = base_url or settings.RERANKER_BASE_URL
         model = model or settings.RERANKER_MODEL
         super().__init__(top_n=top_n, base_url=base_url, model=model)
-        self._client = httpx.Client(timeout=30.0)
+
+    @property
+    def _client(self) -> httpx.Client:
+        return _get_http_client()
 
     def _postprocess_nodes(
         self,

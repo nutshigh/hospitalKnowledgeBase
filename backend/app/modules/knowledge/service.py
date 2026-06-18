@@ -79,9 +79,14 @@ def create_entry(db: Session, hospital_id: str, title: str, content: str,
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    ai_rag.index_documents(hospital_id, [Document(text=content, metadata={
-        "entry_id": entry.id, "title": title,
-    })], category_id, "manual")
+    try:
+        ai_rag.index_documents(hospital_id, [Document(text=content, metadata={
+            "entry_id": entry.id, "title": title,
+        })], category_id, "manual")
+    except Exception:
+        db.delete(entry)
+        db.commit()
+        raise
     return entry
 
 
@@ -91,6 +96,7 @@ def update_entry(db: Session, hospital_id: str, entry_id: int,
     entry = get_entry(db, entry_id)
     if not entry:
         return None
+    old_content = entry.content
     if category_id is not None:
         entry.category_id = category_id
     if title is not None:
@@ -98,10 +104,15 @@ def update_entry(db: Session, hospital_id: str, entry_id: int,
     if content is not None:
         entry.content = content
         db.commit()
-        ai_rag.delete_vectors(hospital_id, entry.id)
-        ai_rag.index_documents(hospital_id, [Document(text=content, metadata={
-            "entry_id": entry.id, "title": entry.title,
-        })], entry.category_id, entry.source_file or "manual")
+        try:
+            ai_rag.delete_vectors(hospital_id, entry.id)
+            ai_rag.index_documents(hospital_id, [Document(text=content, metadata={
+                "entry_id": entry.id, "title": entry.title,
+            })], entry.category_id, entry.source_file or "manual")
+        except Exception:
+            entry.content = old_content
+            db.commit()
+            raise
     db.commit()
     db.refresh(entry)
     return entry
@@ -111,9 +122,12 @@ def delete_entry(db: Session, hospital_id: str, entry_id: int) -> bool:
     entry = get_entry(db, entry_id)
     if not entry:
         return False
+    try:
+        ai_rag.delete_vectors(hospital_id, entry_id)
+    except Exception:
+        pass
     entry.status = 0
     db.commit()
-    ai_rag.delete_vectors(hospital_id, entry_id)
     return True
 
 
@@ -124,6 +138,7 @@ def import_from_file(db: Session, hospital_id: str, file_path: str,
     if not docs:
         return 0
 
+    created_entries = []
     for doc in docs:
         entry = KnowledgeEntry(
             category_id=category_id, title=filename,
@@ -133,8 +148,15 @@ def import_from_file(db: Session, hospital_id: str, file_path: str,
         db.commit()
         db.refresh(entry)
         doc.metadata["entry_id"] = entry.id
+        created_entries.append(entry)
 
-    ai_rag.index_documents(hospital_id, docs, category_id, filename)
+    try:
+        ai_rag.index_documents(hospital_id, docs, category_id, filename)
+    except Exception:
+        for e in created_entries:
+            e.status = 0
+        db.commit()
+        raise
     return len(docs)
 
 
