@@ -1,11 +1,10 @@
 from app.core.database import get_hospital_db
 from app.core.rabbitmq import rabbitmq
-from app.modules.interpretation.service import process_interpretation
+from app.ai.agents import run_interpretation_agent
 
 
 def handle_interpretation_task(message: dict):
     payload = message.get("payload", {})
-    # Skip event notifications — only process real interpretation requests
     if payload.get("event"):
         return
     report_id = payload.get("report_id")
@@ -16,7 +15,9 @@ def handle_interpretation_task(message: dict):
 
     db = next(get_hospital_db(hospital_id))
     try:
-        process_interpretation(db, report_id, hospital_id)
+        run_interpretation_agent(hospital_id, db, report_id)
+    except Exception as e:
+        print(f"Interpretation failed for report {report_id}: {e}")
     finally:
         db.close()
 

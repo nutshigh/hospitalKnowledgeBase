@@ -1,7 +1,7 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
-from typing import Dict, Generator
+from typing import Dict, Generator, List
 
 from app.config import settings
 
@@ -51,5 +51,17 @@ def get_hospital_db(hospital_id: str) -> Generator[Session, None, None]:
     db = get_session(db_name)
     try:
         yield db
+    finally:
+        db.close()
+
+
+def get_all_hospital_ids() -> List[str]:
+    """从 template 库 hospital_tenant 表获取所有活跃医院 ID"""
+    db = get_session(settings.MYSQL_TEMPLATE_DB)
+    try:
+        rows = db.execute(
+            text("SELECT hospital_id FROM hospital_tenant WHERE is_active = 1")
+        ).fetchall()
+        return [row[0] for row in rows]
     finally:
         db.close()

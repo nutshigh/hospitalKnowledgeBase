@@ -214,6 +214,20 @@ if [[ ! -d node_modules ]]; then
 fi
 popd >/dev/null
 
+# ── 5.5 Start Reranker service (port 8003) ─────────────────────────
+log "启动 Reranker 服务 (port 8003)..."
+RERANKER_DIR="$BACKEND_DIR/reranker_service"
+if [[ -d "$RERANKER_DIR" ]]; then
+    pushd "$RERANKER_DIR" >/dev/null
+    export HF_ENDPOINT=https://hf-mirror.com
+    PATH="$HOME/.local/bin:$PATH" nohup uv run uvicorn main:app --host 127.0.0.1 --port 8003 > /tmp/reranker.log 2>&1 &
+    RERANKER_PID=$!
+    popd >/dev/null
+    log "Reranker 服务已启动 (PID: $RERANKER_PID, log: /tmp/reranker.log)"
+else
+    warn "reranker_service 目录不存在，跳过"
+fi
+
 # ── 6. 启动后端 ───────────────────────────────────────────────────
 log "启动后端 (port 8000)..."
 pushd "$BACKEND_DIR" >/dev/null
@@ -251,6 +265,7 @@ echo "╔═══════════════════════�
 echo "║          所有服务已启动                           ║"
 echo "╠══════════════════════════════════════════════════╣"
 echo "║  后端 API:   http://localhost:8000               ║"
+echo "║  重排序:     http://localhost:8003               ║"
 echo "║  用户端:     http://localhost:3001               ║"
 echo "║  医生端:     http://localhost:3002               ║"
 echo "║  管理后台:   http://localhost:3003               ║"

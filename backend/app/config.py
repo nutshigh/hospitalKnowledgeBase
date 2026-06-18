@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Milvus (Milvus Lite embedded server)
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
+    MILVUS_DATA_DIR: str = "./milvus_data"
 
     # RabbitMQ
     RABBITMQ_HOST: str = "localhost"
@@ -56,6 +57,22 @@ class Settings(BaseSettings):
 
     # LLM 通用
     LLM_TIMEOUT_SECONDS: int = 120
+
+    # Reranker Provider
+    RERANKER_PROVIDER: str = "local"           # local | remote
+    RERANKER_BASE_URL: str = "http://localhost:8003"
+    RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    RERANKER_API_KEY: str = ""                 # remote 时用
+
+    # RAG
+    RAG_CHUNK_SIZE: int = 512
+    RAG_CHUNK_OVERLAP: int = 72
+    RAG_VECTOR_TOP_K: int = 20                 # 向量召回数，rerank 前的候选
+    RAG_FINAL_TOP_K: int = 5                   # rerank 后返回数
+    RAG_HYBRID_ALPHA: float = 0.5              # vector/BM25 融合权重
+
+    # Agent
+    AGENT_MAX_ITERATIONS: int = 8              # 单轮最大工具调用轮数
 
     # JWT
     JWT_ALGORITHM: str = "HS256"
