@@ -72,6 +72,15 @@ goto frontend_start
 :backend_ok
 echo [OK] Backend ready: http://localhost:8000
 
+REM -- 6.5 Start Reranker service --
+echo [INFO] Starting Reranker service (port 8003)...
+if exist "backend\reranker_service" (
+    cd backend\reranker_service
+    start "Reranker" /MIN uv run uvicorn main:app --host 127.0.0.1 --port 8003
+    cd ..\..
+)
+echo [OK] Reranker service started
+
 :frontend_start
 REM -- 7. Start frontends --
 echo [INFO] Starting frontends...
@@ -90,6 +99,7 @@ echo +--------------------------------------------------+
 echo +         All services started (Docker-free)        +
 echo +--------------------------------------------------+
 echo +  Backend:      http://localhost:8000              +
+echo +  Reranker:     http://localhost:8003              +
 echo +  User Portal:  http://localhost:3001              +
 echo +  Doctor Portal:http://localhost:3002              +
 echo +  Admin Portal: http://localhost:3003              +
@@ -99,6 +109,7 @@ echo Press Ctrl+C or close this window to stop.
 pause >nul
 
 REM -- 9. Cleanup --
+taskkill /FI "WINDOWTITLE eq Reranker"         /T /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq HospitalBackend" /T /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq HospitalUser"    /T /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq HospitalDoctor"  /T /F >nul 2>&1

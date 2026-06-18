@@ -25,6 +25,7 @@ cleanup() {
     kill $EMBED_PID 2>/dev/null || true
     kill $PARSING_WORKER_PID 2>/dev/null || true
     kill $INTERP_WORKER_PID 2>/dev/null || true
+    kill $RERANKER_PID 2>/dev/null || true
     kill $FPID1 $FPID2 $FPID3 2>/dev/null || true
     log "Done."
     exit 0
@@ -189,6 +190,20 @@ else
     warn "vLLM not installed, skipping Embedding server"
 fi
 
+# ── 7.6 Start Reranker service (port 8003) ──────────────────────
+log "Starting Reranker service (port 8003)..."
+RERANKER_DIR="$BACKEND_DIR/reranker_service"
+if [[ -d "$RERANKER_DIR" ]]; then
+    pushd "$RERANKER_DIR" >/dev/null
+    export HF_ENDPOINT=https://hf-mirror.com
+    PATH="$HOME/.local/bin:$PATH" nohup uv run uvicorn main:app --host 127.0.0.1 --port 8003 > /tmp/reranker.log 2>&1 &
+    RERANKER_PID=$!
+    popd >/dev/null
+    log "Reranker service starting (PID: $RERANKER_PID, log: /tmp/reranker.log)"
+else
+    warn "reranker_service dir not found, skipping"
+fi
+
 # ── 8. Start backend ────────────────────────────────────────────────
 log "Starting backend (port 8000)..."
 pushd "$BACKEND_DIR" >/dev/null
@@ -252,6 +267,7 @@ echo "=============================================="
 echo "  Backend API:  http://localhost:8000"
 echo "  vLLM OCR:    http://localhost:8001  (log: /tmp/vllm-ocr.log)"
 echo "  vLLM Embed:  http://localhost:8002  (log: /tmp/vllm-embed.log)"
+echo "  Reranker:    http://localhost:8003  (log: /tmp/reranker.log)"
 echo "  Workers:     parsing + interpretation (logs: /tmp/worker-*.log)"
 if [[ "${1:-}" != "--no-frontend" ]]; then
     echo "  User Portal:  http://localhost:3001"
