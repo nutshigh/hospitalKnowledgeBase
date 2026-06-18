@@ -92,7 +92,7 @@ def get_messages(
 
 
 @router.post("/sessions/{session_id}/messages")
-def send_message(
+async def send_message(
     session_id: int,
     data: SendMessageRequest,
     db: Session = Depends(_get_db),
@@ -104,4 +104,4 @@ def send_message(
     token_gen = service.process_chat_stream(
         db, session, data.content, current_user.user_id
     )
-    return sse_stream(token_gen)
+    return await sse_stream(token_gen)
