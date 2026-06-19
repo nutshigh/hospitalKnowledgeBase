@@ -2,6 +2,7 @@ import json
 from typing import AsyncIterator, Optional
 
 from langchain.agents import AgentState, create_agent
+from sqlalchemy.orm import Session
 from langchain.agents.middleware import AgentMiddleware
 from langchain.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
@@ -113,7 +114,7 @@ _session_locks: set[int] = set()
 
 async def run_chat_agent(
     hospital_id: str,
-    db,
+    db: Session,
     session,
     user_message: str,
     user_id: int,

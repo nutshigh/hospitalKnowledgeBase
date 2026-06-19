@@ -98,7 +98,7 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
                     update = dict(result.update or {})
                     update["knowledge_results"] = refs_dict
                     return Command(update=update)
-                return Command(update={"knowledge_results": refs_dict})
+                return Command(update={"knowledge_results": refs_dict, "messages": [result]})
         return result
 
 

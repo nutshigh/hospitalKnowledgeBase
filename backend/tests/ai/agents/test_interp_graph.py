@@ -100,6 +100,3 @@ def test_interp_knowledge_middleware_extracts_refs_dict():
     assert result.update["knowledge_results"] == {101: {"entry_id": 101, "title": "知识A"}}
 
 
-def _build_test_graph(mock_build):
-    """测试辅助：构造最小图调 agent_batch"""
-    pass
