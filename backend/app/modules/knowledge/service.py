@@ -2,10 +2,10 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.core.database import get_hospital_db
-from app.core.milvus import milvus_client
-from app.core.embedding import embedding_client
 from app.modules.knowledge.models import KnowledgeCategory, KnowledgeEntry
 from app.modules.knowledge.schemas import SearchResult
+from app.ai import rag as ai_rag
+from llama_index.core import Document
 
 
 # ---- Category CRUD ----
@@ -79,8 +79,14 @@ def create_entry(db: Session, hospital_id: str, title: str, content: str,
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    _vectorize_entry(hospital_id, entry)
-    db.commit()
+    try:
+        ai_rag.index_documents(hospital_id, [Document(text=content, metadata={
+            "entry_id": entry.id, "title": title,
+        })], category_id, "manual")
+    except Exception:
+        db.delete(entry)
+        db.commit()
+        raise
     return entry
 
 
@@ -90,17 +96,23 @@ def update_entry(db: Session, hospital_id: str, entry_id: int,
     entry = get_entry(db, entry_id)
     if not entry:
         return None
+    old_content = entry.content
     if category_id is not None:
         entry.category_id = category_id
     if title is not None:
         entry.title = title
     if content is not None:
-        old_vector_id = entry.vector_id
         entry.content = content
         db.commit()
-        if old_vector_id:
-            milvus_client.delete_by_ids(hospital_id, [entry.id])
-        _vectorize_entry(hospital_id, entry)
+        try:
+            ai_rag.delete_vectors(hospital_id, entry.id)
+            ai_rag.index_documents(hospital_id, [Document(text=content, metadata={
+                "entry_id": entry.id, "title": entry.title,
+            })], entry.category_id, entry.source_file or "manual")
+        except Exception:
+            entry.content = old_content
+            db.commit()
+            raise
     db.commit()
     db.refresh(entry)
     return entry
@@ -110,95 +122,65 @@ def delete_entry(db: Session, hospital_id: str, entry_id: int) -> bool:
     entry = get_entry(db, entry_id)
     if not entry:
         return False
+    try:
+        ai_rag.delete_vectors(hospital_id, entry_id)
+    except Exception:
+        pass
     entry.status = 0
-    if entry.vector_id:
-        milvus_client.delete_by_ids(hospital_id, [entry.id])
     db.commit()
     return True
 
 
-
-
-def _vectorize_entry(hospital_id: str, entry: KnowledgeEntry):
-    vector = embedding_client.embed_single(entry.content)
-    meta = {
-        "entry_id": entry.id,
-        "category_id": entry.category_id or 0,
-        "title": entry.title,
-        "source_file": entry.source_file or "",
-        "created_at": int(entry.created_at.timestamp()),
-    }
-    milvus_client.insert(hospital_id, [vector], [meta])
-    milvus_client.flush(hospital_id)
-    entry.vector_id = str(entry.id)
-
-
-# ---- Import from file ----
-
 def import_from_file(db: Session, hospital_id: str, file_path: str,
                      filename: str, category_id: Optional[int] = None) -> int:
-    from app.core.doc_parser import parse_file
-    chunks = parse_file(file_path, filename)
-    if not chunks:
+    from app.ai.rag.readers import load_documents
+    docs = load_documents(file_path, filename)
+    if not docs:
         return 0
 
-    first_entry = KnowledgeEntry(
-        category_id=category_id, title=filename, content=chunks[0].text,
-        source_type="import", source_file=filename, chunk_index=0,
-    )
-    db.add(first_entry)
-    db.commit()
-    db.refresh(first_entry)
-    _vectorize_entry(hospital_id, first_entry)
-
-    for i, chunk in enumerate(chunks[1:], start=1):
-        sub = KnowledgeEntry(
-            category_id=category_id, title=f"{filename} (Part {i + 1})",
-            content=chunk.text, source_type="import", source_file=filename,
-            chunk_index=i, parent_entry_id=first_entry.id,
+    created_entries = []
+    for doc in docs:
+        entry = KnowledgeEntry(
+            category_id=category_id, title=filename,
+            content=doc.text, source_type="import", source_file=filename,
         )
-        db.add(sub)
+        db.add(entry)
         db.commit()
-        db.refresh(sub)
-        _vectorize_entry(hospital_id, sub)
+        db.refresh(entry)
+        doc.metadata["entry_id"] = entry.id
+        created_entries.append(entry)
 
-    return len(chunks)
+    try:
+        ai_rag.index_documents(hospital_id, docs, category_id, filename)
+    except Exception:
+        for e in created_entries:
+            e.status = 0
+        db.commit()
+        raise
+    return len(docs)
 
 
 # ---- Search ----
 
 def search(hospital_id: str, query: str, top_k: int = 5,
            category_ids: Optional[List[int]] = None) -> List[SearchResult]:
-    query_vector = embedding_client.embed_single(query)
-    filter_expr = None
-    if category_ids:
-        ids_str = ", ".join(str(c) for c in category_ids)
-        filter_expr = f"category_id in [{ids_str}]"
-
-    results = milvus_client.search(hospital_id, query_vector, top_k=top_k, filter_expr=filter_expr)
-
-    entry_ids = [r["entry_id"] for r in results]
-    content_map = {}
-    if entry_ids:
-        db = next(get_hospital_db(hospital_id))
-        try:
-            entries = db.query(KnowledgeEntry).filter(KnowledgeEntry.id.in_(entry_ids)).all()
-            content_map = {e.id: e.content for e in entries}
-        finally:
-            db.close()
-
-    out = []
-    for r in results:
-        out.append(SearchResult(
-            entry_id=r["entry_id"],
-            title=r["title"],
-            content=content_map.get(r["entry_id"], ""),
-            category_id=r.get("category_id"),
-            score=r["score"],
-        ))
-    return out
+    return ai_rag.search(hospital_id, query, category_ids=category_ids, top_k=top_k)
 
 
 def reindex_category(hospital_id: str, category_id: int):
-    milvus_client.delete_by_criteria(hospital_id, f"category_id == {category_id}")
-    milvus_client.flush(hospital_id)
+    """全量重建某分类的向量（实际重建整个医院，因 Milvus collection 按医院隔离）"""
+    db = next(get_hospital_db(hospital_id))
+    try:
+        entries = db.query(KnowledgeEntry).filter(
+            KnowledgeEntry.status == 1,
+            KnowledgeEntry.category_id == category_id,
+        ).all()
+        entry_dicts = [
+            {"id": e.id, "title": e.title, "content": e.content,
+             "category_id": e.category_id, "source_file": e.source_file}
+            for e in entries
+        ]
+    finally:
+        db.close()
+    if entry_dicts:
+        ai_rag.reindex_hospital(hospital_id, entry_dicts)

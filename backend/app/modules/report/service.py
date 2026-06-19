@@ -160,7 +160,7 @@ def _extract_pdf_text(file_path: str) -> str:
 
 def _parse_text_with_llm(text: str) -> dict:
     """Send extracted PDF text to LLM for indicator parsing."""
-    from app.core.llm_client import llm_client
+    from app.ai.llm import get_chat_model
     prompt = f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
 
 {{
@@ -184,7 +184,8 @@ def _parse_text_with_llm(text: str) -> dict:
 体检报告文本：
 {text[:12000]}
 """
-    resp = llm_client.chat([{"role": "user", "content": prompt}], temperature=0.1, max_tokens=4096)
+    model = get_chat_model()
+    resp = model.invoke([("user", prompt)], max_tokens=4096).content
     import json, re
     match = re.search(r'\{[\s\S]*\}', resp)
     if not match:
