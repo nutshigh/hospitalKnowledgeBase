@@ -7,7 +7,7 @@ from langgraph.graph.message import add_messages
 from sqlalchemy.orm import Session
 
 from app.ai.llm import get_chat_model
-from app.ai.agents.tools import make_tools
+from app.ai.agents.tools import CHAT_TOOLS
 from app.config import settings
 
 CHAT_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，为体检者提供易懂的健康咨询。
@@ -47,7 +47,7 @@ class ChatState(TypedDict):
 
 def build_chat_graph(hospital_id: str, db: Session):
     """构造 chat Agent 的 LangGraph StateGraph"""
-    tools = make_tools(hospital_id, db)
+    tools = CHAT_TOOLS
     model = get_chat_model(streaming=True).bind_tools(tools)
     tools_by_name = {t.name: t for t in tools}
 

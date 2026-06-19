@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.ai.llm import get_chat_model
-from app.ai.agents.tools import make_tools
+from app.ai.agents.tools import INTERP_TOOLS
 from app.config import settings
 
 INTERP_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，
@@ -159,7 +159,7 @@ def build_interp_graph(hospital_id: str, db: Session):
         if not state["abnormal_indicators"]:
             return {"agent_explanations": {}, "knowledge_refs": {}}
 
-        tools = make_tools(state["hospital_id"], db)
+        tools = INTERP_TOOLS
         model = get_chat_model(streaming=False).bind_tools(tools)
         tools_by_name = {t.name: t for t in tools}
 

@@ -1,32 +1,84 @@
 from unittest.mock import patch, MagicMock
-from sqlalchemy.orm import Session
+
+import pytest
 
 
-def test_make_tools_returns_six_tools():
-    """make_tools 返回 6 个工具"""
-    with patch("app.ai.agents.tools.ai_rag"):
-        from app.ai.agents.tools import make_tools
-        db = MagicMock(spec=Session)
-        tools = make_tools("H001", db)
-        assert len(tools) == 6
-        names = {t.name for t in tools}
-        assert names == {
-            "search_knowledge", "get_report_indicators", "get_report_summary",
-            "get_user_history_reports", "get_indicator_history", "get_triage_rules",
-        }
+def _make_runtime(ctx):
+    """Helper: create a real ToolRuntime with minimal required fields."""
+    from langchain.tools import ToolRuntime
+    return ToolRuntime(
+        state={},
+        context=ctx,
+        config={"configurable": {}},
+        stream_writer=MagicMock(),
+        tool_call_id="test-call-id",
+        store=None,
+        tools=[],
+    )
 
 
-def test_search_knowledge_tool_calls_rag():
-    """search_knowledge 工具调 ai.rag.search"""
+def test_chat_tools_contains_six_names():
+    """CHAT_TOOLS 包含 6 个工具，名称正确"""
+    from app.ai.agents.tools import CHAT_TOOLS
+    names = {t.name for t in CHAT_TOOLS}
+    assert names == {
+        "search_knowledge", "get_report_indicators", "get_report_summary",
+        "get_user_history_reports", "get_indicator_history", "get_triage_rules",
+    }
+
+
+def test_interp_tools_contains_two_names():
+    """INTERP_TOOLS 只含 search_knowledge + get_triage_rules"""
+    from app.ai.agents.tools import INTERP_TOOLS
+    names = {t.name for t in INTERP_TOOLS}
+    assert names == {"search_knowledge", "get_triage_rules"}
+
+
+def test_agent_context_dataclass():
+    """AgentContext 包含 hospital_id 和 db_session"""
+    from app.ai.agents.tools import AgentContext
+    ctx = AgentContext(hospital_id="H001", db_session=MagicMock())
+    assert ctx.hospital_id == "H001"
+
+
+def test_search_knowledge_uses_context_hospital_id():
+    """search_knowledge 使用 runtime.context 的 hospital_id"""
     with patch("app.ai.agents.tools.ai_rag") as mock_rag:
         from app.modules.knowledge.schemas import SearchResult
         mock_rag.search.return_value = [SearchResult(
             entry_id=1, title="t", content="c", category_id=2, score=0.9
         )]
-        from app.ai.agents.tools import make_tools
-        tools = make_tools("H001", MagicMock(spec=Session))
-        search_tool = next(t for t in tools if t.name == "search_knowledge")
-        result = search_tool.invoke({"query": "血糖"})
+        from app.ai.agents.tools import search_knowledge, AgentContext
+
+        ctx = AgentContext(hospital_id="H002", db_session=MagicMock())
+        runtime = _make_runtime(ctx)
+
+        result = search_knowledge.invoke(
+            {"query": "血糖", "runtime": runtime}
+        )
         assert isinstance(result, list)
         assert result[0]["entry_id"] == 1
-        mock_rag.search.assert_called_once_with("H001", "血糖", category_ids=None, top_k=None)
+        mock_rag.search.assert_called_once_with("H002", "血糖", category_ids=None, top_k=None)
+
+
+def test_get_report_indicators_uses_context_db():
+    """get_report_indicators 使用 runtime.context.db_session 执行查询"""
+    from app.ai.agents.tools import get_report_indicators, AgentContext
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.fetchall.return_value = [
+        (1, "ALT", "ALT", "85", "U/L", "0", "40")
+    ]
+    ctx = AgentContext(hospital_id="H001", db_session=mock_db)
+    runtime = _make_runtime(ctx)
+
+    result = get_report_indicators.invoke({"report_id": 1, "runtime": runtime})
+    assert len(result) == 1
+    assert result[0]["item_name"] == "ALT"
+    mock_db.execute.assert_called_once()
+
+
+def test_make_tools_removed():
+    """make_tools 函数已删除"""
+    import app.ai.agents.tools as tools_mod
+    assert not hasattr(tools_mod, "make_tools")
