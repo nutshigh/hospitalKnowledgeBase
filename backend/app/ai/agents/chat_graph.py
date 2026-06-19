@@ -71,7 +71,7 @@ class KnowledgeRefsMiddleware(AgentMiddleware):
                     update = dict(result.update or {})
                     update["knowledge_refs"] = refs
                     return Command(update=update)
-                return Command(update={"knowledge_refs": refs})
+                return Command(update={"knowledge_refs": refs, "messages": [result]})
         return result
 
 
