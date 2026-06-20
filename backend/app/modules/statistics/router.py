@@ -19,7 +19,12 @@ def _get_hospital_id() -> str:
 
 
 def _get_db(hospital_id: str = Depends(_get_hospital_id)):
-    return next(get_hospital_db(hospital_id))
+    gen = get_hospital_db(hospital_id)
+    db = next(gen)
+    try:
+        yield db
+    finally:
+        gen.close()
 
 
 @router.get("/dashboard")

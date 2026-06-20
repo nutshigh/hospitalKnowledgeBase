@@ -26,6 +26,9 @@ cleanup() {
     kill $PARSING_WORKER_PID 2>/dev/null || true
     kill $INTERP_WORKER_PID 2>/dev/null || true
     kill $RERANKER_PID 2>/dev/null || true
+    kill $MILVUS_PID 2>/dev/null || true
+    kill $ETCD_PID 2>/dev/null || true
+    kill $MINIO_PID 2>/dev/null || true
     kill $FPID1 $FPID2 $FPID3 2>/dev/null || true
     log "Done."
     exit 0
@@ -53,6 +56,124 @@ if mysql -uroot -proot -e "SELECT 1;" 2>/dev/null | grep -q 1; then
 else
     err "MySQL failed to start"
     exit 1
+fi
+
+# ── 2.5. Start Milvus (standalone, non-Docker) ─────────────────────
+log "Starting Milvus (standalone)..."
+MILVUS_DIR="$ROOT_DIR/milvus"
+MILVUS_BIN="$MILVUS_DIR/milvus"
+MILVUS_VERSION="v2.6.3"
+MILVUS_DATA="$MILVUS_DIR/data"
+ETCD_DATA="$MILVUS_DIR/etcd_data"
+MINIO_DATA="$MILVUS_DIR/minio_data"
+
+mkdir -p "$MILVUS_DATA" "$ETCD_DATA" "$MINIO_DATA"
+
+# Check if Milvus is already running on port 19530
+if curl -s http://localhost:9091/healthz 2>/dev/null | grep -q "OK"; then
+    log "Milvus already running (port 19530)"
+else
+    # Download milvus binary if not present
+    if [[ ! -x "$MILVUS_BIN" ]]; then
+        log "Downloading Milvus $MILVUS_VERSION binary..."
+        ARCH=$(uname -m)
+        case "$ARCH" in
+            x86_64)  MILVUS_ARCH="amd64" ;;
+            aarch64) MILVUS_ARCH="arm64" ;;
+            *) err "Unsupported architecture: $ARCH"; exit 1 ;;
+        esac
+        DOWNLOAD_URL="https://github.com/milvus-io/milvus/releases/download/${MILVUS_VERSION}/milvus-${MILVUS_ARCH}"
+        if ! curl -L -o "$MILVUS_BIN" "$DOWNLOAD_URL" 2>&1 | sed 's/^/  /'; then
+            err "Failed to download Milvus binary"
+            warn "If GitHub is unreachable, try mirror or download manually:"
+            warn "  https://github.com/milvus-io/milvus/releases"
+            warn "  Place binary at: $MILVUS_BIN"
+            warn "  chmod +x $MILVUS_BIN"
+            exit 1
+        fi
+        chmod +x "$MILVUS_BIN"
+        log "Milvus binary downloaded"
+    fi
+
+    # Download etcd if not present
+    ETCD_BIN="$MILVUS_DIR/etcd"
+    if [[ ! -x "$ETCD_BIN" ]]; then
+        log "Downloading etcd..."
+        ETCD_VERSION="v3.5.5"
+        ETCD_URL="https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-${MILVUS_ARCH}.tar.gz"
+        if ! curl -L -o /tmp/etcd.tar.gz "$ETCD_URL" 2>&1 | sed 's/^/  /'; then
+            err "Failed to download etcd"
+            exit 1
+        fi
+        tar -xzf /tmp/etcd.tar.gz -C /tmp
+        cp "/tmp/etcd-${ETCD_VERSION}-linux-${MILVUS_ARCH}/etcd" "$ETCD_BIN"
+        cp "/tmp/etcd-${ETCD_VERSION}-linux-${MILVUS_ARCH}/etcdctl" "$MILVUS_DIR/etcdctl"
+        chmod +x "$ETCD_BIN" "$MILVUS_DIR/etcdctl"
+        rm -rf /tmp/etcd.tar.gz "/tmp/etcd-${ETCD_VERSION}-linux-${MILVUS_ARCH}"
+        log "etcd downloaded"
+    fi
+
+    # Download minio if not present
+    MINIO_BIN="$MILVUS_DIR/minio"
+    if [[ ! -x "$MINIO_BIN" ]]; then
+        log "Downloading minio..."
+        MINIO_URL="https://dl.min.io/server/minio/release/linux-${MILVUS_ARCH}/minio"
+        if ! curl -L -o "$MINIO_BIN" "$MINIO_URL" 2>&1 | sed 's/^/  /'; then
+            err "Failed to download minio"
+            exit 1
+        fi
+        chmod +x "$MINIO_BIN"
+        log "minio downloaded"
+    fi
+
+    # Start etcd
+    log "Starting etcd..."
+    nohup "$ETCD_BIN" \
+        --advertise-client-urls=http://127.0.0.1:2379 \
+        --listen-client-urls=http://0.0.0.0:2379 \
+        --data-dir "$ETCD_DATA" \
+        > /tmp/etcd.log 2>&1 &
+    ETCD_PID=$!
+    log "etcd starting (PID: $ETCD_PID, log: /tmp/etcd.log)"
+
+    # Start minio
+    log "Starting minio..."
+    nohup "$MINIO_BIN" server "$MINIO_DATA" \
+        --address ":9000" \
+        > /tmp/minio.log 2>&1 &
+    MINIO_PID=$!
+    log "minio starting (PID: $MINIO_PID, log: /tmp/minio.log)"
+
+    # Wait for etcd and minio to be ready
+    sleep 3
+
+    # Start milvus standalone
+    log "Starting Milvus standalone..."
+    export ETCD_ENDPOINTS="127.0.0.1:2379"
+    export MINIO_ADDRESS="127.0.0.1:9000"
+    nohup "$MILVUS_BIN" run standalone \
+        > /tmp/milvus.log 2>&1 &
+    MILVUS_PID=$!
+    log "Milvus starting (PID: $MILVUS_PID, log: /tmp/milvus.log)"
+
+    # Wait for Milvus to be ready (up to 60s)
+    log "Waiting for Milvus to be ready..."
+    MILVUS_READY=false
+    for i in $(seq 1 60); do
+        if curl -s http://localhost:9091/healthz 2>/dev/null | grep -q "OK"; then
+            log "Milvus ready: http://localhost:19530"
+            MILVUS_READY=true
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$MILVUS_READY" != "true" ]]; then
+        err "Milvus failed to start within 60s"
+        warn "Check /tmp/milvus.log for details"
+        warn "If binary download failed, manually download from:"
+        warn "  https://github.com/milvus-io/milvus/releases"
+        exit 1
+    fi
 fi
 
 # ── 3. Start RabbitMQ ──────────────────────────────────────────────
@@ -150,7 +271,7 @@ popd >/dev/null
 # ── 7. Start vLLM OCR server (optional, use --no-ocr to skip) ──────
 if [[ "${1:-}" != "--no-ocr" ]] && [[ "${2:-}" != "--no-ocr" ]]; then
     log "Starting vLLM OCR server (port 8001)..."
-    if command -v vllm &>/dev/null || uv run python3 -c "import vllm" 2>/dev/null; then
+    if [[ -x "$BACKEND_DIR/.venv/bin/vllm" ]] || uv run --project "$BACKEND_DIR" python3 -c "import vllm" 2>/dev/null; then
         pushd "$BACKEND_DIR" >/dev/null
         export HF_ENDPOINT=https://hf-mirror.com
         nohup uv run vllm serve deepseek-ai/DeepSeek-OCR-2 \
@@ -173,7 +294,7 @@ fi
 
 # ── 7.5 Start vLLM Embedding server (BGE-M3, port 8002) ───────────
 log "Starting vLLM Embedding server (port 8002)..."
-if command -v vllm &>/dev/null || uv run python3 -c "import vllm" 2>/dev/null; then
+if [[ -x "$BACKEND_DIR/.venv/bin/vllm" ]] || uv run --project "$BACKEND_DIR" python3 -c "import vllm" 2>/dev/null; then
     pushd "$BACKEND_DIR" >/dev/null
     export HF_ENDPOINT=https://hf-mirror.com
     nohup uv run vllm serve BAAI/bge-m3 \
@@ -268,6 +389,7 @@ echo "  Backend API:  http://localhost:8000"
 echo "  vLLM OCR:    http://localhost:8001  (log: /tmp/vllm-ocr.log)"
 echo "  vLLM Embed:  http://localhost:8002  (log: /tmp/vllm-embed.log)"
 echo "  Reranker:    http://localhost:8003  (log: /tmp/reranker.log)"
+echo "  Milvus:      http://localhost:19530  (log: /tmp/milvus.log)"
 echo "  Workers:     parsing + interpretation (logs: /tmp/worker-*.log)"
 if [[ "${1:-}" != "--no-frontend" ]]; then
     echo "  User Portal:  http://localhost:3001"

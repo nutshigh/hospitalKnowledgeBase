@@ -5,24 +5,25 @@ from app.config import settings
 VECTOR_DIM = 1024  # bge-m3 / text-embedding-v3 均为 1024
 
 _milvus_started = False
-_milvus_uri: str = ""
 
 
 def ensure_milvus_started():
-    """启动 milvus-lite 嵌入式服务并建立连接（从旧 core/milvus.py 搬迁）"""
-    global _milvus_started, _milvus_uri
+    """连接独立部署的 Milvus 服务。
+
+    Milvus 以独立进程/容器运行（非嵌入式 milvus-lite），所有应用进程
+    （backend + workers）共享同一个远端服务，无文件锁/端口冲突。
+    连接 URI 由 settings.MILVUS_URI 提供（默认 http://localhost:19530）。
+    """
+    global _milvus_started
     if _milvus_started:
         return
-    from milvus_lite.server_manager import ServerManager
-    _milvus_uri = ServerManager().start_and_get_uri(settings.MILVUS_DATA_DIR)
-    connections.connect(uri=_milvus_uri)
+    connections.connect(alias="default", uri=settings.MILVUS_URI)
     _milvus_started = True
 
 
 def get_milvus_uri() -> str:
-    """获取 milvus-lite 的实际 URI（端口随机分配）"""
-    ensure_milvus_started()
-    return _milvus_uri
+    """获取 Milvus 服务的 URI"""
+    return settings.MILVUS_URI
 
 
 def get_embedding_model():

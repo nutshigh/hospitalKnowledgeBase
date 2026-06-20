@@ -4,6 +4,37 @@ from app.ai.config import ensure_milvus_started, get_milvus_uri, get_embedding_m
 from app.config import settings
 
 
+def _patch_milvus_vector_store_init():
+    """为 llama-index-vector-stores-milvus 0.4.0 打补丁。
+
+    0.4.0 在 __init__ 里用 ORM ``Collection(using=self.client._using)``，但
+    pymilvus 2.6 的 ``MilvusClient`` 不再向 ORM ``connections`` 注册 alias，
+    导致 ``ConnectionNotExistException``。这里包装 ``MilvusClient.__init__``，
+    在 client 创建后立刻用它的 alias 注册一条 ORM 连接，使后续
+    ``Collection(using=...)`` 可用。只打一次补丁，幂等。
+    """
+    from pymilvus.milvus_client.milvus_client import MilvusClient
+    if getattr(MilvusClient, "_orm_alias_patched", False):
+        return
+    from pymilvus import connections
+
+    _orig_init = MilvusClient.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        _orig_init(self, *args, **kwargs)
+        alias = self._using
+        try:
+            connections._fetch_handler(alias)
+        except Exception:
+            connections.connect(alias=alias, uri=self._config.uri)
+
+    MilvusClient.__init__ = _patched_init
+    MilvusClient._orm_alias_patched = True
+
+
+_patch_milvus_vector_store_init()
+
+
 class RAGStore:
     """按医院隔离的 LlamaIndex MilvusVectorStore 单例工厂"""
 
@@ -38,6 +69,7 @@ class RAGStore:
             from llama_index.core import VectorStoreIndex
 
             self._indices[hospital_id] = VectorStoreIndex(
+                nodes=[],
                 vector_store=self.get(hospital_id),
                 embed_model=get_embedding_model(),
             )

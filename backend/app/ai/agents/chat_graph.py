@@ -75,6 +75,18 @@ class KnowledgeRefsMiddleware(AgentMiddleware):
                 return Command(update={"knowledge_refs": refs, "messages": [result]})
         return result
 
+    async def awrap_tool_call(self, request: ToolCallRequest, handler):
+        result = await handler(request)
+        if request.tool_call["name"] == "search_knowledge":
+            refs = _extract_refs_from_tool_result(result)
+            if refs:
+                if isinstance(result, Command):
+                    update = dict(result.update or {})
+                    update["knowledge_refs"] = refs
+                    return Command(update=update)
+                return Command(update={"knowledge_refs": refs, "messages": [result]})
+        return result
+
 
 class ReportContextMiddleware(AgentMiddleware):
     """把 report_id 上下文追加到 system_message"""
@@ -90,6 +102,14 @@ class ReportContextMiddleware(AgentMiddleware):
             new_sys = SystemMessage(content=new_content)
             return handler(request.override(system_message=new_sys))
         return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        if self.report_id:
+            extra_text = f"\n\n当前会话关联的报告 ID 是 {self.report_id}，用户提问时可用 get_report_indicators 获取详细指标。"
+            new_content = list(request.system_message.content_blocks) + [{"type": "text", "text": extra_text}]
+            new_sys = SystemMessage(content=new_content)
+            return await handler(request.override(system_message=new_sys))
+        return await handler(request)
 
 
 def build_chat_agent(report_id: Optional[int]):
@@ -141,13 +161,13 @@ async def run_chat_agent(
         ]
 
         agent = build_chat_agent(session.report_id)
-        ctx = AgentContext(hospital_id=hospital_id, db_session=db)
+        ctx = AgentContext(hospital_id=hospital_id)
         inputs = {"messages": history_msgs + [HumanMessage(content=user_message)]}
         config = {"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2}
 
         final_response = ""
         final_state = None
-        async for event in agent.stream_events(inputs, version="v3", config=config, context=ctx):
+        async for event in agent.astream_events(inputs, version="v2", config=config, context=ctx):
             kind = event.get("event")
             if kind == "on_tool_start":
                 yield {"event": "tool_status", "data": {
@@ -163,6 +183,17 @@ async def run_chat_agent(
                         yield {"event": "token", "data": {"content": chunk.content}}
             elif kind == "on_chain_end" and event.get("name") == "LangGraph":
                 final_state = event.get("data", {}).get("output")
+
+        # Fallback: 某些模型在 agent 工具调用流程下不产生 on_chat_model_stream
+        # token，最终回复只在 final_state 的最后一条 AIMessage 里。此时把完整
+        # 内容作为单个 token 事件补发，避免空回复。
+        if not final_response and final_state:
+            msgs = (final_state or {}).get("messages", [])
+            for m in reversed(msgs):
+                if isinstance(m, AIMessage) and m.content:
+                    final_response = m.content
+                    yield {"event": "token", "data": {"content": final_response}}
+                    break
 
         refs = (final_state or {}).get("knowledge_refs", [])
 

@@ -21,7 +21,12 @@ def _get_db(
 ):
     if not current_user.hospital_id:
         raise ValidationException(detail="Hospital context required")
-    return next(get_hospital_db(current_user.hospital_id))
+    gen = get_hospital_db(current_user.hospital_id)
+    db = next(gen)
+    try:
+        yield db
+    finally:
+        gen.close()
 
 
 @router.get("/sessions", response_model=list[SessionResponse])
