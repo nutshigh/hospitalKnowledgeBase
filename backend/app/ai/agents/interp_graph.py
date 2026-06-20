@@ -1,20 +1,24 @@
 import json
-import re
-from typing import TypedDict, List
 from datetime import datetime
+from typing import List, Optional, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain.agents import AgentState, create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.structured_output import ToolStrategy
+from langchain.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.tools.tool_node import ToolCallRequest
 from langgraph.graph import StateGraph, END
+from langgraph.types import Command
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from typing_extensions import NotRequired
 
 from app.ai.llm import get_chat_model
-from app.ai.agents.tools import make_tools
+from app.ai.agents.tools import AgentContext, INTERP_TOOLS
 from app.config import settings
 
-INTERP_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，
-为体检者撰写易懂的指标解读和健康建议。
-
+INTERP_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，为体检者撰写易懂的指标解读和健康建议。
 规则:
 1. 绿区指标一笔带过，重点解读红区和黄区
 2. 引用知识库内容时注明来源
@@ -29,11 +33,17 @@ INTERP_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合
 对每个异常指标生成 explanation（解读）和 suggestion（建议），引用知识库注明来源。"""
 
 
-class InterpBatchResult(TypedDict):
+class InterpBatchItem(BaseModel):
     """单指标的解读结果"""
-    indicator_id: int
-    explanation: str
-    suggestion: str
+    indicator_id: int = Field(description="异常指标 ID")
+    explanation: str = Field(description="指标解读文字")
+    suggestion: str = Field(description="健康建议文字")
+    knowledge_ref_ids: list[int] = Field(default_factory=list, description="解读该指标时引用的 search_knowledge 结果 entry_id 列表")
+
+
+class InterpBatchResult(BaseModel):
+    """本报告所有异常指标的批量解读结果"""
+    items: list[InterpBatchItem]
 
 
 class InterpState(TypedDict):
@@ -50,8 +60,137 @@ class InterpState(TypedDict):
     green_count: int
 
 
+class InterpAgentState(AgentState):
+    knowledge_results: NotRequired[dict]
+
+
+def _extract_refs_dict_from_tool_result(result) -> dict:
+    """从 ToolMessage 或 Command 解析 search_knowledge 返回的 {entry_id: ref}"""
+    msgs = []
+    if isinstance(result, Command):
+        msgs = (result.update or {}).get("messages", [])
+    else:
+        msgs = [result]
+    refs_dict = {}
+    for m in msgs:
+        if isinstance(m, ToolMessage):
+            try:
+                data = json.loads(m.content)
+                if isinstance(data, list):
+                    for r in data:
+                        eid = r.get("entry_id")
+                        if eid is not None:
+                            refs_dict[eid] = {"entry_id": eid, "title": r.get("title")}
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return refs_dict
+
+
+class InterpKnowledgeMiddleware(AgentMiddleware):
+    """拦截 search_knowledge，把 {entry_id→ref} 累积到 state.knowledge_results"""
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler):
+        result = handler(request)
+        if request.tool_call["name"] == "search_knowledge":
+            refs_dict = _extract_refs_dict_from_tool_result(result)
+            if refs_dict:
+                if isinstance(result, Command):
+                    update = dict(result.update or {})
+                    update["knowledge_results"] = refs_dict
+                    return Command(update=update)
+                return Command(update={"knowledge_results": refs_dict, "messages": [result]})
+        return result
+
+
+def build_interp_agent():
+    """构造 interpretation Agent 子图（create_agent + ToolStrategy）"""
+    model = get_chat_model(streaming=False)
+    return create_agent(
+        model=model,
+        tools=INTERP_TOOLS,
+        system_prompt=INTERP_SYSTEM_PROMPT,
+        middleware=[InterpKnowledgeMiddleware()],
+        response_format=ToolStrategy(InterpBatchResult),
+        state_schema=InterpAgentState,
+    )
+
+
+def _map_structured_to_explanations(
+    structured: InterpBatchResult,
+    knowledge_results: dict,
+    abnormal_indicators: list[dict],
+) -> tuple[dict, dict]:
+    """把结构化输出映射到 explanations/refs，并补全未出现的异常指标"""
+    explanations = {}
+    mapped_refs = {}
+    for item in structured.items:
+        explanations[item.indicator_id] = {
+            "explanation": item.explanation,
+            "suggestion": item.suggestion,
+        }
+        ref_ids = set(item.knowledge_ref_ids)
+        mapped_refs[item.indicator_id] = [
+            knowledge_results.get(rid) for rid in ref_ids
+            if knowledge_results.get(rid)
+        ] or list(knowledge_results.values())
+
+    all_refs = list(knowledge_results.values())
+    for ind in abnormal_indicators:
+        iid = ind["indicator_id"]
+        if iid not in explanations:
+            explanations[iid] = {"explanation": "", "suggestion": ""}
+        if iid not in mapped_refs:
+            mapped_refs[iid] = all_refs
+
+    return explanations, mapped_refs
+
+
+def _agent_batch(state: InterpState, build_agent_fn, db: Session) -> dict:
+    """agent_batch 节点核心逻辑（模块级，便于测试）"""
+    if not state["abnormal_indicators"]:
+        return {"agent_explanations": {}, "knowledge_refs": {}}
+
+    agent = build_agent_fn()
+    indicator_lines = []
+    for ind in state["abnormal_indicators"]:
+        ref = f"{ind.get('ref_range_low','-')}-{ind.get('ref_range_high','-')}"
+        indicator_lines.append(
+            f"[ID:{ind['indicator_id']}] {ind['item_name']}: "
+            f"值 {ind['result_value']}{ind.get('unit','')}, "
+            f"参考区间 {ref}, {ind['deviation']}, {ind['color_level']}区"
+        )
+    indicators_text = "\n".join(indicator_lines)
+
+    user_content = f"""以下是本报告的异常指标，请对每个查相关医学知识并生成解读+建议：
+{indicators_text}
+
+对每个指标调用 search_knowledge 查询相关知识，然后输出结构化结果，每个指标含 indicator_id（指标 ID）、explanation（解读文字）、suggestion（建议文字）、knowledge_ref_ids（引用的 search_knowledge 结果 entry_id 列表）。"""
+
+    result = agent.invoke(
+        {"messages": [HumanMessage(content=user_content)]},
+        config={"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2},
+        context=AgentContext(hospital_id=state["hospital_id"], db_session=db),
+    )
+
+    structured = result.get("structured_response")
+    knowledge_results = result.get("knowledge_results", {})
+
+    if structured is None:
+        import logging
+        logging.getLogger(__name__).warning(
+            "interp_graph agent_batch got no structured_response for report_id=%s",
+            state["report_id"],
+        )
+        structured = InterpBatchResult(items=[])
+
+    explanations, mapped_refs = _map_structured_to_explanations(
+        structured, knowledge_results, state["abnormal_indicators"],
+    )
+    return {"agent_explanations": explanations, "knowledge_refs": mapped_refs}
+
+
 def build_interp_graph(hospital_id: str, db: Session):
-    """构造 interpretation Agent 的 LangGraph StateGraph"""
+    """构造 interpretation Agent 的外层 StateGraph"""
 
     def load_indicators(state: InterpState) -> dict:
         report_id = state["report_id"]
@@ -156,102 +295,7 @@ def build_interp_graph(hospital_id: str, db: Session):
         return {"abnormal_indicators": abnormal}
 
     def agent_batch(state: InterpState) -> dict:
-        if not state["abnormal_indicators"]:
-            return {"agent_explanations": {}, "knowledge_refs": {}}
-
-        tools = make_tools(state["hospital_id"], db)
-        model = get_chat_model(streaming=False).bind_tools(tools)
-        tools_by_name = {t.name: t for t in tools}
-
-        indicator_lines = []
-        for ind in state["abnormal_indicators"]:
-            ref = f"{ind.get('ref_range_low','-')}-{ind.get('ref_range_high','-')}"
-            indicator_lines.append(
-                f"[ID:{ind['indicator_id']}] {ind['item_name']}: "
-                f"值 {ind['result_value']}{ind.get('unit','')}, "
-                f"参考区间 {ref}, {ind['deviation']}, {ind['color_level']}区"
-            )
-        indicators_text = "\n".join(indicator_lines)
-
-        user_content = f"""以下是本报告的异常指标，请对每个查相关医学知识并生成解读+建议：
-
-{indicators_text}
-
-对每个指标调用 search_knowledge 查询相关知识，然后输出 JSON 数组，每个元素：
-{{"indicator_id": int, "explanation": "解读文字", "suggestion": "建议文字", "knowledge_ref_ids": [int, ...]}}
-其中 knowledge_ref_ids 是你在解读该指标时实际引用的 search_knowledge 结果中的 entry_id 列表。"""
-
-        messages = [
-            SystemMessage(content=INTERP_SYSTEM_PROMPT),
-            HumanMessage(content=user_content),
-        ]
-
-        max_iter = settings.AGENT_MAX_ITERATIONS
-        knowledge_refs = {}
-        iterations_used = 0
-        for i in range(max_iter):
-            iterations_used = i + 1
-            resp = model.invoke(messages)
-            messages.append(resp)
-            if not (hasattr(resp, "tool_calls") and resp.tool_calls):
-                break
-            for call in resp.tool_calls:
-                tool = tools_by_name.get(call["name"])
-                if not tool:
-                    continue
-                result = tool.invoke(call["args"])
-                if call["name"] == "search_knowledge" and isinstance(result, list):
-                    for r in result:
-                        ref_item = {"entry_id": r.get("entry_id"), "title": r.get("title")}
-                        for ind in state["abnormal_indicators"]:
-                            iid = ind["indicator_id"]
-                            if iid not in knowledge_refs:
-                                knowledge_refs[iid] = []
-                            if ref_item not in knowledge_refs[iid]:
-                                knowledge_refs[iid].append(ref_item)
-                messages.append({
-                    "role": "tool",
-                    "content": json.dumps(result, ensure_ascii=False),
-                    "tool_call_id": call["id"],
-                })
-
-        if iterations_used >= max_iter and hasattr(resp, "tool_calls") and resp.tool_calls:
-            import logging
-            logging.getLogger(__name__).warning(
-                "interp_graph agent_batch exhausted %d iterations without final answer for report_id=%s",
-                max_iter, state["report_id"]
-            )
-
-        explanations = {}
-        mapped_refs = {}
-        raw = resp.content if hasattr(resp, "content") else str(resp)
-        try:
-            match = re.search(r'\[.*\]', raw, re.DOTALL)
-            if match:
-                parsed = json.loads(match.group())
-                for item in parsed:
-                    iid = item.get("indicator_id")
-                    if iid:
-                        explanations[iid] = {
-                            "explanation": item.get("explanation", ""),
-                            "suggestion": item.get("suggestion", ""),
-                        }
-                        ref_ids = set(item.get("knowledge_ref_ids", []))
-                        mapped_refs[iid] = [
-                            r for r in (knowledge_refs.get(iid, []) or [])
-                            if r.get("entry_id") in ref_ids
-                        ] or knowledge_refs.get(iid, [])
-        except (json.JSONDecodeError, AttributeError):
-            pass
-
-        for ind in state["abnormal_indicators"]:
-            iid = ind["indicator_id"]
-            if iid not in explanations:
-                explanations[iid] = {"explanation": "", "suggestion": ""}
-            if iid not in mapped_refs:
-                mapped_refs[iid] = knowledge_refs.get(iid, [])
-
-        return {"agent_explanations": explanations, "knowledge_refs": mapped_refs}
+        return _agent_batch(state, build_interp_agent, db)
 
     def persist(state: InterpState) -> dict:
         from app.modules.interpretation.models import (
