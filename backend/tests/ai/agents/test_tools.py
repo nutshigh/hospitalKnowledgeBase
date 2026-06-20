@@ -35,9 +35,9 @@ def test_interp_tools_contains_two_names():
 
 
 def test_agent_context_dataclass():
-    """AgentContext 包含 hospital_id 和 db_session"""
+    """AgentContext 包含 hospital_id"""
     from app.ai.agents.tools import AgentContext
-    ctx = AgentContext(hospital_id="H001", db_session=MagicMock())
+    ctx = AgentContext(hospital_id="H001")
     assert ctx.hospital_id == "H001"
 
 
@@ -50,7 +50,7 @@ def test_search_knowledge_uses_context_hospital_id():
         )]
         from app.ai.agents.tools import search_knowledge, AgentContext
 
-        ctx = AgentContext(hospital_id="H002", db_session=MagicMock())
+        ctx = AgentContext(hospital_id="H002")
         runtime = _make_runtime(ctx)
 
         result = search_knowledge.invoke(
@@ -62,20 +62,22 @@ def test_search_knowledge_uses_context_hospital_id():
 
 
 def test_get_report_indicators_uses_context_db():
-    """get_report_indicators 使用 runtime.context.db_session 执行查询"""
+    """get_report_indicators 通过 hospital_id 从连接池拿独立 session 执行查询"""
     from app.ai.agents.tools import get_report_indicators, AgentContext
 
     mock_db = MagicMock()
     mock_db.execute.return_value.fetchall.return_value = [
         (1, "ALT", "ALT", "85", "U/L", "0", "40")
     ]
-    ctx = AgentContext(hospital_id="H001", db_session=mock_db)
+    ctx = AgentContext(hospital_id="H001")
     runtime = _make_runtime(ctx)
 
-    result = get_report_indicators.invoke({"report_id": 1, "runtime": runtime})
+    with patch("app.ai.agents.tools.get_session", return_value=mock_db):
+        result = get_report_indicators.invoke({"report_id": 1, "runtime": runtime})
     assert len(result) == 1
     assert result[0]["item_name"] == "ALT"
     mock_db.execute.assert_called_once()
+    mock_db.close.assert_called_once()
 
 
 def test_make_tools_removed():

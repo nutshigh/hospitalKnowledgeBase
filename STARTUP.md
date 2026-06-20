@@ -15,10 +15,11 @@ cd backend/docker
 docker-compose up -d
 ```
 
-启动 4 个服务：
-- MySQL (3306) — `root / root123`
+启动 5 个服务：
+- MySQL (3306) — `root / root`
 - RabbitMQ (5672 + 管理界面 15672) — `guest / guest`
 - Etcd (2379)
+- Minio (9000)
 - Milvus (19530)
 
 验证：
@@ -34,7 +35,7 @@ docker ps
 MySQL 容器启动时会自动执行 `docker/mysql/init/` 下的脚本创建 `hospital_template` 库。手动创建第一家医院：
 
 ```bash
-docker exec -i $(docker ps -qf "name=mysql") mysql -uroot -proot123 <<SQL
+docker exec -i $(docker ps -qf "name=mysql") mysql -uroot -proot <<SQL
 CALL hospital_template.create_hospital_database('H001');
 SQL
 ```
@@ -101,7 +102,7 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
 cd backend/docker && docker-compose up -d
 
 # 2. 初始化医院库
-docker exec -i $(docker ps -qf "name=mysql") mysql -uroot -proot123 -e "CALL hospital_template.create_hospital_database('H001');"
+docker exec -i $(docker ps -qf "name=mysql") mysql -uroot -proot -e "CALL hospital_template.create_hospital_database('H001');"
 
 # 3. 后端
 cd backend && cp -n .env.example .env && uv run uvicorn app.main:app --reload --port 8000
@@ -128,7 +129,7 @@ docker tag dockerproxy.net/library/rabbitmq:3.12-management rabbitmq:3.12-manage
 如果连接 MySQL 报 `Access denied` 但 docker exec 可以连接，检查 3306 是否被宿主机 MySQL 占用：
 ```bash
 echo "SELECT VERSION();" | timeout 3 nc localhost 3306   # 看版本号
-docker exec docker-mysql-1 mysql -uroot -proot123 -e "SELECT VERSION();"
+docker exec docker-mysql-1 mysql -uroot -proot -e "SELECT VERSION();"
 ```
 版本不一致说明端口被占用，改用 3307 端口启动容器，并修改 `.env` 中 `MYSQL_PORT=3307`。
 

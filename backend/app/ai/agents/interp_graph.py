@@ -169,7 +169,7 @@ def _agent_batch(state: InterpState, build_agent_fn, db: Session) -> dict:
     result = agent.invoke(
         {"messages": [HumanMessage(content=user_content)]},
         config={"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2},
-        context=AgentContext(hospital_id=state["hospital_id"], db_session=db),
+        context=AgentContext(hospital_id=state["hospital_id"]),
     )
 
     structured = result.get("structured_response")

@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 
 def test_rag_store_caches_per_hospital():
     """同一 hospital_id 的 MilvusVectorStore 只创建一次"""
-    with patch("app.ai.config.ensure_milvus_started"), \
+    with patch("app.ai.rag.store.ensure_milvus_started"), \
          patch("llama_index.vector_stores.milvus.MilvusVectorStore") as MockVS:
         from app.ai.rag.store import RAGStore
         store = RAGStore()
@@ -19,7 +19,7 @@ def test_rag_store_caches_per_hospital():
 
 def test_rag_store_refresh_clears_cache():
     """refresh 后下次 get 重建"""
-    with patch("app.ai.config.ensure_milvus_started"), \
+    with patch("app.ai.rag.store.ensure_milvus_started"), \
          patch("llama_index.vector_stores.milvus.MilvusVectorStore") as MockVS:
         from app.ai.rag.store import RAGStore
         store = RAGStore()

@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     MYSQL_PASSWORD: str = "root"
     MYSQL_TEMPLATE_DB: str = "hospital_template"
 
-    # Milvus (Milvus Lite embedded server)
+    # Milvus (独立部署，非嵌入式 milvus-lite)
+    MILVUS_URI: str = "http://localhost:19530"
     MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19530
-    MILVUS_DATA_DIR: str = "./milvus_data"
 
     # RabbitMQ
     RABBITMQ_HOST: str = "localhost"
