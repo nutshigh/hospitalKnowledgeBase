@@ -32,6 +32,8 @@ class IndicatorJudgment(Base):
     explanation = Column(Text, nullable=True)
     suggestion = Column(Text, nullable=True)
     knowledge_refs = Column(JSON, nullable=True)
+    certainty = Column(String(10), nullable=True)
+    certainty_reason = Column(Text, nullable=True)
 
 
 class TriageRule(Base):

@@ -1,12 +1,28 @@
 import { useCallback, useRef } from 'react';
 
+export interface Citation {
+  ref_id: number;
+  entry_id: number | null;
+  title: string;
+  source: string;
+  content?: string;
+}
+
+export interface StructuredData {
+  certainty: string;
+  certainty_reason: string;
+  citations: Citation[];
+  annotated_text?: string;
+}
+
 interface UseChatStreamOptions {
   onToken: (token: string) => void;
-  onDone: (result: { messageId?: number; knowledgeRefs?: Array<{ entry_id: number; title: string }> }) => void;
+  onStructured?: (data: StructuredData) => void;
+  onDone: (result: { messageId?: number }) => void;
   onError: (error: string) => void;
 }
 
-export function useChatStream({ onToken, onDone, onError }: UseChatStreamOptions) {
+export function useChatStream({ onToken, onStructured, onDone, onError }: UseChatStreamOptions) {
   const abortRef = useRef<AbortController | null>(null);
 
   const send = useCallback(async (url: string, content: string) => {
@@ -61,6 +77,10 @@ export function useChatStream({ onToken, onDone, onError }: UseChatStreamOptions
                 onError(data.message || 'AI 响应失败');
                 return;
               }
+              if (currentEvent === 'structured') {
+                onStructured?.(data);
+                continue;
+              }
               if (currentEvent === 'done') {
                 onDone(data);
                 return;
@@ -79,7 +99,7 @@ export function useChatStream({ onToken, onDone, onError }: UseChatStreamOptions
         onError('网络错误，请重试');
       }
     }
-  }, [onToken, onDone, onError]);
+  }, [onToken, onStructured, onDone, onError]);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();

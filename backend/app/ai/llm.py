@@ -4,7 +4,11 @@ from app.config import settings
 
 
 def get_chat_model(streaming: bool = False) -> ChatOpenAI:
-    """根据 LLM_PROVIDER 构造 LangChain ChatOpenAI，兼容 vLLM/远端"""
+    """根据 LLM_PROVIDER 构造 LangChain ChatOpenAI。
+
+    local  → 本地 MedGo (Qwen3-32B 医疗模型) via vLLM serve (OpenAI 兼容接口)
+    remote → 远端 OpenAI 兼容 API
+    """
     if settings.LLM_PROVIDER == "remote":
         return ChatOpenAI(
             base_url=settings.REMOTE_LLM_BASE_URL,
@@ -15,12 +19,13 @@ def get_chat_model(streaming: bool = False) -> ChatOpenAI:
             timeout=settings.LLM_TIMEOUT_SECONDS,
             streaming=streaming,
         )
+    # local: MedGo via vLLM
     return ChatOpenAI(
-        base_url=settings.VLLM_BASE_URL,
-        model=settings.VLLM_CHAT_MODEL,
-        api_key="not-required",
-        temperature=0.1,
-        max_tokens=1024,
+        base_url=settings.MEDGO_BASE_URL,
+        model=settings.MEDGO_MODEL,
+        api_key=settings.MEDGO_API_KEY,
+        temperature=settings.MEDGO_TEMPERATURE,
+        max_tokens=settings.MEDGO_MAX_TOKENS,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         streaming=streaming,
     )

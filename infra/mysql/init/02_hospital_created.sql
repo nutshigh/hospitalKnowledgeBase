@@ -121,7 +121,9 @@ BEGIN
         matched_rule_id BIGINT DEFAULT NULL,
         explanation TEXT DEFAULT NULL,
         suggestion TEXT DEFAULT NULL,
-        knowledge_refs JSON DEFAULT NULL
+        knowledge_refs JSON DEFAULT NULL,
+        certainty VARCHAR(10) DEFAULT NULL,
+        certainty_reason TEXT DEFAULT NULL
     ) ENGINE=InnoDB;
 
     CREATE TABLE IF NOT EXISTS triage_rule (

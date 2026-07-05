@@ -21,6 +21,10 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
     store.appendToken(token);
   }, []);
 
+  const onStructured = useCallback((data: any) => {
+    store.setStructured(data);
+  }, []);
+
   const onDone = useCallback(() => {
     store.finishStreaming();
   }, []);
@@ -30,7 +34,7 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
     store.finishStreaming();
   }, []);
 
-  const { send } = useChatStream({ onToken, onDone, onError });
+  const { send } = useChatStream({ onToken, onStructured, onDone, onError });
 
   // Load messages when session changes
   useEffect(() => {
@@ -82,6 +86,7 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
               content={msg.content}
               knowledgeRefs={msg.knowledge_refs}
               streaming={msg.streaming}
+              structured={msg.structured}
             />
           ))
         )}

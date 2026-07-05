@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import AsyncIterator, Optional
 
 from langchain.agents import AgentState, create_agent
@@ -7,30 +8,49 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 from langgraph.types import Command
+from pydantic import BaseModel, Field
 from typing_extensions import Annotated, NotRequired
 
 from app.ai.llm import get_chat_model
 from app.ai.agents.tools import AgentContext, CHAT_TOOLS
+from app.ai.agents.think_filter import ThinkStreamFilter, strip_think_tags
+from app.ai.agents.citation_matcher import inject_citations
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 CHAT_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，为体检者提供易懂的健康咨询。
-规则:
-1. 基于报告数据和知识库回答，不编造信息
-2. 引用知识库内容时注明来源
+
+## 核心规则
+1. 必须先调用 search_knowledge 工具搜索知识库，获取相关医学知识后再回答。禁止不搜知识库直接回答。
+2. 基于知识库和报告数据回答，不编造信息
 3. 建议具体可执行，避免笼统
 4. 不诊断疾病，只做健康风险提示
 5. 危急值指标提示"建议立即就医复查"
 6. 用户未关联报告时，引导其先上传报告以获取更精准建议
 
-你有以下工具可用：
-- search_knowledge: 搜索医学知识库
+## 工具使用要求
+回答任何健康、疾病、指标、医学相关问题时，你必须先调用 search_knowledge 工具。
+即使用户没有明确要求搜索知识库，你也要主动搜索以获取准确信息。
+只有纯闲聊（如"你好""谢谢"）可以不调用工具。
+
+示例：
+用户："高血压有什么并发症？" → 你必须先调用 search_knowledge("高血压 并发症")，再基于检索结果回答
+用户："我的血糖正常吗？" → 你必须先调用 get_report_indicators 获取报告，再调用 search_knowledge("血糖 参考范围") 查询知识
+用户："你好" → 可以直接回答，不需要工具
+
+## 确定性分级
+- 基于指标数值与参考范围直接对比的结论，用确定的语气陈述
+- 基于知识库推理但非直接数值判断的结论，用"可能""建议进一步检查"等不确定语气
+- 信息不足或超出能力范围时，明确告知无法判断，不做猜测
+
+## 可用工具
+- search_knowledge: 搜索医学知识库（回答健康/疾病问题时必须调用）
 - get_report_indicators: 获取报告指标数据
 - get_report_summary: 获取报告概览
 - get_user_history_reports: 获取历年报告
 - get_indicator_history: 获取指标历史趋势
-- get_triage_rules: 获取三色分级规则
-
-优先用工具获取信息，不要凭空回答。"""
+- get_triage_rules: 获取三色分级规则"""
 
 
 def _accumulate_refs(existing: list, new: list) -> list:
@@ -42,7 +62,7 @@ class ChatAgentState(AgentState):
 
 
 def _extract_refs_from_tool_result(result) -> list[dict]:
-    """从 ToolMessage 或 Command 解析 search_knowledge 返回的 refs"""
+    """从 ToolMessage 或 Command 解析 search_knowledge 返回的 refs（文档+KG 结果）"""
     msgs = []
     if isinstance(result, Command):
         msgs = (result.update or {}).get("messages", [])
@@ -54,7 +74,12 @@ def _extract_refs_from_tool_result(result) -> list[dict]:
             try:
                 data = json.loads(m.content)
                 if isinstance(data, list):
-                    refs.extend({"entry_id": r.get("entry_id"), "title": r.get("title")} for r in data)
+                    for r in data:
+                        refs.append({
+                            "entry_id": r.get("entry_id"),
+                            "title": r.get("title", ""),
+                            "source": r.get("source", "document"),
+                        })
             except (json.JSONDecodeError, TypeError):
                 pass
     return refs
@@ -132,6 +157,62 @@ MAX_HISTORY_ROUNDS = 20
 _session_locks: set[int] = set()
 
 
+class ChatStructuredResult(BaseModel):
+    """聊天回复的结构化元数据（流式文本后的尾随事件）"""
+    certainty: str = Field(description="确定性: definite | probable | refused")
+    certainty_reason: str = Field(default="", description="确定性判定理由")
+    citations: list[dict] = Field(default_factory=list, description="引用列表 [{ref_id, entry_id, title, source, content}]")
+
+
+def _classify_certainty(text: str) -> tuple[str, str]:
+    """轻量确定性分类（基于关键词规则，无需额外 LLM 调用）。"""
+    refused_keywords = ["无法判断", "信息不足", "需要进一步检查", "无法确定", "建议咨询医生", "超出能力"]
+    probable_keywords = ["可能", "建议进一步", "推测", "疑似", "或许", "可能存在", "不排除"]
+
+    for kw in refused_keywords:
+        if kw in text:
+            return "refused", f"回复包含不确定表述: '{kw}'"
+    for kw in probable_keywords:
+        if kw in text:
+            return "probable", f"回复包含推测性表述: '{kw}'"
+    return "definite", "基于明确指标数值或知识库直接陈述"
+
+
+def _build_sources_from_refs(refs: list[dict]) -> list[dict]:
+    """把 knowledge_refs 转为 citation_matcher 需要的 sources 格式。
+
+    refs: [{entry_id, title, source}]（无 content）
+    对于没有 content 的 ref，用 title 作为匹配文本。
+    """
+    sources = []
+    for r in refs:
+        sources.append({
+            "entry_id": r.get("entry_id"),
+            "title": r.get("title", ""),
+            "source": r.get("source", "document"),
+            "content": r.get("title", ""),  # refs 中无 content，用 title 代替
+        })
+    return sources
+
+
+async def _extract_structured_metadata(response_text: str, refs: list[dict]) -> dict:
+    """提取聊天的结构化元数据：certainty + 后置注入 citations。"""
+    try:
+        certainty, certainty_reason = _classify_certainty(response_text)
+        # 后置 citation 注入：embedding 相似度匹配
+        sources = _build_sources_from_refs(refs)
+        annotated_text, citations = inject_citations(response_text, sources)
+        return {
+            "certainty": certainty,
+            "certainty_reason": certainty_reason,
+            "citations": citations,
+            "annotated_text": annotated_text,
+        }
+    except Exception as e:
+        logger.warning("structured metadata extraction failed: %s", e)
+        return {"certainty": "probable", "certainty_reason": "", "citations": [], "annotated_text": response_text}
+
+
 async def run_chat_agent(
     hospital_id: str,
     db: Session,
@@ -167,6 +248,7 @@ async def run_chat_agent(
 
         final_response = ""
         final_state = None
+        think_filter = ThinkStreamFilter()
         async for event in agent.astream_events(inputs, version="v2", config=config, context=ctx):
             kind = event.get("event")
             if kind == "on_tool_start":
@@ -180,9 +262,16 @@ async def run_chat_agent(
                 if chunk and hasattr(chunk, "content") and chunk.content:
                     if not hasattr(chunk, "tool_call_chunks") or not chunk.tool_call_chunks:
                         final_response += chunk.content
-                        yield {"event": "token", "data": {"content": chunk.content}}
+                        clean = think_filter.feed(chunk.content)
+                        if clean:
+                            yield {"event": "token", "data": {"content": clean}}
             elif kind == "on_chain_end" and event.get("name") == "LangGraph":
                 final_state = event.get("data", {}).get("output")
+
+        # 流结束：冲刷 thinking 过滤器缓冲区
+        tail = think_filter.flush()
+        if tail:
+            yield {"event": "token", "data": {"content": tail}}
 
         # Fallback: 某些模型在 agent 工具调用流程下不产生 on_chat_model_stream
         # token，最终回复只在 final_state 的最后一条 AIMessage 里。此时把完整
@@ -191,14 +280,23 @@ async def run_chat_agent(
             msgs = (final_state or {}).get("messages", [])
             for m in reversed(msgs):
                 if isinstance(m, AIMessage) and m.content:
-                    final_response = m.content
+                    final_response = strip_think_tags(m.content)
                     yield {"event": "token", "data": {"content": final_response}}
                     break
 
+        # 入库前统一清洗 thinking 标签
+        final_response = strip_think_tags(final_response)
+
         refs = (final_state or {}).get("knowledge_refs", [])
 
+        # 后置 citation 注入 + 确定性分类
+        structured_data = await _extract_structured_metadata(final_response, refs)
+        annotated_text = structured_data.get("annotated_text", final_response)
+        citations = structured_data.get("citations", [])
+
+        # 用标注后的文本和 citations 入库
         msg = chat_service.save_message(
-            db, session_id, "assistant", final_response, knowledge_refs=refs or None
+            db, session_id, "assistant", annotated_text, knowledge_refs=citations or None
         )
 
         if not session.title:
@@ -206,6 +304,8 @@ async def run_chat_agent(
             db.query(type(session)).filter(type(session).id == session_id).update({"title": title})
             db.commit()
 
+        # 尾随 structured 事件（前端据此渲染确定性标注和引用列表）
+        yield {"event": "structured", "data": structured_data}
         yield {"event": "done", "data": {"message_id": msg.id}}
     except Exception as e:
         yield {"event": "error", "data": {"message": f"AI 响应失败: {e}"}}

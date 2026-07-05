@@ -37,11 +37,11 @@ def search_knowledge(
         category_ids: 可选，限定知识分类 ID 列表
         top_k: 可选，返回条数上限
     Returns:
-        知识条目列表，每项含 entry_id/title/content/score
+        知识条目列表，每项含 entry_id/title/content/score/source
     """
     ctx = runtime.context
     results = ai_rag.search(ctx.hospital_id, query, category_ids=category_ids, top_k=top_k)
-    return [{"entry_id": r.entry_id, "title": r.title, "content": r.content, "score": r.score} for r in results]
+    return [{"entry_id": r.entry_id, "title": r.title, "content": r.content, "score": r.score, "source": r.source} for r in results]
 
 
 @tool

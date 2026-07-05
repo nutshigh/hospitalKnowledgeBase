@@ -54,19 +54,40 @@ def _clean_markdown(text: str) -> str:
 
 
 def _parse_personal_info(text: str) -> dict:
-    """Extract personal info from Markdown lines like **Key:** value."""
+    """Extract personal info from Markdown/text lines like **Key:** value or Key: value."""
     info = {}
     patterns = {
-        "name": r"\*\*Name:\*\*\s*(.+)",
-        "gender": r"\*\*Gender:\*\*\s*(.+)",
-        "age": r"\*\*Age:\*\*\s*(\d+)",
-        "check_date": r"\*\*Date:\*\*\s*(.+)",
+        "name": r"(?:\*\*Name:\*\*|Name)\s*[:：]\s*(.+?)(?:\s+(?:Gender|性\s*别)|$)",
+        "gender": r"(?:\*\*Gender:\*\*|Gender)\s*[:：]\s*(.+?)(?:\s+(?:Age|年\s*龄)|$)",
+        "age": r"(?:\*\*Age:\*\*|Age)\s*[:：]\s*(\d+)",
+        "check_date": r"(?:\*\*Date:\*\*|Date)\s*[:：]\s*(.+?)(?:\n|$)",
     }
     for key, pat in patterns.items():
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             val = m.group(1).strip()
             if val and val.lower() not in ("<patient name>", "<male/female>", "<number>", "<exam date>", "null", "none"):
+                info[key] = val
+    return info
+
+
+def _parse_personal_info_cn(text: str) -> dict:
+    """从中文体检报告 markdown 文本提取个人信息。
+
+    匹配常见格式：姓名:XXX / 姓名 XXX、性别:男、年龄:30岁、体检日期:2024-01-01
+    """
+    info = {}
+    patterns = {
+        "name": r"姓\s*名[:：\s]+([^\s,，\|]{2,10})",
+        "gender": r"性\s*别[:：\s]+(男|女)",
+        "age": r"年\s*龄[:：\s]*(\d+)",
+        "check_date": r"(?:体检日期|检查日期|日期|日\s*期)[:：\s]+(\d{4}[-/年]\d{1,2}[-/月]\d{1,2})",
+    }
+    for key, pat in patterns.items():
+        m = re.search(pat, text)
+        if m:
+            val = m.group(1).strip()
+            if val:
                 info[key] = val
     return info
 
@@ -204,33 +225,26 @@ class VLMClient:
         self.model = settings.OCR_MODEL
         custom_prompt = getattr(settings, "OCR_PROMPT", None)
         self.prompt = custom_prompt.strip() if custom_prompt else OCR_PROMPT
-        self.client = Client(timeout=Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0))
+        self.client = Client(timeout=Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0))
 
     def extract_from_image(self, image_base64: str) -> dict:
+        """调用 PaddleOCR-VL 服务（/ocr），返回 {personal_info, indicators}。
+
+        PaddleOCR-VL 输出页面级 markdown（含表格），复用现有
+        _parse_markdown_table / _parse_personal_info 解析。
+        """
         response = self.client.post(
-            f"{self.base_url}/chat/completions",
-            json={
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": self.prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-                        ],
-                    },
-                ],
-                "temperature": 0,
-                "max_tokens": 4096,
-                "skip_special_tokens": False,
-            },
+            f"{self.base_url}/ocr",
+            json={"image_base64": image_base64},
         )
         response.raise_for_status()
         data = response.json()
-        content = data["choices"][0]["message"]["content"].strip()
+        content = (data.get("markdown") or "").strip()
         content = _clean_markdown(content)
 
         personal_info = _parse_personal_info(content)
+        if not personal_info:
+            personal_info = _parse_personal_info_cn(content)
         indicators = _parse_markdown_table(content)
 
         return {"personal_info": personal_info, "indicators": indicators}

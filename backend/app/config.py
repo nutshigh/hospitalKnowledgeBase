@@ -25,19 +25,27 @@ class Settings(BaseSettings):
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
 
-    # OCR (DeepSeek-OCR-2 本地部署 via vLLM serve)
-    OCR_BASE_URL: str = "http://localhost:8001/v1"
-    OCR_MODEL: str = "deepseek-ai/DeepSeek-OCR-2"
-    OCR_PROMPT: str = ""  # 自定义 OCR prompt，空则用内置默认 prompt
+# OCR (PaddleOCR-VL-1.5 本地部署 via paddle_ocr_service, 端口 8001)
+    OCR_BASE_URL: str = "http://localhost:8001"
+    OCR_MODEL: str = "PaddlePaddle/PaddleOCR-VL-1.5"
+    OCR_PROMPT: str = ""  # PaddleOCR pipeline 模式下未使用，保留兼容
 
-    # vLLM
+    # vLLM (OpenAI-compatible API)
+    # 注：文本对话 LLM 已由 MEDGO_* 取代；以下 VLLM_* 仅保留兼容，不再用于 chat。
     VLLM_BASE_URL: str = "http://localhost:8000/v1"
     VLLM_CHAT_MODEL: str = "qwen2.5"
     VLLM_VISION_MODEL: str = "qwen-vl"
     VLLM_EMBED_MODEL: str = "bge-m3"
 
+    # 本地文本 LLM (MedGo via vLLM serve, OpenAI 兼容接口)
+    MEDGO_BASE_URL: str = "http://localhost:8004/v1"
+    MEDGO_MODEL: str = "/data/models/MedGo"  # 本地权重路径；也可填 OpenMedZoo/MedGo 让 vLLM 自动拉取
+    MEDGO_MAX_TOKENS: int = 4096
+    MEDGO_TEMPERATURE: float = 0.1
+    MEDGO_API_KEY: str = "not-required"  # vLLM 本地服务无鉴权
+
     # LLM Provider
-    LLM_PROVIDER: str = "local"  # local | remote
+    LLM_PROVIDER: str = "local"  # local (MedGo via vLLM) | remote
 
     # Embedding Provider
     EMBED_PROVIDER: str = "local"  # local (vLLM) | remote (API)
@@ -71,8 +79,17 @@ class Settings(BaseSettings):
     RAG_FINAL_TOP_K: int = 5                   # rerank 后返回数
     RAG_HYBRID_ALPHA: float = 0.5              # vector/BM25 融合权重
 
+    # Neo4j / KnowledgeGraph
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "medgraph123"
+    KG_ENABLED: bool = True                    # KG 检索总开关
+    KG_TOP_K: int = 3                          # KG 检索返回数
+    CM3KG_DATA_PATH: str = "/data/data/medical.csv"  # CM3KG 数据文件
+
     # Agent
     AGENT_MAX_ITERATIONS: int = 8              # 单轮最大工具调用轮数
+    JUDGE_MAX_RETRIES: int = 2                 # Judge 审核不通过的最大重试次数
 
     # JWT
     JWT_ALGORITHM: str = "HS256"

@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from typing import List, Optional, TypedDict
 
@@ -16,29 +17,52 @@ from typing_extensions import NotRequired
 
 from app.ai.llm import get_chat_model
 from app.ai.agents.tools import AgentContext, INTERP_TOOLS
+from app.ai.agents.think_filter import strip_think_tags
+from app.ai.agents.citation_matcher import inject_citations
+from app.ai.agents.judge_graph import run_judge
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 INTERP_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，为体检者撰写易懂的指标解读和健康建议。
 规则:
 1. 绿区指标一笔带过，重点解读红区和黄区
-2. 引用知识库内容时注明来源
-3. 建议具体可执行，避免笼统的"注意饮食"
-4. 不诊断疾病，只做健康风险提示
-5. 危急值指标提示"建议立即就医复查"
+2. 建议具体可执行，避免笼统的"注意饮食"
+3. 不诊断疾病，只做健康风险提示
+4. 危急值指标提示"建议立即就医复查"
+
+确定性分级规则：
+- definite：基于指标数值与参考范围的直接对比判断
+- probable：基于知识库推理但非直接数值判断
+- refused：信息不足或超出助手能力范围，不做猜测
+
+输出要求：
+- 没有知识库或报告数据支撑的结论性陈述视为编造，禁止输出
+- certainty 级别必须与结论性质匹配
 
 你有以下工具可用：
 - search_knowledge: 搜索医学知识库（对每个异常指标都应查询相关知识）
 - get_triage_rules: 获取三色分级规则
 
-对每个异常指标生成 explanation（解读）和 suggestion（建议），引用知识库注明来源。"""
+对每个异常指标生成 explanation（解读）、suggestion（建议）、certainty（确定性）、citations（引用列表，每项含 ref_id/entry_id/title/source）。引用来源由系统自动标注，你只需确保结论基于工具返回的知识。"""
+
+
+class Citation(BaseModel):
+    """引用条目"""
+    ref_id: int = Field(description="内联标记编号，如 [1] 对应 ref_id=1")
+    entry_id: Optional[int] = Field(default=None, description="知识条目 ID，知识图谱结果为 null")
+    title: str = Field(default="", description="知识条目标题")
+    source: str = Field(default="document", description="来源类型: document | knowledge_graph")
 
 
 class InterpBatchItem(BaseModel):
     """单指标的解读结果"""
     indicator_id: int = Field(description="异常指标 ID")
-    explanation: str = Field(description="指标解读文字")
-    suggestion: str = Field(description="健康建议文字")
-    knowledge_ref_ids: list[int] = Field(default_factory=list, description="解读该指标时引用的 search_knowledge 结果 entry_id 列表")
+    explanation: str = Field(description="指标解读文字，含内联 [n] 标注")
+    suggestion: str = Field(description="健康建议文字，含内联 [n] 标注")
+    certainty: str = Field(description="确定性级别: definite | probable | refused")
+    certainty_reason: str = Field(default="", description="确定性判定理由")
+    citations: list[Citation] = Field(default_factory=list, description="引用列表")
 
 
 class InterpBatchResult(BaseModel):
@@ -58,6 +82,8 @@ class InterpState(TypedDict):
     red_count: int
     yellow_count: int
     green_count: int
+    judge_result: dict
+    judge_retry_count: int
 
 
 class InterpAgentState(AgentState):
@@ -65,7 +91,7 @@ class InterpAgentState(AgentState):
 
 
 def _extract_refs_dict_from_tool_result(result) -> dict:
-    """从 ToolMessage 或 Command 解析 search_knowledge 返回的 {entry_id: ref}"""
+    """从 ToolMessage 或 Command 解析 search_knowledge 返回的 {key: ref}（含 content）"""
     msgs = []
     if isinstance(result, Command):
         msgs = (result.update or {}).get("messages", [])
@@ -79,8 +105,15 @@ def _extract_refs_dict_from_tool_result(result) -> dict:
                 if isinstance(data, list):
                     for r in data:
                         eid = r.get("entry_id")
+                        source = r.get("source", "document")
+                        content = r.get("content", "")
+                        title = r.get("title", "")
                         if eid is not None:
-                            refs_dict[eid] = {"entry_id": eid, "title": r.get("title")}
+                            refs_dict[eid] = {"entry_id": eid, "title": title, "source": source, "content": content}
+                        elif source == "knowledge_graph":
+                            kg_key = f"kg:{title}"
+                            if kg_key not in refs_dict:
+                                refs_dict[kg_key] = {"entry_id": None, "title": title, "source": "knowledge_graph", "content": content}
             except (json.JSONDecodeError, TypeError):
                 pass
     return refs_dict
@@ -120,35 +153,79 @@ def _map_structured_to_explanations(
     knowledge_results: dict,
     abnormal_indicators: list[dict],
 ) -> tuple[dict, dict]:
-    """把结构化输出映射到 explanations/refs，并补全未出现的异常指标"""
+    """把结构化输出映射到 explanations/refs，并做后置 citation 注入。
+
+    citations 不再依赖 LLM 输出的 [n] 标记，而是由 inject_citations
+    基于 embedding 相似度自动匹配 explanation/suggestion 中的句子到来源 chunk。
+    """
     explanations = {}
     mapped_refs = {}
-    for item in structured.items:
-        explanations[item.indicator_id] = {
-            "explanation": item.explanation,
-            "suggestion": item.suggestion,
-        }
-        ref_ids = set(item.knowledge_ref_ids)
-        mapped_refs[item.indicator_id] = [
-            knowledge_results.get(rid) for rid in ref_ids
-            if knowledge_results.get(rid)
-        ] or list(knowledge_results.values())
+    all_sources = list(knowledge_results.values())
 
-    all_refs = list(knowledge_results.values())
+    for item in structured.items:
+        raw_explanation = strip_think_tags(item.explanation)
+        raw_suggestion = strip_think_tags(item.suggestion)
+
+        # 后置 citation 注入：对 explanation 和 suggestion 分别做
+        annotated_explanation, cite_explanation = inject_citations(raw_explanation, all_sources)
+        annotated_suggestion, cite_suggestion = inject_citations(raw_suggestion, all_sources)
+
+        # 合并两个文本的 citations（重新编号）
+        combined_citations = _merge_citations(cite_explanation, cite_suggestion)
+
+        explanations[item.indicator_id] = {
+            "explanation": annotated_explanation,
+            "suggestion": annotated_suggestion,
+            "certainty": item.certainty,
+            "certainty_reason": item.certainty_reason,
+        }
+        mapped_refs[item.indicator_id] = combined_citations
+
+    # 补全结构化未覆盖的异常指标
     for ind in abnormal_indicators:
         iid = ind["indicator_id"]
         if iid not in explanations:
-            explanations[iid] = {"explanation": "", "suggestion": ""}
+            explanations[iid] = {"explanation": "", "suggestion": "", "certainty": "refused", "certainty_reason": "未生成解读"}
         if iid not in mapped_refs:
-            mapped_refs[iid] = all_refs
+            mapped_refs[iid] = all_sources
 
     return explanations, mapped_refs
+
+
+def _merge_citations(cite_a: list[dict], cite_b: list[dict]) -> list[dict]:
+    """合并两段文本的 citations，重新连续编号。"""
+    merged = []
+    seen_keys = set()
+    ref_map = {}  # old_ref_id -> new_ref_id
+
+    for cite in cite_a + cite_b:
+        # 用 entry_id + title 做去重 key
+        key = (cite.get("entry_id"), cite.get("title"), cite.get("source"))
+        if key not in seen_keys:
+            seen_keys.add(key)
+            new_ref_id = len(merged) + 1
+            ref_map[cite["ref_id"]] = new_ref_id
+            merged.append({
+                "ref_id": new_ref_id,
+                "entry_id": cite.get("entry_id"),
+                "title": cite.get("title", ""),
+                "source": cite.get("source", "document"),
+                "content": cite.get("content", ""),
+            })
+        else:
+            # 找到已存在的 ref_id
+            for m in merged:
+                if (m.get("entry_id"), m.get("title"), m.get("source")) == key:
+                    ref_map[cite["ref_id"]] = m["ref_id"]
+                    break
+
+    return merged
 
 
 def _agent_batch(state: InterpState, build_agent_fn, db: Session) -> dict:
     """agent_batch 节点核心逻辑（模块级，便于测试）"""
     if not state["abnormal_indicators"]:
-        return {"agent_explanations": {}, "knowledge_refs": {}}
+        return {"agent_explanations": {}, "knowledge_refs": {}, "judge_retry_count": 0}
 
     agent = build_agent_fn()
     indicator_lines = []
@@ -164,7 +241,31 @@ def _agent_batch(state: InterpState, build_agent_fn, db: Session) -> dict:
     user_content = f"""以下是本报告的异常指标，请对每个查相关医学知识并生成解读+建议：
 {indicators_text}
 
-对每个指标调用 search_knowledge 查询相关知识，然后输出结构化结果，每个指标含 indicator_id（指标 ID）、explanation（解读文字）、suggestion（建议文字）、knowledge_ref_ids（引用的 search_knowledge 结果 entry_id 列表）。"""
+对每个指标调用 search_knowledge 查询相关知识，然后输出结构化结果，每个指标含：
+- indicator_id（指标 ID）
+- explanation（解读文字，含内联 [n] 标注）
+- suggestion（建议文字，含内联 [n] 标注）
+- certainty（确定性: definite/probable/refused）
+- certainty_reason（确定性理由）
+- citations（引用列表，每项含 ref_id/entry_id/title/source）"""
+
+    # 重试时追加 judge 反馈
+    retry_count = state.get("judge_retry_count", 0)
+    if retry_count > 0:
+        judge_result = state.get("judge_result", {})
+        issues = judge_result.get("issues", [])
+        suggestions = judge_result.get("suggestions", "")
+        issues_text = "\n".join(f"- {issue}" for issue in issues)
+        user_content += f"""
+
+## 质量审核反馈（第 {retry_count} 次重试）
+上次生成存在以下问题：
+{issues_text}
+
+改进要求：
+{suggestions}
+
+请修正以上问题，重新生成解读结果。确保每个结论都有 [n] 引用标注，且 citations 列表完整。"""
 
     result = agent.invoke(
         {"messages": [HumanMessage(content=user_content)]},
@@ -176,8 +277,7 @@ def _agent_batch(state: InterpState, build_agent_fn, db: Session) -> dict:
     knowledge_results = result.get("knowledge_results", {})
 
     if structured is None:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "interp_graph agent_batch got no structured_response for report_id=%s",
             state["report_id"],
         )
@@ -186,7 +286,11 @@ def _agent_batch(state: InterpState, build_agent_fn, db: Session) -> dict:
     explanations, mapped_refs = _map_structured_to_explanations(
         structured, knowledge_results, state["abnormal_indicators"],
     )
-    return {"agent_explanations": explanations, "knowledge_refs": mapped_refs}
+    return {
+        "agent_explanations": explanations,
+        "knowledge_refs": mapped_refs,
+        "judge_retry_count": retry_count + 1,
+    }
 
 
 def build_interp_graph(hospital_id: str, db: Session):
@@ -297,6 +401,40 @@ def build_interp_graph(hospital_id: str, db: Session):
     def agent_batch(state: InterpState) -> dict:
         return _agent_batch(state, build_interp_agent, db)
 
+    def judge(state: InterpState) -> dict:
+        """Judge 审核 agent_batch 的输出。"""
+        if not state.get("abnormal_indicators"):
+            return {"judge_result": {"passed": True, "issues": [], "suggestions": ""}}
+        judge_result = run_judge(state)
+        return {"judge_result": judge_result}
+
+    def error_handler(state: InterpState) -> dict:
+        """Judge 未通过且重试次数用尽，标记失败，留待人工处理。"""
+        from app.modules.interpretation.models import ReportInterpretation
+
+        interp = db.query(ReportInterpretation).filter(
+            ReportInterpretation.report_id == state["report_id"],
+            ReportInterpretation.status == "processing",
+        ).first()
+        if interp:
+            interp.retry_count += 1
+            interp.status = "failed"
+            interp.summary_text = f"Judge 审核未通过（重试 {state['judge_retry_count']} 次）: " + \
+                                  "; ".join(state["judge_result"].get("issues", []))
+            db.commit()
+        logger.warning("Report %s judge failed after %d retries, needs manual review",
+                       state["report_id"], state["judge_retry_count"])
+        return {}
+
+    def after_judge(state: InterpState) -> str:
+        """条件边：根据 judge 结果决定下一步"""
+        judge_result = state.get("judge_result", {})
+        if judge_result.get("passed", True):
+            return "persist"
+        if state.get("judge_retry_count", 0) >= settings.JUDGE_MAX_RETRIES:
+            return "error_handler"
+        return "agent_batch"
+
     def persist(state: InterpState) -> dict:
         from app.modules.interpretation.models import (
             ReportInterpretation, IndicatorJudgment,
@@ -332,6 +470,8 @@ def build_interp_graph(hospital_id: str, db: Session):
                 explanation=exp_data.get("explanation", ""),
                 suggestion=exp_data.get("suggestion", ""),
                 knowledge_refs=refs or None,
+                certainty=exp_data.get("certainty", ""),
+                certainty_reason=exp_data.get("certainty_reason", ""),
             ))
 
         interp.red_count = state["red_count"]
@@ -354,13 +494,21 @@ def build_interp_graph(hospital_id: str, db: Session):
     g.add_node("run_rules", run_rules)
     g.add_node("filter_abnormal", filter_abnormal)
     g.add_node("agent_batch", agent_batch)
+    g.add_node("judge", judge)
+    g.add_node("error_handler", error_handler)
     g.add_node("persist", persist)
     g.set_entry_point("load_indicators")
     g.add_edge("load_indicators", "run_rules")
     g.add_edge("run_rules", "filter_abnormal")
     g.add_edge("filter_abnormal", "agent_batch")
-    g.add_edge("agent_batch", "persist")
+    g.add_edge("agent_batch", "judge")
+    g.add_conditional_edges("judge", after_judge, {
+        "persist": "persist",
+        "agent_batch": "agent_batch",
+        "error_handler": "error_handler",
+    })
     g.add_edge("persist", END)
+    g.add_edge("error_handler", END)
     return g.compile()
 
 
@@ -394,6 +542,8 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
             "red_count": 0,
             "yellow_count": 0,
             "green_count": 0,
+            "judge_result": {},
+            "judge_retry_count": 0,
         })
         return final_state
     except Exception as e:

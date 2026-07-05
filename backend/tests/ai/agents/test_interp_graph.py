@@ -47,34 +47,48 @@ def test_agent_batch_empty_abnormal_returns_empty():
         MagicMock(),
         MagicMock(),
     )
-    assert result == {"agent_explanations": {}, "knowledge_refs": {}}
+    assert result["agent_explanations"] == {}
+    assert result["knowledge_refs"] == {}
+    assert result["judge_retry_count"] == 0
 
 
 def test_map_structured_to_explanations():
     """_map_structured_to_explanations 正确映射结构化输出到 explanations/refs"""
     from app.ai.agents.interp_graph import (
-        _map_structured_to_explanations, InterpBatchItem, InterpBatchResult,
+        _map_structured_to_explanations, InterpBatchItem, InterpBatchResult, Citation,
     )
+    from unittest.mock import patch
+
     structured = InterpBatchResult(items=[
-        InterpBatchItem(indicator_id=10, explanation="解读A", suggestion="建议A", knowledge_ref_ids=[101]),
-        InterpBatchItem(indicator_id=20, explanation="解读B", suggestion="建议B", knowledge_ref_ids=[201, 202]),
+        InterpBatchItem(indicator_id=10, explanation="解读A", suggestion="建议A",
+                        certainty="definite", certainty_reason="数值对比",
+                        citations=[Citation(ref_id=1, entry_id=101, title="知识A", source="document")]),
+        InterpBatchItem(indicator_id=20, explanation="解读B", suggestion="建议B",
+                        certainty="probable", certainty_reason="推理",
+                        citations=[Citation(ref_id=1, entry_id=201, title="知识B1", source="document"),
+                                   Citation(ref_id=2, entry_id=202, title="知识B2", source="document")]),
     ])
     knowledge_results = {
-        101: {"entry_id": 101, "title": "知识A"},
-        201: {"entry_id": 201, "title": "知识B1"},
-        202: {"entry_id": 202, "title": "知识B2"},
+        101: {"entry_id": 101, "title": "知识A", "source": "document", "content": "解读A相关内容"},
+        201: {"entry_id": 201, "title": "知识B1", "source": "document", "content": "解读B相关"},
+        202: {"entry_id": 202, "title": "知识B2", "source": "document", "content": "建议B相关"},
     }
     abnormal = [{"indicator_id": 10}, {"indicator_id": 20}, {"indicator_id": 30}]
 
-    explanations, mapped_refs = _map_structured_to_explanations(structured, knowledge_results, abnormal)
+    # inject_citations 调用 embedding 服务，mock 为返回空（跳过标注）
+    with patch("app.ai.agents.citation_matcher.inject_citations") as mock_inject:
+        mock_inject.side_effect = lambda text, sources, **kw: (text, [])
+        explanations, mapped_refs = _map_structured_to_explanations(structured, knowledge_results, abnormal)
 
-    assert explanations[10] == {"explanation": "解读A", "suggestion": "建议A"}
-    assert explanations[20] == {"explanation": "解读B", "suggestion": "建议B"}
-    # 30 未在结构化输出，补全为空
-    assert explanations[30] == {"explanation": "", "suggestion": ""}
-    # refs 是 knowledge_ref_ids 反查
-    assert mapped_refs[10] == [{"entry_id": 101, "title": "知识A"}]
-    assert mapped_refs[20] == [{"entry_id": 201, "title": "知识B1"}, {"entry_id": 202, "title": "知识B2"}]
+    assert explanations[10]["explanation"] == "解读A"
+    assert explanations[10]["suggestion"] == "建议A"
+    assert explanations[10]["certainty"] == "definite"
+    assert explanations[20]["certainty"] == "probable"
+    # 30 未在结构化输出，补全为空 + refused
+    assert explanations[30]["explanation"] == ""
+    assert explanations[30]["certainty"] == "refused"
+    # refs 来自 inject_citations 返回（mock 返回空）
+    assert mapped_refs[10] == []
     # 30 fallback 用全部 knowledge_results
     assert len(mapped_refs[30]) == 3
 
@@ -88,7 +102,7 @@ def test_interp_knowledge_middleware_extracts_refs_dict():
 
     mw = InterpKnowledgeMiddleware()
     tool_msg = ToolMessage(
-        content=json.dumps([{"entry_id": 101, "title": "知识A", "content": "...", "score": 0.9}]),
+        content=json.dumps([{"entry_id": 101, "title": "知识A", "content": "...", "score": 0.9, "source": "document"}]),
         tool_call_id="call_1",
     )
     request = MagicMock()
@@ -97,6 +111,10 @@ def test_interp_knowledge_middleware_extracts_refs_dict():
 
     result = mw.wrap_tool_call(request, handler)
     assert isinstance(result, Command)
-    assert result.update["knowledge_results"] == {101: {"entry_id": 101, "title": "知识A"}}
+    kr = result.update["knowledge_results"]
+    assert 101 in kr
+    assert kr[101]["entry_id"] == 101
+    assert kr[101]["title"] == "知识A"
+    assert kr[101]["source"] == "document"
 
 

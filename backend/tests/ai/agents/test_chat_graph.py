@@ -40,7 +40,7 @@ def test_knowledge_refs_middleware_extracts_refs():
 
     mw = KnowledgeRefsMiddleware()
     tool_msg = ToolMessage(
-        content=json.dumps([{"entry_id": 1, "title": "血糖知识", "content": "...", "score": 0.9}]),
+        content=json.dumps([{"entry_id": 1, "title": "血糖知识", "content": "...", "score": 0.9, "source": "document"}]),
         tool_call_id="call_1",
     )
     request = MagicMock()
@@ -49,7 +49,11 @@ def test_knowledge_refs_middleware_extracts_refs():
 
     result = mw.wrap_tool_call(request, handler)
     assert isinstance(result, Command)
-    assert result.update["knowledge_refs"] == [{"entry_id": 1, "title": "血糖知识"}]
+    refs = result.update["knowledge_refs"]
+    assert len(refs) == 1
+    assert refs[0]["entry_id"] == 1
+    assert refs[0]["title"] == "血糖知识"
+    assert refs[0]["source"] == "document"
 
 
 def test_knowledge_refs_middleware_ignores_other_tools():
