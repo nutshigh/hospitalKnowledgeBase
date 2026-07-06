@@ -126,3 +126,38 @@ def test_report_interpretation_has_summary_refs_and_quality_note():
     assert "quality_note" in cols
 
 
+def test_interpretation_response_schema_fields():
+    """新 InterpretationResponse 含 summaries/references/quality_note，无 summary_text"""
+    from app.modules.interpretation.schemas import InterpretationResponse
+    fields = InterpretationResponse.model_fields
+    assert "summaries" in fields
+    assert "references" in fields
+    assert "quality_note" in fields
+    assert "summary_text" not in fields
+
+
+def test_indicator_judgment_schema_no_explanation():
+    """IndicatorJudgmentSchema 不再含 explanation/suggestion，含 unit/ref_range"""
+    from app.modules.interpretation.schemas import IndicatorJudgmentSchema
+    fields = IndicatorJudgmentSchema.model_fields
+    assert "explanation" not in fields
+    assert "suggestion" not in fields
+    assert "unit" in fields
+    assert "ref_range_low" in fields
+    assert "ref_range_high" in fields
+
+
+def test_parse_summary_text_roundtrip():
+    """parse_summary_text 把 5 节 JSON 解析回 schema，空输入返回空 5 节"""
+    from app.modules.interpretation.schemas import parse_summary_text, InterpretationReportSchema
+    raw = {
+        "overall_summary": "整体评估", "abnormal_focus": "异常解读",
+        "trend_note": "趋势", "suggestions": "建议", "risk_alert": "风险"
+    }
+    parsed = parse_summary_text(__import__("json").dumps(raw))
+    assert isinstance(parsed, InterpretationReportSchema)
+    assert parsed.overall_summary == "整体评估"
+    empty = parse_summary_text(None)
+    assert empty.overall_summary == ""
+
+
