@@ -161,3 +161,42 @@ def test_parse_summary_text_roundtrip():
     assert empty.overall_summary == ""
 
 
+def test_judge_review_format_for_comprehensive_report():
+    """_format_for_review 输出综合报告 5 节 + 异常指标 + 引用文本"""
+    from app.ai.agents.judge_graph import _format_for_review
+    from app.ai.agents.interp_graph import InterpretationReport
+    state = {
+        "report": InterpretationReport(
+            overall_summary="整体评估内容", abnormal_focus="ALT 升高 [1]",
+            trend_note="", suggestions="建议戒酒", risk_alert="",
+        ),
+        "references": [{"ref_id": 1, "entry_id": 12, "title": "ALT 知识", "source": "document"}],
+        "abnormal_indicators": [{"indicator_id": 5, "item_name": "ALT", "result_value": "62",
+                                  "unit": "U/L", "deviation": "high", "color_level": "yellow"}],
+    }
+    text = _format_for_review(state)
+    assert "整体评估内容" in text
+    assert "ALT 升高" in text
+    assert "ALT" in text
+    assert "62" in text
+    assert "[1]" in text
+    assert "ALT 知识" in text
+
+
+def test_run_judge_passes_when_agent_passthrough():
+    """Judge agent 抛异常时 run_judge 返回 passed=True，不阻塞"""
+    from unittest.mock import patch
+    from app.ai.agents.judge_graph import run_judge
+    from app.ai.agents.interp_graph import InterpretationReport
+    state = {
+        "report": InterpretationReport(overall_summary="x", abnormal_focus="x",
+                                        trend_note="", suggestions="", risk_alert=""),
+        "references": [],
+        "abnormal_indicators": [],
+    }
+    with patch("app.ai.agents.judge_graph.build_judge_agent") as mock_b:
+        mock_b.side_effect = RuntimeError("boom")
+        result = run_judge(state)
+    assert result["passed"] is True
+
+

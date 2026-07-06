@@ -1,11 +1,9 @@
-"""LLM as a Judge — 报告解读质量审核 Agent。
+"""LLM as a Judge — 综合解读报告质量审核 Agent。
 
-独立 Agent，用 MedGo 但有自己的 system prompt 和角色。
-审核生成 Agent 的输出：可追溯性、编造检测、确定性合理性。
-不通过时给出 issues + suggestions，供生成 Agent 回滚重试。
+审核 5 节结构化报告，放宽标准：主要结论有引用、无明显编造、结构完整即通过。
+最多重试 1 次（实际重试逻辑在 interp_graph 的 after_judge 控制）。
 """
 import logging
-from typing import List
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
@@ -16,32 +14,28 @@ from app.ai.llm import get_chat_model
 
 logger = logging.getLogger(__name__)
 
-JUDGE_SYSTEM_PROMPT = """你是体检报告解读质量审核员。你的职责是审查 AI 生成的解读报告，判断质量是否合格。
+JUDGE_SYSTEM_PROMPT = """你是体检报告解读质量审核员。审查的是一份综合性的 AI 解读报告（5 节 markdown），不是逐指标的解释。
 
-审核标准：
-1. 可追溯性：explanation 和 suggestion 中的每个结论性陈述是否有对应的 [n] 标记，且该 [n] 在 citations 列表中有对应条目
-2. 编造检测：是否存在没有引用支撑的结论性陈述（有结论但无 [n] 标记，或 [n] 在 citations 中找不到对应条目）
-3. 确定性合理性：certainty 级别是否与结论性质匹配
-   - definite 应仅用于基于明确指标数值与参考范围直接对比的判断
-   - probable 用于基于知识库推理的结论
-   - refused 用于信息不足的情况
+审核标准（放宽）：
+1. 结构完整：5 节均非空（trend_note 允许为空，仅在首份报告无历史时）。
+2. 主要结论可追溯：abnormal_focus / suggestions / risk_alert 中的关键结论应能对应到 references 列表中的 [n] 标记。
+3. 无明显编造：不要凭空断言数值或疾病；如某节陈述与上传的异常指标无关，视为问题。
+4. 引用合理性：references 中每条 entry_id/title 应能在 abnormal_focus/suggestions 等节被 [n] 提及。
 
 判断结果：
-- passed=true：所有结论可追溯，无编造，确定性合理
-- passed=false：列出具体问题（哪条指标的哪个结论缺少引用/编造/确定性不合理），给出改进建议
+- passed=true：结构完整且无上述问题。
+- passed=false：列出具体问题（哪节哪句缺引用/编造），并给改进建议。
 
-注意：只审核有 explanation 内容的指标，空 explanation 的指标跳过。"""
+注意：放宽评判，10 次里有 8 次应该通过，避免过度否定。"""
 
 
 class JudgeResult(BaseModel):
-    """Judge 审核结果"""
     passed: bool = Field(description="审核是否通过")
-    issues: list[str] = Field(default_factory=list, description="具体问题列表，如 '指标ID:5 的 explanation 中血压偏高缺少引用标注'")
-    suggestions: str = Field(default="", description="改进建议，回传给生成 Agent")
+    issues: list[str] = Field(default_factory=list, description="具体问题列表")
+    suggestions: str = Field(default="", description="改进建议")
 
 
 def build_judge_agent():
-    """构造 Judge Agent（无工具，纯文本审查 + 结构化输出）"""
     model = get_chat_model(streaming=False)
     model.max_tokens = 2048
     return create_agent(
@@ -53,55 +47,46 @@ def build_judge_agent():
 
 
 def _format_for_review(state: dict) -> str:
-    """把 agent_batch 的输出格式化为审查输入文本。"""
-    lines = ["请审核以下体检报告解读结果：\n"]
-    explanations = state.get("agent_explanations", {})
-    refs = state.get("knowledge_refs", {})
-    abnormal = state.get("abnormal_indicators", [])
+    report = state.get("report")
+    references = state.get("references", []) or []
+    abnormal = state.get("abnormal_indicators", []) or []
 
-    for ind in abnormal:
-        iid = ind["indicator_id"]
-        exp_data = explanations.get(iid, {})
-        explanation = exp_data.get("explanation", "")
-        suggestion = exp_data.get("suggestion", "")
-        certainty = exp_data.get("certainty", "")
-        certainty_reason = exp_data.get("certainty_reason", "")
-        item_refs = refs.get(iid, [])
+    lines = ["请审核以下综合解读报告：\n"]
+    if abnormal:
+        lines.append("## 异常指标（输入）")
+        for ind in abnormal:
+            lines.append(f"- {ind.get('item_name')}: 值 {ind.get('result_value')}{ind.get('unit','')}, "
+                         f"参考 {ind.get('ref_range_low','-')}-{ind.get('ref_range_high','-')}, "
+                         f"{ind.get('deviation')}, {ind.get('color_level')}区")
+        lines.append("")
 
-        if not explanation:
-            continue
+    if report is not None:
+        lines.append("## 综合报告（5 节）")
+        lines.append(f"### 整体评估\n{getattr(report, 'overall_summary', '')}")
+        lines.append(f"### 重点异常解读\n{getattr(report, 'abnormal_focus', '')}")
+        lines.append(f"### 历年趋势\n{getattr(report, 'trend_note', '')}")
+        lines.append(f"### 健康建议\n{getattr(report, 'suggestions', '')}")
+        lines.append(f"### 风险提示\n{getattr(report, 'risk_alert', '')}")
+        lines.append("")
 
-        lines.append(f"## 指标 ID: {iid} ({ind['item_name']})")
-        lines.append(f"值: {ind['result_value']}{ind.get('unit', '')}, "
-                     f"参考区间: {ind.get('ref_range_low', '-')}-{ind.get('ref_range_high', '-')}, "
-                     f"{ind['deviation']}, {ind['color_level']}区")
-        lines.append(f"certainty: {certainty}")
-        lines.append(f"certainty_reason: {certainty_reason}")
-        lines.append(f"explanation: {explanation}")
-        lines.append(f"suggestion: {suggestion}")
-        lines.append("citations:")
-        for ref in item_refs:
-            lines.append(f"  [{ref.get('ref_id', '?')}] entry_id={ref.get('entry_id')}, "
-                         f"title={ref.get('title', '')}, source={ref.get('source', '')}")
+    if references:
+        lines.append("## 参考来源列表")
+        for ref in references:
+            lines.append(f"- [{ref.get('ref_id')}] entry_id={ref.get('entry_id')}, "
+                         f"title={ref.get('title','')}, source={ref.get('source','')}")
         lines.append("")
 
     return "\n".join(lines)
 
 
 def run_judge(state: dict) -> dict:
-    """执行 Judge 审核，返回 {passed, issues, suggestions} dict。
-
-    Judge 调用失败时视为通过（不阻塞流程）。
-    """
     review_text = _format_for_review(state)
     if not review_text.strip():
         return {"passed": True, "issues": [], "suggestions": ""}
 
     try:
         agent = build_judge_agent()
-        result = agent.invoke(
-            {"messages": [HumanMessage(content=review_text)]},
-        )
+        result = agent.invoke({"messages": [HumanMessage(content=review_text)]})
         judge_result = result.get("structured_response")
         if judge_result is None:
             logger.warning("Judge returned no structured_response, assuming passed")
