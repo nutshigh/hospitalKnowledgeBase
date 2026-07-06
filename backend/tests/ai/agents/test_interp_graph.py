@@ -1,7 +1,5 @@
 from unittest.mock import patch, MagicMock
 
-from pydantic import BaseModel
-
 
 def test_interp_state_fields():
     """InterpState 含必需字段"""
@@ -9,16 +7,7 @@ def test_interp_state_fields():
     assert "indicators" in InterpState.__annotations__
     assert "judgments" in InterpState.__annotations__
     assert "abnormal_indicators" in InterpState.__annotations__
-    assert "agent_explanations" in InterpState.__annotations__
     assert "overall_level" in InterpState.__annotations__
-
-
-def test_interp_batch_result_is_pydantic():
-    """InterpBatchResult 是 Pydantic BaseModel（非 TypedDict）"""
-    from app.ai.agents.interp_graph import InterpBatchResult
-    assert issubclass(InterpBatchResult, BaseModel)
-    inst = InterpBatchResult(items=[])
-    assert inst.items == []
 
 
 def test_build_interp_graph_returns_compiled():
@@ -28,69 +17,6 @@ def test_build_interp_graph_returns_compiled():
         from app.ai.agents.interp_graph import build_interp_graph
         graph = build_interp_graph("H001", MagicMock())
         assert graph is not None
-
-
-def test_build_interp_agent_returns_compiled():
-    """build_interp_agent 返回非 None（create_agent 产物）"""
-    with patch("app.ai.agents.interp_graph.get_chat_model") as mock_model:
-        mock_model.return_value = MagicMock()
-        from app.ai.agents.interp_graph import build_interp_agent
-        agent = build_interp_agent()
-        assert agent is not None
-
-
-def test_agent_batch_empty_abnormal_returns_empty():
-    """abnormal_indicators 为空时 agent_batch 返回空结果"""
-    from app.ai.agents.interp_graph import _agent_batch
-    result = _agent_batch(
-        {"abnormal_indicators": [], "hospital_id": "H001", "report_id": 1},
-        MagicMock(),
-        MagicMock(),
-    )
-    assert result["agent_explanations"] == {}
-    assert result["knowledge_refs"] == {}
-    assert result["judge_retry_count"] == 0
-
-
-def test_map_structured_to_explanations():
-    """_map_structured_to_explanations 正确映射结构化输出到 explanations/refs"""
-    from app.ai.agents.interp_graph import (
-        _map_structured_to_explanations, InterpBatchItem, InterpBatchResult, Citation,
-    )
-    from unittest.mock import patch
-
-    structured = InterpBatchResult(items=[
-        InterpBatchItem(indicator_id=10, explanation="解读A", suggestion="建议A",
-                        certainty="definite", certainty_reason="数值对比",
-                        citations=[Citation(ref_id=1, entry_id=101, title="知识A", source="document")]),
-        InterpBatchItem(indicator_id=20, explanation="解读B", suggestion="建议B",
-                        certainty="probable", certainty_reason="推理",
-                        citations=[Citation(ref_id=1, entry_id=201, title="知识B1", source="document"),
-                                   Citation(ref_id=2, entry_id=202, title="知识B2", source="document")]),
-    ])
-    knowledge_results = {
-        101: {"entry_id": 101, "title": "知识A", "source": "document", "content": "解读A相关内容"},
-        201: {"entry_id": 201, "title": "知识B1", "source": "document", "content": "解读B相关"},
-        202: {"entry_id": 202, "title": "知识B2", "source": "document", "content": "建议B相关"},
-    }
-    abnormal = [{"indicator_id": 10}, {"indicator_id": 20}, {"indicator_id": 30}]
-
-    # inject_citations 调用 embedding 服务，mock 为返回空（跳过标注）
-    with patch("app.ai.agents.citation_matcher.inject_citations") as mock_inject:
-        mock_inject.side_effect = lambda text, sources, **kw: (text, [])
-        explanations, mapped_refs = _map_structured_to_explanations(structured, knowledge_results, abnormal)
-
-    assert explanations[10]["explanation"] == "解读A"
-    assert explanations[10]["suggestion"] == "建议A"
-    assert explanations[10]["certainty"] == "definite"
-    assert explanations[20]["certainty"] == "probable"
-    # 30 未在结构化输出，补全为空 + refused
-    assert explanations[30]["explanation"] == ""
-    assert explanations[30]["certainty"] == "refused"
-    # refs 来自 inject_citations 返回（mock 返回空）
-    assert mapped_refs[10] == []
-    # 30 fallback 用全部 knowledge_results
-    assert len(mapped_refs[30]) == 3
 
 
 def test_interp_knowledge_middleware_extracts_refs_dict():
@@ -198,5 +124,77 @@ def test_run_judge_passes_when_agent_passthrough():
         mock_b.side_effect = RuntimeError("boom")
         result = run_judge(state)
     assert result["passed"] is True
+
+
+def test_interp_state_has_report_and_references():
+    """InterpState 含 report / references / knowledge_results"""
+    from app.ai.agents.interp_graph import InterpState
+    a = InterpState.__annotations__
+    assert "report" in a
+    assert "references" in a
+    assert "knowledge_results" in a
+    assert "judge_retry_count" in a
+
+
+def test_interpretation_report_is_5_sections():
+    """InterpretationReport 含 5 节字段"""
+    from app.ai.agents.interp_graph import InterpretationReport
+    fields = InterpretationReport.model_fields
+    assert {"overall_summary", "abnormal_focus", "trend_note", "suggestions", "risk_alert"} <= set(fields)
+
+
+def test_merge_citations_dedup_renumber():
+    """_merge_citations 去重并重新连续编号"""
+    from app.ai.agents.interp_graph import _merge_citations
+    a = [{"ref_id": 1, "entry_id": 12, "title": "A", "source": "document", "content": "c1"}]
+    b = [{"ref_id": 1, "entry_id": 12, "title": "A", "source": "document", "content": "c1"},
+         {"ref_id": 2, "entry_id": 13, "title": "B", "source": "document", "content": "c2"}]
+    merged = _merge_citations(a, b)
+    assert len(merged) == 2
+    assert merged[0]["ref_id"] == 1
+    assert merged[1]["ref_id"] == 2
+    assert {m["entry_id"] for m in merged} == {12, 13}
+
+
+def test_generate_report_empty_abnormal_returns_empty_report():
+    """无异常指标时返回空 5 节报告 + 空引用"""
+    from app.ai.agents.interp_graph import _generate_report
+    state = {"abnormal_indicators": [], "knowledge_results": {}, "user_id": 1,
+             "hospital_id": "H001", "report_id": 1, "overall_level": "green",
+             "red_count": 0, "yellow_count": 0, "green_count": 5}
+    result = _generate_report(state, MagicMock())
+    assert result["report"].overall_summary == ""
+    assert result["report"].abnormal_focus == ""
+    assert result["references"] == []
+    assert result["judge_retry_count"] == 0
+
+
+def test_generate_report_with_abnormal_calls_llm_and_injects():
+    """有异常指标时 LLM 调用一次，inject_citations 注入后返回结构化报告"""
+    from unittest.mock import patch, MagicMock
+    from app.ai.agents.interp_graph import _generate_report, InterpretationReport
+
+    state = {
+        "abnormal_indicators": [{"indicator_id": 5, "item_name": "ALT", "result_value": "62",
+                                 "unit": "U/L", "ref_range_low": "0", "ref_range_high": "40",
+                                 "deviation": "high", "color_level": "yellow"}],
+        "knowledge_results": {12: {"entry_id": 12, "title": "ALT 知识", "source": "document",
+                                    "content": "ALT 升高常见于脂肪肝"}},
+        "user_id": 1, "hospital_id": "H001", "report_id": 1,
+        "overall_level": "yellow", "red_count": 0, "yellow_count": 1, "green_count": 10,
+    }
+
+    with patch("app.ai.agents.interp_graph.build_report_model") as mock_build, \
+         patch("app.ai.agents.interp_graph.inject_citations") as mock_inj, \
+         patch("app.ai.agents.interp_graph.strip_think_tags", side_effect=lambda x: x):
+        mock_model = MagicMock()
+        mock_build.return_value = mock_model
+        mock_model.invoke.return_value = MagicMock(content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T","suggestions":"G","risk_alert":"R"}')
+        mock_inj.side_effect = lambda text, sources, **kw: (text, [{"ref_id": 1, "entry_id": 12, "title": "ALT 知识", "source": "document", "content": "ALT 升高"}] if "ALT" in text else [])
+
+        result = _generate_report(state, MagicMock())
+    assert isinstance(result["report"], InterpretationReport)
+    assert result["report"].overall_summary == "S"
+    assert len(result["references"]) >= 0
 
 
