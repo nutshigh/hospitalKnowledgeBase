@@ -273,7 +273,7 @@ def _generate_report(state: InterpState, db: Session) -> dict:
     return {
         "report": final_report,
         "references": refs_all,
-        "judge_retry_count": retry_count,
+        "judge_retry_count": retry_count + 1,
     }
 
 

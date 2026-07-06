@@ -198,3 +198,30 @@ def test_generate_report_with_abnormal_calls_llm_and_injects():
     assert len(result["references"]) >= 0
 
 
+def test_generate_report_increments_judge_retry_count_on_abnormal_branch():
+    """非空 abnormal_indicators 分支必须把 judge_retry_count +1，否则 after_judge 重试上限永远不会触发"""
+    from unittest.mock import patch, MagicMock
+    from app.ai.agents.interp_graph import _generate_report
+
+    state = {
+        "abnormal_indicators": [{"indicator_id": 5, "item_name": "ALT", "result_value": "62",
+                                 "unit": "U/L", "ref_range_low": "0", "ref_range_high": "40",
+                                 "deviation": "high", "color_level": "yellow"}],
+        "knowledge_results": {12: {"entry_id": 12, "title": "ALT 知识", "source": "document",
+                                    "content": "ALT 升高"}},
+        "user_id": 1, "hospital_id": "H001", "report_id": 1,
+        "overall_level": "yellow", "red_count": 0, "yellow_count": 1, "green_count": 10,
+        "judge_retry_count": 0,
+    }
+
+    with patch("app.ai.agents.interp_graph.build_report_model") as mock_build, \
+         patch("app.ai.agents.interp_graph.inject_citations") as mock_inj, \
+         patch("app.ai.agents.interp_graph.strip_think_tags", side_effect=lambda x: x):
+        mock_model = MagicMock()
+        mock_build.return_value = mock_model
+        mock_model.invoke.return_value = MagicMock(
+            content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T","suggestions":"G","risk_alert":"R"}')
+        mock_inj.side_effect = lambda text, sources, **kw: (text, [])
+        result = _generate_report(state, MagicMock())
+    assert result["judge_retry_count"] == 1
+
