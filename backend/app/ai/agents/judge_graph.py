@@ -43,6 +43,7 @@ class JudgeResult(BaseModel):
 def build_judge_agent():
     """构造 Judge Agent（无工具，纯文本审查 + 结构化输出）"""
     model = get_chat_model(streaming=False)
+    model.max_tokens = 2048
     return create_agent(
         model=model,
         tools=[],

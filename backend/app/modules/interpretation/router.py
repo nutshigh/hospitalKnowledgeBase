@@ -2,22 +2,19 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_hospital_db
-from app.middleware.hospital_context import get_current_hospital_id
+from app.core.dependencies import get_current_user, CurrentUser
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.interpretation import schemas, service
 
 router = APIRouter()
 
 
-def _get_hospital_id() -> str:
-    hid = get_current_hospital_id()
-    if not hid:
+def _get_db(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if not current_user.hospital_id:
         raise ValidationException(detail="Hospital context required")
-    return hid
-
-
-def _get_db(hospital_id: str = Depends(_get_hospital_id)):
-    gen = get_hospital_db(hospital_id)
+    gen = get_hospital_db(current_user.hospital_id)
     db = next(gen)
     try:
         yield db
@@ -30,9 +27,9 @@ def _get_db(hospital_id: str = Depends(_get_hospital_id)):
 @router.get("/high-risk/list", response_model=schemas.HighRiskResponse)
 def get_high_risk_list(
     db: Session = Depends(_get_db),
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    items = service.get_high_risk_list(db, hospital_id)
+    items = service.get_high_risk_list(db, current_user.hospital_id)
     return {"items": items, "total": len(items)}
 
 

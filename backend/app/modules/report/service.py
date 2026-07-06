@@ -128,8 +128,16 @@ def process_task(db: Session, task_id: int, hospital_id: str):
 
     except Exception as e:
         task.retry_count += 1
-        task.status = "failed" if task.retry_count >= 3 else "queued"
         task.error_message = str(e)
+        if task.retry_count >= 3:
+            task.status = "failed"
+        else:
+            task.status = "queued"
+            db.commit()
+            rabbitmq.publish(TaskMessage(
+                task_type="parsing", hospital_id=hospital_id, priority=task.priority,
+                payload={"task_id": task.id, "hospital_id": hospital_id, "file_path": task.original_file_path},
+            ))
         db.commit()
 
 
@@ -182,15 +190,19 @@ def _parse_text_with_llm(text: str) -> dict:
 6. 没有的字段填 null
 
 体检报告文本：
-{text[:12000]}
+{text[:8000]}
 """
     model = get_chat_model()
-    resp = model.invoke([("user", prompt)], max_tokens=4096).content
+    resp = model.invoke([("user", prompt)], max_tokens=2048).content
     import json, re
+    from json_repair import repair_json
     match = re.search(r'\{[\s\S]*\}', resp)
     if not match:
         raise ValueError(f"LLM did not return valid JSON: {resp[:200]}")
-    data = json.loads(match.group())
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError:
+        data = json.loads(repair_json(match.group()))
     # Ensure indicators have ref_low/ref_high
     for ind in data.get("indicators", []):
         ref = ind.pop("ref_range", None)

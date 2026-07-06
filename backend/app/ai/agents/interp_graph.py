@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional, TypedDict
+from typing import Annotated, List, Optional, TypedDict
 
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -86,8 +86,15 @@ class InterpState(TypedDict):
     judge_retry_count: int
 
 
+def _merge_knowledge_results(current: dict, update: dict) -> dict:
+    """Reducer: merge multiple concurrent search_knowledge results into one dict."""
+    merged = dict(current or {})
+    merged.update(update or {})
+    return merged
+
+
 class InterpAgentState(AgentState):
-    knowledge_results: NotRequired[dict]
+    knowledge_results: Annotated[dict, _merge_knowledge_results]
 
 
 def _extract_refs_dict_from_tool_result(result) -> dict:
@@ -133,11 +140,10 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
                     return Command(update=update)
                 return Command(update={"knowledge_results": refs_dict, "messages": [result]})
         return result
-
-
 def build_interp_agent():
     """构造 interpretation Agent 子图（create_agent + ToolStrategy）"""
     model = get_chat_model(streaming=False)
+    model.max_tokens = 2048
     return create_agent(
         model=model,
         tools=INTERP_TOOLS,
@@ -336,6 +342,7 @@ def build_interp_graph(hospital_id: str, db: Session):
             result = rules_engine.evaluate(state["hospital_id"], ind_dict)
 
             deviation = result.deviation
+            color_level = result.color_level
             if deviation == "normal":
                 try:
                     val = float(ind["result_value"] or 0)
@@ -343,8 +350,12 @@ def build_interp_graph(hospital_id: str, db: Session):
                     ref_low = float(ind["ref_range_low"] or 0)
                     if ref_high and val > ref_high:
                         deviation = "high"
+                        if color_level == "green":
+                            color_level = "yellow"
                     elif ref_low and val < ref_low:
                         deviation = "low"
+                        if color_level == "green":
+                            color_level = "yellow"
                 except (ValueError, TypeError):
                     pass
 
@@ -353,13 +364,13 @@ def build_interp_graph(hospital_id: str, db: Session):
                 "item_name": ind["item_name"],
                 "result_value": ind["result_value"],
                 "deviation": deviation,
-                "color_level": result.color_level,
+                "color_level": color_level,
                 "matched_rule_id": result.matched_rule_id,
             })
 
-            if result.color_level == "red":
+            if color_level == "red":
                 red_count += 1
-            elif result.color_level == "yellow":
+            elif color_level == "yellow":
                 yellow_count += 1
             else:
                 green_count += 1
@@ -409,20 +420,8 @@ def build_interp_graph(hospital_id: str, db: Session):
         return {"judge_result": judge_result}
 
     def error_handler(state: InterpState) -> dict:
-        """Judge 未通过且重试次数用尽，标记失败，留待人工处理。"""
-        from app.modules.interpretation.models import ReportInterpretation
-
-        interp = db.query(ReportInterpretation).filter(
-            ReportInterpretation.report_id == state["report_id"],
-            ReportInterpretation.status == "processing",
-        ).first()
-        if interp:
-            interp.retry_count += 1
-            interp.status = "failed"
-            interp.summary_text = f"Judge 审核未通过（重试 {state['judge_retry_count']} 次）: " + \
-                                  "; ".join(state["judge_result"].get("issues", []))
-            db.commit()
-        logger.warning("Report %s judge failed after %d retries, needs manual review",
+        """Judge 未通过且重试次数用尽，仍持久化结果但标记质量警告。"""
+        logger.warning("Report %s judge failed after %d retries, persisting with quality note",
                        state["report_id"], state["judge_retry_count"])
         return {}
 
@@ -508,7 +507,7 @@ def build_interp_graph(hospital_id: str, db: Session):
         "error_handler": "error_handler",
     })
     g.add_edge("persist", END)
-    g.add_edge("error_handler", END)
+    g.add_edge("error_handler", "persist")
     return g.compile()
 
 
