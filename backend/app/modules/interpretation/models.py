@@ -12,6 +12,8 @@ class ReportInterpretation(Base):
     yellow_count = Column(Integer, nullable=False, default=0)
     green_count = Column(Integer, nullable=False, default=0)
     summary_text = Column(Text, nullable=True)
+    summary_refs = Column(JSON, nullable=True)
+    quality_note = Column(String(255), nullable=True)
     status = Column(String(20), nullable=False, default="pending")
     retry_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=func.now(), nullable=False)

@@ -118,3 +118,11 @@ def test_interp_knowledge_middleware_extracts_refs_dict():
     assert kr[101]["source"] == "document"
 
 
+def test_report_interpretation_has_summary_refs_and_quality_note():
+    """ReportInterpretation 模型含 summary_refs / quality_note 字段"""
+    from app.modules.interpretation.models import ReportInterpretation
+    cols = {c.name for c in ReportInterpretation.__table__.columns}
+    assert "summary_refs" in cols
+    assert "quality_note" in cols
+
+
