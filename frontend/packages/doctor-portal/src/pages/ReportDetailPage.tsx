@@ -13,17 +13,10 @@ export default function ReportDetailPage() {
   const { api } = useDoctorStore();
   const [report, setReport] = useState<any>(null);
   const [interp, setInterp] = useState<any>(null);
-  const [indicators, setIndicators] = useState<any[]>([]);
-
   useEffect(() => {
     api.get(`/reports/${id}`).then(r => { setReport(r.data); });
     api.get(`/interpretations/${id}`).then(r => setInterp(r.data));
   }, [id]);
-
-  useEffect(() => {
-    if (!report?.id) return;
-    setIndicators(report?.indicators || []);
-  }, [report]);
 
   if (!report) return <DoctorLayout><Spin /></DoctorLayout>;
 
@@ -39,7 +32,10 @@ export default function ReportDetailPage() {
       render: (d: string) => d ? <span>{DEVIATION_TXT[d] || d}</span> : '-' },
   ];
 
-  const sortedIndicators = [...indicators].sort((a, b) => {
+  const rawIndicators = interp?.indicators?.length
+    ? interp.indicators
+    : (report?.indicators || []);
+  const sortedIndicators = [...rawIndicators].sort((a, b) => {
     const order: any = { red: 0, yellow: 1, green: 2 };
     return (order[a.color_level] ?? 3) - (order[b.color_level] ?? 3);
   });

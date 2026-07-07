@@ -1,5 +1,5 @@
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Optional, List
 from datetime import datetime
 
@@ -52,7 +52,7 @@ def parse_summary_text(summary_text: Optional[str]) -> InterpretationReportSchem
     try:
         data = json.loads(summary_text)
         return InterpretationReportSchema(**data)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, ValidationError):
         return InterpretationReportSchema()
 
 
