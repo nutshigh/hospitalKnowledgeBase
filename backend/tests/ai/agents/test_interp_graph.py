@@ -225,3 +225,50 @@ def test_generate_report_increments_judge_retry_count_on_abnormal_branch():
         result = _generate_report(state, MagicMock())
     assert result["judge_retry_count"] == 1
 
+
+def test_router_returns_summaries_and_references():
+    """router 拼装 InterpretationResponse 含 summaries/references，无 summary_text"""
+    from unittest.mock import patch, MagicMock
+    from app.modules.interpretation.router import get_interpretation
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+
+    interp = MagicMock(spec=ReportInterpretation)
+    interp.id = 7
+    interp.report_id = 4
+    interp.overall_level = "yellow"
+    interp.red_count = 0
+    interp.yellow_count = 5
+    interp.green_count = 33
+    interp.status = "completed"
+    interp.created_at = "2026-07-06T13:52:05"
+    interp.completed_at = "2026-07-06T13:52:05"
+    interp.summary_text = '{"overall_summary":"S","abnormal_focus":"A","trend_note":"","suggestions":"G","risk_alert":""}'
+    interp.summary_refs = [{"ref_id": 1, "entry_id": 12, "title": "T", "source": "document"}]
+    interp.quality_note = None
+
+    j = MagicMock(spec=IndicatorJudgment)
+    j.indicator_id = 88
+    j.item_name = "ALT"
+    j.result_value = "62"
+    j.deviation = "high"
+    j.color_level = "yellow"
+    j.unit = "U/L"
+    j.ref_range_low = "0"
+    j.ref_range_high = "40"
+
+    with patch("app.modules.interpretation.router.service.get_interpretation", return_value=interp), \
+         patch("app.modules.interpretation.router.service.get_judgments_with_indicator_detail",
+               return_value=[{"indicator_id": 88, "item_name": "ALT", "result_value": "62",
+                              "deviation": "high", "color_level": "yellow",
+                              "unit": "U/L", "ref_range_low": "0", "ref_range_high": "40"}]):
+        resp = get_interpretation(report_id=4, db=MagicMock())
+    assert "summary_text" not in resp
+    assert "summaries" in resp
+    assert resp["summaries"].overall_summary == "S"
+    assert resp["references"][0]["entry_id"] == 12
+    assert resp["indicators"][0].indicator_id == 88
+    assert resp["indicators"][0].unit == "U/L"
+    assert resp["indicators"][0].ref_range_low == "0"
+    assert resp["indicators"][0].ref_range_high == "40"
+    assert not hasattr(resp["indicators"][0], "explanation")
+
