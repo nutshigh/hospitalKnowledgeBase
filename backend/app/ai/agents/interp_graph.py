@@ -134,7 +134,7 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
 
 def build_interp_agent():
     model = get_chat_model(streaming=False)
-    model.max_tokens = 2048
+    model.max_tokens = 1024
     return create_agent(
         model=model,
         tools=INTERP_TOOLS,
