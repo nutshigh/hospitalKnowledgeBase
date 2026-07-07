@@ -24,9 +24,20 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-SEARCH_SYSTEM_PROMPT = """你是医学知识检索助手。你的任务是为体检报告解读做知识储备，不要直接生成解读文字。
-对每个异常指标，调用 search_knowledge 查询相关医学知识（指标含义、危险因素、健康影响、干预建议）。
-查询要覆盖报告里的所有红/黄区指标。查完即止，不要继续输出解读或建议。"""
+SEARCH_SYSTEM_PROMPT = """你是医学知识检索工具的执行器。你**唯一**能做的是对每个异常指标调用 search_knowledge 工具。
+
+强制规则：
+- 禁止输出任何医学分析、解读、建议或诊断——你只负责检索，不做判断
+- 对用户列出的每一个指标名，必须分别调用一次 search_knowledge（使用指标名作为查询词）
+- 如果某个指标第一次没搜到好结果，换一个查询词再试一次
+- 所有指标检索完成后，用 ConfirmSchema 汇报已完成的指标列表
+- 绝对不要直接回答用户——你必须使用工具
+
+如果用户没有列出指标，直接用 ConfirmSchema 返回空列表。"""
+
+
+class ConfirmSchema(BaseModel):
+    searched_indicators: list[str] = Field(default_factory=list, description="已完成检索的指标名称列表")
 
 
 GENERATE_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。基于提供的医学知识和异常指标，撰写一份结构化的综合解读报告。
@@ -134,11 +145,13 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
 
 def build_interp_agent():
     model = get_chat_model(streaming=False)
-    model.max_tokens = 1024
+    model.max_tokens = 512
     return create_agent(
         model=model,
         tools=INTERP_TOOLS,
         system_prompt=SEARCH_SYSTEM_PROMPT,
+        response_format=ToolStrategy(ConfirmSchema),
+        middleware=[InterpKnowledgeMiddleware()],
         state_schema=InterpAgentState,
     )
 
@@ -387,15 +400,21 @@ def build_interp_graph(hospital_id: str, db: Session):
     def agent_search_knowledge(state: InterpState) -> dict:
         if not state.get("abnormal_indicators"):
             return {"knowledge_results": {}}
+        names = [ind["item_name"] for ind in state["abnormal_indicators"]]
         agent = build_interp_agent()
-        names = ", ".join(ind["item_name"] for ind in state["abnormal_indicators"])
-        user_content = f"以下指标存在异常，请逐个查询相关医学知识（指标含义、危险因素、临床意义、干预建议）：\n{names}\n\n对每个指标调用 search_knowledge。"
-        result = agent.invoke(
-            {"messages": [HumanMessage(content=user_content)]},
-            config={"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2},
-            context=AgentContext(hospital_id=state["hospital_id"]),
-        )
-        return {"knowledge_results": result.get("knowledge_results", {}) or {}}
+        all_results = {}
+        batch_size = 10
+        for i in range(0, len(names), batch_size):
+            batch = names[i:i + batch_size]
+            user_content = "\n".join(f"- {n}" for n in batch)
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=user_content)]},
+                config={"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2},
+                context=AgentContext(hospital_id=state["hospital_id"]),
+            )
+            batch_results = result.get("knowledge_results", {}) or {}
+            all_results.update(batch_results)
+        return {"knowledge_results": all_results}
 
     def generate_report(state: InterpState) -> dict:
         return _generate_report(state, db)
