@@ -36,7 +36,7 @@ CHAT_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合�
 
 示例：
 用户："高血压有什么并发症？" → 你必须先调用 search_knowledge("高血压 并发症")，再基于检索结果回答
-用户："我的血糖正常吗？" → 你必须先调用 get_report_indicators 获取报告，再调用 search_knowledge("血糖 参考范围") 查询知识
+用户："我的血糖正常吗？" → 你必须先调用 get_report_indicators() 获取本报告指标，再调用 search_knowledge("血糖 参考范围") 查询知识
 用户："你好" → 可以直接回答，不需要工具
 
 ## 确定性分级
@@ -46,10 +46,10 @@ CHAT_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合�
 
 ## 可用工具
 - search_knowledge: 搜索医学知识库（回答健康/疾病问题时必须调用）
-- get_report_indicators: 获取报告指标数据
-- get_report_summary: 获取报告概览
-- get_user_history_reports: 获取历年报告
-- get_indicator_history: 获取指标历史趋势
+- get_report_indicators: 获取当前会话关联报告的指标数据（无需传参）
+- get_report_summary: 获取当前会话关联报告的概览（无需传参）
+- get_user_history_reports: 获取当前用户的历年报告概览（无需传参）
+- get_indicator_history: 获取某指标的历史趋势（仅需传 item_name）
 - get_triage_rules: 获取三色分级规则"""
 
 
@@ -114,27 +114,27 @@ class KnowledgeRefsMiddleware(AgentMiddleware):
 
 
 class ReportContextMiddleware(AgentMiddleware):
-    """把 report_id 上下文追加到 system_message"""
+    """在 system_message 末尾追加 report_id 提示语，仅作语义增强。
+    工具入参的 report_id 由 AgentContext 注入，不依赖模型自行填写。
+    """
 
     def __init__(self, report_id: Optional[int]):
         super().__init__()
         self.report_id = report_id
 
+    def _augment(self, request):
+        if not self.report_id or request.system_message is None:
+            return request
+        extra_text = f"\n\n当前会话关联的报告 ID 是 {self.report_id}。用户提问关于本报告的指标时，可直接调用 get_report_indicators（无需传 report_id 参数）。"
+        new_content = list(request.system_message.content_blocks) + [{"type": "text", "text": extra_text}]
+        new_sys = SystemMessage(content=new_content)
+        return request.override(system_message=new_sys)
+
     def wrap_model_call(self, request, handler):
-        if self.report_id:
-            extra_text = f"\n\n当前会话关联的报告 ID 是 {self.report_id}，用户提问时可用 get_report_indicators 获取详细指标。"
-            new_content = list(request.system_message.content_blocks) + [{"type": "text", "text": extra_text}]
-            new_sys = SystemMessage(content=new_content)
-            return handler(request.override(system_message=new_sys))
-        return handler(request)
+        return handler(self._augment(request))
 
     async def awrap_model_call(self, request, handler):
-        if self.report_id:
-            extra_text = f"\n\n当前会话关联的报告 ID 是 {self.report_id}，用户提问时可用 get_report_indicators 获取详细指标。"
-            new_content = list(request.system_message.content_blocks) + [{"type": "text", "text": extra_text}]
-            new_sys = SystemMessage(content=new_content)
-            return await handler(request.override(system_message=new_sys))
-        return await handler(request)
+        return await handler(self._augment(request))
 
 
 def build_chat_agent(report_id: Optional[int]):
@@ -242,7 +242,7 @@ async def run_chat_agent(
         ]
 
         agent = build_chat_agent(session.report_id)
-        ctx = AgentContext(hospital_id=hospital_id)
+        ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id)
         inputs = {"messages": history_msgs + [HumanMessage(content=user_message)]}
         config = {"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2}
 

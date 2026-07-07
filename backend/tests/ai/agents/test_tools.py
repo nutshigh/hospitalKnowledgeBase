@@ -35,10 +35,14 @@ def test_interp_tools_contains_two_names():
 
 
 def test_agent_context_dataclass():
-    """AgentContext 包含 hospital_id"""
+    """AgentContext 包含 hospital_id/report_id/user_id"""
     from app.ai.agents.tools import AgentContext
     ctx = AgentContext(hospital_id="H001")
     assert ctx.hospital_id == "H001"
+    assert ctx.report_id is None
+    assert ctx.user_id is None
+    ctx2 = AgentContext(hospital_id="H001", report_id=5, user_id=2)
+    assert ctx2.report_id == 5 and ctx2.user_id == 2
 
 
 def test_search_knowledge_uses_context_hospital_id():
@@ -62,22 +66,36 @@ def test_search_knowledge_uses_context_hospital_id():
 
 
 def test_get_report_indicators_uses_context_db():
-    """get_report_indicators 通过 hospital_id 从连接池拿独立 session 执行查询"""
+    """get_report_indicators 通过 AgentContext.report_id 注入并查询"""
     from app.ai.agents.tools import get_report_indicators, AgentContext
 
     mock_db = MagicMock()
     mock_db.execute.return_value.fetchall.return_value = [
         (1, "ALT", "ALT", "85", "U/L", "0", "40")
     ]
-    ctx = AgentContext(hospital_id="H001")
+    ctx = AgentContext(hospital_id="H001", report_id=7)
     runtime = _make_runtime(ctx)
 
     with patch("app.ai.agents.tools.get_session", return_value=mock_db):
-        result = get_report_indicators.invoke({"report_id": 1, "runtime": runtime})
+        result = get_report_indicators.invoke({"runtime": runtime})
     assert len(result) == 1
     assert result[0]["item_name"] == "ALT"
     mock_db.execute.assert_called_once()
     mock_db.close.assert_called_once()
+    # 确认 SQL 参数用的是 context.report_id
+    args, kwargs = mock_db.execute.call_args
+    params = kwargs.get("params") if "params" in kwargs else (args[1] if len(args) > 1 else None)
+    assert params == {"rid": 7}
+
+
+def test_get_report_indicators_missing_report_id_returns_error():
+    """无 report_id 时返回错误提示而非抛出"""
+    from app.ai.agents.tools import get_report_indicators, AgentContext
+    ctx = AgentContext(hospital_id="H001")
+    runtime = _make_runtime(ctx)
+    result = get_report_indicators.invoke({"runtime": runtime})
+    assert isinstance(result, list)
+    assert "error" in result[0]
 
 
 def test_make_tools_removed():

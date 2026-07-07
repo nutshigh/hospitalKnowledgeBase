@@ -15,8 +15,12 @@ class AgentContext:
 
     工具每次调用通过 hospital_id 从连接池拿独立 session，避免 async agent
     并发执行工具时共享 session 导致 MySQL 协议包错乱。
+    report_id/user_id 由调用方（chat agent / interp agent）注入，避免弱模型
+    在工具调用入参中漏填这两个必填值。
     """
     hospital_id: str
+    report_id: Optional[int] = None
+    user_id: Optional[int] = None
 
 
 def _db(hospital_id: str) -> Session:
@@ -45,13 +49,14 @@ def search_knowledge(
 
 
 @tool
-def get_report_indicators(report_id: int, runtime: ToolRuntime[AgentContext]) -> list[dict]:
-    """获取体检报告的所有结构化指标数据。
-    Args:
-        report_id: 报告 ID
+def get_report_indicators(runtime: ToolRuntime[AgentContext]) -> list[dict]:
+    """获取当前会话关联体检报告的所有结构化指标数据。
     Returns:
         指标列表，每项含 item_name/result_value/unit/ref_range_low/ref_range_high
     """
+    report_id = runtime.context.report_id
+    if not report_id:
+        return [{"error": "当前会话未关联报告，请先上传或选择报告"}]
     db = _db(runtime.context.hospital_id)
     try:
         rows = db.execute(
@@ -67,13 +72,14 @@ def get_report_indicators(report_id: int, runtime: ToolRuntime[AgentContext]) ->
 
 
 @tool
-def get_report_summary(report_id: int, runtime: ToolRuntime[AgentContext]) -> dict:
-    """获取报告概览信息（报告日期、整体判定、红黄绿计数）。
-    Args:
-        report_id: 报告 ID
+def get_report_summary(runtime: ToolRuntime[AgentContext]) -> dict:
+    """获取当前会话关联报告的概览信息（报告日期、整体判定、红黄绿计数）。
     Returns:
         含 report_date/overall_level/red_count/yellow_count/green_count 的 dict
     """
+    report_id = runtime.context.report_id
+    if not report_id:
+        return {"error": "当前会话未关联报告，请先上传或选择报告"}
     db = _db(runtime.context.hospital_id)
     try:
         row = db.execute(
@@ -92,14 +98,16 @@ def get_report_summary(report_id: int, runtime: ToolRuntime[AgentContext]) -> di
 
 
 @tool
-def get_user_history_reports(user_id: int, runtime: ToolRuntime[AgentContext], limit: int = 5) -> list[dict]:
-    """获取用户历年体检报告概览，用于趋势对比。
+def get_user_history_reports(runtime: ToolRuntime[AgentContext], limit: int = 5) -> list[dict]:
+    """获取当前用户的历年体检报告概览，用于趋势对比。
     Args:
-        user_id: 用户 ID
         limit: 返回条数，默认 5
     Returns:
          报告列表，每项含 report_id/report_date/overall_level
     """
+    user_id = runtime.context.user_id
+    if not user_id:
+        return [{"error": "无法识别当前用户"}]
     db = _db(runtime.context.hospital_id)
     try:
         rows = db.execute(
@@ -115,14 +123,16 @@ def get_user_history_reports(user_id: int, runtime: ToolRuntime[AgentContext], l
 
 
 @tool
-def get_indicator_history(user_id: int, item_name: str, runtime: ToolRuntime[AgentContext]) -> list[dict]:
-    """获取用户某指标的历史数值，用于趋势研判。
+def get_indicator_history(item_name: str, runtime: ToolRuntime[AgentContext]) -> list[dict]:
+    """获取当前用户某指标的历史数值，用于趋势研判。
     Args:
-        user_id: 用户 ID
         item_name: 指标名称
     Returns:
         历史数值列表，每项含 date/value/unit
     """
+    user_id = runtime.context.user_id
+    if not user_id:
+        return [{"error": "无法识别当前用户"}]
     db = _db(runtime.context.hospital_id)
     try:
         rows = db.execute(
