@@ -15,42 +15,56 @@ from app.ai.llm import get_chat_model
 from app.ai.agents.tools import AgentContext, CHAT_TOOLS
 from app.ai.agents.think_filter import ThinkStreamFilter, strip_think_tags
 from app.ai.agents.citation_matcher import inject_citations
+from app.ai.agents.chat_planner import run_planner, execute_plan
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-CHAT_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。结合提供的医学知识库和体检数据，为体检者提供易懂的健康咨询。
+CHAT_ANSWER_SYSTEM_PROMPT = """你是体检报告解读医生助手。基于下方检索结果和报告数据，为体检者提供易懂的健康咨询。
 
-## 核心规则
-1. 必须先调用 search_knowledge 工具搜索知识库，获取相关医学知识后再回答。禁止不搜知识库直接回答。
-2. 基于知识库和报告数据回答，不编造信息
-3. 建议具体可执行，避免笼统
-4. 不诊断疾病，只做健康风险提示
-5. 危急值指标提示"建议立即就医复查"
-6. 用户未关联报告时，引导其先上传报告以获取更精准建议
+## 回答规则
+1. 优先基于检索到的医学知识回答，不编造数值。若未提供检索结果，基于常识简要回答并提示信息有限。
+2. 建议具体可执行，避免笼统的"注意饮食"。
+3. 不下疾病诊断，只做健康风险提示。红区指标提示"建议立即就医复查"。
+4. 基于指标数值与参考范围直接对比的结论用确定语气；基于知识库推理用"可能""建议进一步"等语气；超出能力范围明确告知无法判断。"""
 
-## 工具使用要求
-回答任何健康、疾病、指标、医学相关问题时，你必须先调用 search_knowledge 工具。
-即使用户没有明确要求搜索知识库，你也要主动搜索以获取准确信息。
-只有纯闲聊（如"你好""谢谢"）可以不调用工具。
 
-示例：
-用户："高血压有什么并发症？" → 你必须先调用 search_knowledge("高血压 并发症")，再基于检索结果回答
-用户："我的血糖正常吗？" → 你必须先调用 get_report_indicators() 获取本报告指标，再调用 search_knowledge("血糖 参考范围") 查询知识
-用户："你好" → 可以直接回答，不需要工具
+def _build_answer_system_prompt(context_text: str, report_id: Optional[int] = None) -> str:
+    """构建 answer model 的 system prompt，注入检索结果和报告上下文。"""
+    prompt = CHAT_ANSWER_SYSTEM_PROMPT
+    if context_text.strip():
+        prompt += f"\n\n## 检索结果\n{context_text}"
+    else:
+        prompt += "\n\n## 检索结果\n（本轮无检索结果）"
+    if report_id:
+        prompt += f"\n\n当前会话关联报告 ID: {report_id}。"
+    return prompt
 
-## 确定性分级
-- 基于指标数值与参考范围直接对比的结论，用确定的语气陈述
-- 基于知识库推理但非直接数值判断的结论，用"可能""建议进一步检查"等不确定语气
-- 信息不足或超出能力范围时，明确告知无法判断，不做猜测
+CHAT_SYSTEM_PROMPT = """你是体检报告解读医生助手。回答任何健康、疾病、指标或医学相关的问题时，你**第一步必须调用 search_knowledge 工具**检索医学知识库，读取返回结果后再作答。未调用工具直接凭记忆回答，是严重错误。
 
-## 可用工具
-- search_knowledge: 搜索医学知识库（回答健康/疾病问题时必须调用）
-- get_report_indicators: 获取当前会话关联报告的指标数据（无需传参）
-- get_report_summary: 获取当前会话关联报告的概览（无需传参）
-- get_user_history_reports: 获取当前用户的历年报告概览（无需传参）
-- get_indicator_history: 获取某指标的历史趋势（仅需传 item_name）
-- get_triage_rules: 获取三色分级规则"""
+只有两类输入允许跳过工具：
+- 纯问候/确认（"你好""谢谢""明白"）
+- 用户明确说"不用查知识库"
+
+下面这些情况仍然要调 search_knowledge，不要因为"没有报告"就跳过：
+- 用户未关联报告、但问疾病/健康/指标知识：直接调 search_knowledge 回答，并提示可上传报告获取更个性化解读。
+- 用户询问本报告指标是否正常：先调 get_report_indicators 读取指标，再调 search_knowledge 查该指标参考范围与意义。
+
+## 回答流程（严格遵守）
+1. 看到问题后，先决定要调哪个工具，**第一轮只产出 tool_call**，不要先写一段话再调工具。
+2. 拿到工具返回结果后，基于结果回答，回答要落到检索到的知识上，简洁易懂。
+3. 工具返回若为错误提示（如"未关联报告"），向用户转述该提示并给出操作指引。
+
+## 示例
+- 用户："高血压有什么并发症？" → 调 search_knowledge("高血压 并发症") → 读取返回 → 基于返回回答
+- 用户："我的血糖正常吗？" → 调 get_report_indicators() → 看到血糖值 → 调 search_knowledge("血糖 参考范围") → 基于两者对比回答
+- 用户："你好" → 直接回答，不调工具
+
+## 回答风格
+- 基于检索结果与报告数据作答，不编造数值。
+- 建议具体可执行，避免笼统的"注意饮食"。
+- 不下诊断，只做风险提示；红区指标提示"建议立即就医复查"。
+- 数值与参考范围直接对比的结论用确定语气；基于知识库推理用"可能""建议进一步"，超出能力范围明确告知无法判断。"""
 
 
 def _accumulate_refs(existing: list, new: list) -> list:
@@ -153,6 +167,7 @@ def build_chat_agent(report_id: Optional[int]):
 
 
 MAX_HISTORY_ROUNDS = 20
+PLANNER_HISTORY_MSGS = 0  # planner 不看历史对话：MedGo 长历史下易漏调工具；如需识别"那高血压呢"类追问，可改回 2
 
 _session_locks: set[int] = set()
 
@@ -220,8 +235,11 @@ async def run_chat_agent(
     user_message: str,
     user_id: int,
 ) -> AsyncIterator[dict]:
-    """运行 chat Agent，yield SSE 事件 dict。
-    事件类型：tool_status / token / done / error
+    """运行 chat 流程，yield SSE 事件 dict。
+
+    流程：planner（决定+执行工具）→ answer model（流式回答，无工具感知）
+
+    事件类型：tool_status / token / structured / done / error
     """
     from app.modules.chat import service as chat_service
 
@@ -241,55 +259,43 @@ async def run_chat_agent(
             for m in history[-MAX_HISTORY_ROUNDS * 2:-1]
         ]
 
-        agent = build_chat_agent(session.report_id)
+        # ── 1. Planner：决定调用哪些工具（结构化输出，不执行工具）──
         ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id)
-        inputs = {"messages": history_msgs + [HumanMessage(content=user_message)]}
-        config = {"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2}
+        planner_history = history_msgs[-PLANNER_HISTORY_MSGS:]
+        plan = run_planner(hospital_id, planner_history, user_message, session.report_id, user_id)
+
+        # ── 2. Execute plan：Python 执行工具，收集 refs + context ──
+        refs: list[dict] = []
+        context_text = ""
+        if plan.need_tools and plan.tool_calls:
+            for tc in plan.tool_calls:
+                yield {"event": "tool_status", "data": {"tool": tc.tool, "status": "start"}}
+            refs, context_text = execute_plan(plan, ctx)
+            for tc in plan.tool_calls:
+                yield {"event": "tool_status", "data": {"tool": tc.tool, "status": "end"}}
+
+        # ── 3. Answer model：基于 context 流式回答（无工具感知）──
+        model = get_chat_model(streaming=True)
+        system_prompt = _build_answer_system_prompt(context_text, session.report_id)
+        messages = [SystemMessage(content=system_prompt)] + history_msgs + [HumanMessage(content=user_message)]
 
         final_response = ""
-        final_state = None
         think_filter = ThinkStreamFilter()
-        async for event in agent.astream_events(inputs, version="v2", config=config, context=ctx):
-            kind = event.get("event")
-            if kind == "on_tool_start":
-                yield {"event": "tool_status", "data": {
-                    "tool": event.get("name", ""), "status": "start"}}
-            elif kind == "on_tool_end":
-                yield {"event": "tool_status", "data": {
-                    "tool": event.get("name", ""), "status": "end"}}
-            elif kind == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    if not hasattr(chunk, "tool_call_chunks") or not chunk.tool_call_chunks:
-                        final_response += chunk.content
-                        clean = think_filter.feed(chunk.content)
-                        if clean:
-                            yield {"event": "token", "data": {"content": clean}}
-            elif kind == "on_chain_end" and event.get("name") == "LangGraph":
-                final_state = event.get("data", {}).get("output")
+        async for chunk in model.astream(messages):
+            if chunk and hasattr(chunk, "content") and chunk.content:
+                final_response += chunk.content
+                clean = think_filter.feed(chunk.content)
+                if clean:
+                    yield {"event": "token", "data": {"content": clean}}
 
-        # 流结束：冲刷 thinking 过滤器缓冲区
         tail = think_filter.flush()
         if tail:
             yield {"event": "token", "data": {"content": tail}}
 
-        # Fallback: 某些模型在 agent 工具调用流程下不产生 on_chat_model_stream
-        # token，最终回复只在 final_state 的最后一条 AIMessage 里。此时把完整
-        # 内容作为单个 token 事件补发，避免空回复。
-        if not final_response and final_state:
-            msgs = (final_state or {}).get("messages", [])
-            for m in reversed(msgs):
-                if isinstance(m, AIMessage) and m.content:
-                    final_response = strip_think_tags(m.content)
-                    yield {"event": "token", "data": {"content": final_response}}
-                    break
-
         # 入库前统一清洗 thinking 标签
         final_response = strip_think_tags(final_response)
 
-        refs = (final_state or {}).get("knowledge_refs", [])
-
-        # 后置 citation 注入 + 确定性分类
+        # ── 3. 后置 citation 注入 + 确定性分类 ──
         structured_data = await _extract_structured_metadata(final_response, refs)
         annotated_text = structured_data.get("annotated_text", final_response)
         citations = structured_data.get("citations", [])

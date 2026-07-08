@@ -91,6 +91,7 @@ cd "$ROOT_DIR"
 
 docker exec hospital-mysql mysqladmin -uroot -proot ping >/dev/null 2>&1 && log "MySQL OK" || warn "MySQL 未就绪"
 docker exec hospital-rabbitmq rabbitmq-diagnostics ping >/dev/null 2>&1 && log "RabbitMQ OK" || warn "RabbitMQ 未就绪"
+docker exec hospital-redis redis-cli ping >/dev/null 2>&1 && log "Redis OK" || warn "Redis 未就绪"
 curl -s http://localhost:7474 >/dev/null 2>&1 && log "Neo4j OK" || warn "Neo4j 未就绪"
 
 # ── 2. 数据库初始化（仅首次）────────────────────────────────────
@@ -294,6 +295,7 @@ echo "  PaddleOCR-VL:   http://localhost:8001  (log: /tmp/paddle-ocr.log)"
 echo "  Neo4j:          http://localhost:7474  (neo4j/medgraph123)"
 echo "  MySQL:          localhost:3306  (root/root)"
 echo "  RabbitMQ:       localhost:5672  (root/root)"
+echo "  Redis:          localhost:6379"
 echo "  Milvus:         localhost:19530"
 echo "  Workers:        parsing + interpretation"
 echo ""

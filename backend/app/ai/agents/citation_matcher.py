@@ -7,24 +7,39 @@ LLM 正常生成文本（不要求输出 [n]），生成后由本模块：
 4. 返回标注后的文本 + citations 列表
 
 不依赖 LLM 行为，确定性结果。
+
+性能优化：
+- source chunk 的 embedding 按内容哈希缓存到 Redis（chunk 在多次检索中复用率高，
+  避免重复调用 embedding 服务；句子是 LLM 即时生成的，不缓存）。
+- 相似度计算用 numpy 向量化（一次矩阵乘法代替双循环），O(S×C) 但常数极低。
 """
+import hashlib
 import logging
-import math
 import re
 from typing import List, Optional
 
 import httpx
+import numpy as np
 from pydantic import BaseModel
 
 from app.config import settings
+from app.core.redis import redis_client
 
 logger = logging.getLogger(__name__)
+
+# 复用连接池的 httpx 客户端（embedding 服务地址固定）
+_embed_http = httpx.Client(timeout=30.0)
 
 # 相似度阈值：高于此值则认为句子来源于该 chunk
 SIMILARITY_THRESHOLD = 0.6
 # embedding 服务地址（复用 BGE-M3）
 EMBED_BASE_URL = settings.EMBED_BASE_URL
 EMBED_MODEL = settings.EMBED_MODEL_NAME
+
+# Redis 向量缓存 key 前缀
+_CACHE_PREFIX = "embed"
+# chunk 内容截断长度，与原逻辑一致，防止过长
+_MAX_SOURCE_LEN = 500
 
 
 class Citation(BaseModel):
@@ -42,12 +57,12 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip() and len(p.strip()) > 3]
 
 
-def _get_embeddings(texts: list[str]) -> list[list[float]]:
-    """调用 BGE-M3 embedding 服务，批量获取向量。"""
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    """调用 BGE-M3 embedding 服务，批量获取向量（无缓存）。"""
     if not texts:
         return []
     try:
-        resp = httpx.Client(timeout=30.0).post(
+        resp = _embed_http.post(
             f"{EMBED_BASE_URL}/embeddings",
             json={"model": EMBED_MODEL, "input": texts},
         )
@@ -59,14 +74,85 @@ def _get_embeddings(texts: list[str]) -> list[list[float]]:
         return []
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """计算余弦相似度。"""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+def _cache_key(text: str) -> str:
+    """根据 chunk 文本内容生成稳定缓存 key。"""
+    h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # model 名纳入 key，避免换模型后命中旧向量
+    return f"{_CACHE_PREFIX}:{EMBED_MODEL}:{h}"
+
+
+def _get_source_embeddings(source_texts: list[str]) -> list[Optional[list[float]]]:
+    """获取 source chunk 的 embedding，命中 Redis 缓存则直接复用，未命中才调服务并回写。
+
+    返回与 source_texts 等长的列表，元素为 embedding 或 None（失败时）。
+    """
+    n = len(source_texts)
+    results: list[Optional[list[float]]] = [None] * n
+    if n == 0:
+        return results
+
+    r = redis_client.client
+    keys = [_cache_key(t) for t in source_texts]
+
+    # 1. 批量查缓存
+    if r is not None:
+        try:
+            cached = r.mget(keys)
+        except Exception as e:
+            logger.warning("citation_matcher redis mget failed: %s", e)
+            cached = [None] * n
+        for i, raw in enumerate(cached):
+            if raw:
+                try:
+                    vec = np.frombuffer(raw, dtype=np.float32)
+                    results[i] = vec.tolist()
+                except Exception:
+                    results[i] = None
+    else:
+        cached = [None] * n
+
+    # 2. 收集未命中的，批量算 embedding
+    miss_indices = [i for i in range(n) if results[i] is None]
+    if not miss_indices:
+        return results
+
+    miss_texts = [source_texts[i] for i in miss_indices]
+    miss_embs = _embed_batch(miss_texts)
+    if len(miss_embs) != len(miss_indices):
+        logger.warning("citation_matcher: embedding count mismatch for %d misses", len(miss_indices))
+        # 把已得到的尽可能填上
+        for j, idx in enumerate(miss_indices[:len(miss_embs)]):
+            results[idx] = miss_embs[j]
+        return results
+
+    # 3. 回写缓存（pipe 批量）
+    pipe = None
+    if r is not None:
+        pipe = r.pipeline(transaction=False)
+    for j, idx in enumerate(miss_indices):
+        emb = miss_embs[j]
+        results[idx] = emb
+        if pipe is not None:
+            try:
+                payload = np.asarray(emb, dtype=np.float32).tobytes()
+                pipe.set(keys[idx], payload, ex=settings.EMBED_CACHE_TTL)
+            except Exception:
+                pass
+    if pipe is not None:
+        try:
+            pipe.execute()
+        except Exception as e:
+            logger.warning("citation_matcher redis mset failed: %s", e)
+
+    return results
+
+
+def _cosine_similarity_matrix(sent_embs: np.ndarray, src_embs: np.ndarray) -> np.ndarray:
+    """计算 (S, D) 与 (C, D) 的余弦相似度矩阵 (S, C)，向量化。"""
+    # L2 归一化
+    s_norm = sent_embs / (np.linalg.norm(sent_embs, axis=1, keepdims=True) + 1e-12)
+    c_norm = src_embs / (np.linalg.norm(src_embs, axis=1, keepdims=True) + 1e-12)
+    return s_norm @ c_norm.T  # (S, C)
 
 
 def inject_citations(
@@ -101,49 +187,59 @@ def inject_citations(
     for i, s in enumerate(sources):
         content = s.get("content", "") or s.get("title", "")
         if content:
-            source_texts.append(content[:500])  # 截断防止过长
+            source_texts.append(content[:_MAX_SOURCE_LEN])  # 截断防止过长
             source_indices.append(i)
 
     if not source_texts:
         return text, []
 
-    # 批量获取 embeddings：sentences + source_texts 一起算
-    all_texts = sentences + source_texts
-    all_embeddings = _get_embeddings(all_texts)
-    if len(all_embeddings) != len(all_texts):
-        logger.warning("citation_matcher: embedding count mismatch, skipping")
+    # source embedding：优先命中 Redis 缓存
+    src_emb_list = _get_source_embeddings(source_texts)
+    valid_src = [(i, e) for i, e in enumerate(src_emb_list) if e is not None]
+    if not valid_src:
+        logger.warning("citation_matcher: no valid source embeddings, skipping")
         return text, []
 
-    sent_embs = all_embeddings[:len(sentences)]
-    source_embs = all_embeddings[len(sentences):]
+    # sentence embedding：实时算，不缓存（LLM 输出即时生成）
+    sent_emb_list = _embed_batch(sentences)
+    if len(sent_emb_list) != len(sentences):
+        logger.warning("citation_matcher: sentence embedding count mismatch, skipping")
+        return text, []
+
+    # 组装 numpy 矩阵
+    sent_embs = np.asarray(sent_emb_list, dtype=np.float32)        # (S, D)
+    src_embs = np.asarray([e for _, e in valid_src], dtype=np.float32)  # (C, D)
+    src_pos = [i for i, _ in valid_src]  # 在 source_texts 中的位置
+
+    # 一次矩阵乘法得到全部相似度
+    sims = _cosine_similarity_matrix(sent_embs, src_embs)  # (S, C)
 
     # 对每个句子找最佳匹配 source
     citations = []
     citation_map = {}  # sentence_index -> source_index (in sources list)
     used_sources = {}  # source_index -> ref_id
 
-    for si, sent_emb in enumerate(sent_embs):
-        best_sim = 0.0
-        best_source_idx = -1
-        for ssi, src_emb in enumerate(source_embs):
-            sim = _cosine_similarity(sent_emb, src_emb)
-            if sim > best_sim:
-                best_sim = sim
-                best_source_idx = source_indices[ssi]
+    best_src_local = np.argmax(sims, axis=1)  # (S,)
+    best_sims = sims[np.arange(sims.shape[0]), best_src_local]  # (S,)
 
-        if best_sim >= threshold and best_source_idx >= 0:
-            citation_map[si] = best_source_idx
-            if best_source_idx not in used_sources:
-                ref_id = len(used_sources) + 1
-                used_sources[best_source_idx] = ref_id
-                src = sources[best_source_idx]
-                citations.append({
-                    "ref_id": ref_id,
-                    "entry_id": src.get("entry_id"),
-                    "title": src.get("title", ""),
-                    "source": src.get("source", "document"),
-                    "content": (src.get("content", "") or "")[:200],
-                })
+    for si in range(sims.shape[0]):
+        sim = float(best_sims[si])
+        if sim < threshold:
+            continue
+        local_idx = int(best_src_local[si])
+        best_source_idx = source_indices[src_pos[local_idx]]
+        citation_map[si] = best_source_idx
+        if best_source_idx not in used_sources:
+            ref_id = len(used_sources) + 1
+            used_sources[best_source_idx] = ref_id
+            src = sources[best_source_idx]
+            citations.append({
+                "ref_id": ref_id,
+                "entry_id": src.get("entry_id"),
+                "title": src.get("title", ""),
+                "source": src.get("source", "document"),
+                "content": (src.get("content", "") or "")[:200],
+            })
 
     # 按 ref_id 排序 citations
     citations.sort(key=lambda c: c["ref_id"])

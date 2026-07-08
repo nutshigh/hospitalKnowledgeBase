@@ -75,8 +75,11 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
         ) : store.messages.length === 0 ? (
           <div style={{
             margin: 'auto', color: 'var(--color-text-secondary)', fontSize: 13,
+            textAlign: 'center', maxWidth: 420, padding: '0 16px',
           }}>
-            基于您的体检报告，我可以帮您解答健康疑问
+            {compact || store.getSelectedReport(sessionId)
+              ? '基于您的体检报告，我可以帮您解答健康疑问'
+              : '您可以关联体检报告以获取更精准解读，或直接向我咨询健康问题'}
           </div>
         ) : (
           store.messages.map((msg, i) => (

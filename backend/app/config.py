@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
 
+    # Redis (embedding 向量缓存等)
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+    # embedding 缓存 TTL（秒），7 天
+    EMBED_CACHE_TTL: int = 604800
+
 # OCR (PaddleOCR-VL-1.5 本地部署 via paddle_ocr_service, 端口 8001)
     OCR_BASE_URL: str = "http://localhost:8001"
     OCR_MODEL: str = "PaddlePaddle/PaddleOCR-VL-1.5"
