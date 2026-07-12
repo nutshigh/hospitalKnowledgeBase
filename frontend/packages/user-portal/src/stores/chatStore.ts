@@ -41,7 +41,7 @@ interface ChatStore {
   setSelectedReport: (sessionId: number, reportId: number | null) => void;
 }
 
-export const useChatStore = create<ChatStore>((set) => ({
+export const useChatStore = create<ChatStore>((set, get) => ({
   sessions: [],
   currentSessionId: null,
   messages: [],
@@ -53,7 +53,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   setSessions: (sessions) => set({ sessions }),
   setCurrentSession: (id) => set({ currentSessionId: id }),
   getSelectedReport: (sessionId) => {
-    return useChatStore.getState().selectedReports[sessionId] ?? null;
+    return get().selectedReports[sessionId] ?? null;
   },
   setSelectedReport: (sessionId, reportId) =>
     set((state) => ({
