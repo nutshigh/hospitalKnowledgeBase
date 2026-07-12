@@ -16,6 +16,11 @@ def handle_interpretation_task(message: dict):
     db = next(get_hospital_db(hospital_id))
     try:
         run_interpretation_agent(hospital_id, db, report_id)
+        try:
+            from app.modules.user_profile.service import try_generate_comparison_summary
+            try_generate_comparison_summary(db, report_id)
+        except Exception as e:
+            print(f"Comparison summary failed for report {report_id}: {e}")
     except Exception as e:
         print(f"Interpretation failed for report {report_id}: {e}")
     finally:
