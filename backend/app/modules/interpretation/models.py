@@ -13,6 +13,8 @@ class ReportInterpretation(Base):
     green_count = Column(Integer, nullable=False, default=0)
     summary_text = Column(Text, nullable=True)
     summary_refs = Column(JSON, nullable=True)
+    comparison_summary = Column(Text, nullable=True)
+    comparison_baseline_id = Column(BigInteger, nullable=True)
     quality_note = Column(String(255), nullable=True)
     status = Column(String(20), nullable=False, default="pending")
     retry_count = Column(Integer, nullable=False, default=0)
