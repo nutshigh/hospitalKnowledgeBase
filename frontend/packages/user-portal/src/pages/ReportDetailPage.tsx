@@ -8,6 +8,7 @@ import ColorBadge from '../components/ColorBadge';
 import IndicatorRow from '../components/IndicatorRow';
 import StatusTag from '../components/StatusTag';
 import ChatPanel from '../components/ChatPanel';
+import ComparisonCard from '../components/ComparisonCard';
 import { useChatStore } from '../stores/chatStore';
 import { InterpretationReportCard } from '@hospital/shared';
 
@@ -154,6 +155,10 @@ export default function ReportDetailPage() {
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-secondary)', fontSize: 13 }}>暂无指标数据</div>
         )}
       </div>
+
+      {interpretation?.status === 'completed' && (
+        <ComparisonCard reportId={Number(id)} />
+      )}
 
       <InterpretationReportCard
         summaries={interpretation?.summaries}
