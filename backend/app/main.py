@@ -12,6 +12,7 @@ from app.modules.interpretation.router import router as interpretation_router
 from app.modules.statistics.router import router as statistics_router
 from app.modules.dispatch.router import router as dispatch_router
 from app.modules.chat.router import router as chat_router
+from app.modules.user_profile.router import router as user_profile_router
 
 
 def create_app() -> FastAPI:
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(statistics_router, prefix="/api/v1/statistics", tags=["statistics"])
     app.include_router(dispatch_router, prefix="/api/v1/dispatch", tags=["dispatch"])
     app.include_router(chat_router, prefix="/api/v1/chat", tags=["chat"])
+    app.include_router(user_profile_router, prefix="/api/v1/profile", tags=["user-profile"])
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
