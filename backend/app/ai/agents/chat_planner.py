@@ -74,7 +74,7 @@ def run_planner(
     返回 ChatPlan 实例，tool_calls 为空列表表示无需工具。
     """
     model = get_chat_model(streaming=False)
-    model.max_tokens = 512
+    model.max_tokens = 16384  # 16k：MedGo 长历史下 structured-output JSON 容易超 512 被截断，导致 fallback 空计划
     model.temperature = 0.0
     structured = model.with_structured_output(ChatPlan)
     messages = [SystemMessage(content=PLANNER_SYSTEM_PROMPT)] + history_msgs + [HumanMessage(content=user_message)]

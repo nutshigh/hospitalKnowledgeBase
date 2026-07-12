@@ -168,6 +168,8 @@ def build_chat_agent(report_id: Optional[int]):
 
 MAX_HISTORY_ROUNDS = 20
 PLANNER_HISTORY_MSGS = 0  # planner 不看历史对话：MedGo 长历史下易漏调工具；如需识别"那高血压呢"类追问，可改回 2
+# 注意：下面要用 _take_planner_history() 而非 history_msgs[-PLANNER_HISTORY_MSGS:]，
+# 因为 Python 里 list[-0:] == list[0:] == 整条历史，会让 0 的语义失效、全量历史灌进 planner。
 
 _session_locks: set[int] = set()
 
@@ -261,7 +263,7 @@ async def run_chat_agent(
 
         # ── 1. Planner：决定调用哪些工具（结构化输出，不执行工具）──
         ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id)
-        planner_history = history_msgs[-PLANNER_HISTORY_MSGS:]
+        planner_history = history_msgs[-PLANNER_HISTORY_MSGS:] if PLANNER_HISTORY_MSGS > 0 else []
         plan = run_planner(hospital_id, planner_history, user_message, session.report_id, user_id)
 
         # ── 2. Execute plan：Python 执行工具，收集 refs + context ──

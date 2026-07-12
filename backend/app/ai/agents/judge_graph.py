@@ -37,7 +37,7 @@ class JudgeResult(BaseModel):
 
 def build_judge_agent():
     model = get_chat_model(streaming=False)
-    model.max_tokens = 2048
+    model.max_tokens = 16384
     return create_agent(
         model=model,
         tools=[],

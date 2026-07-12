@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional
 
 import httpx
@@ -11,6 +12,8 @@ from app.ai.config import get_embedding_model
 from app.ai.rag.store import rag_store
 from app.ai.rag.types import SearchResult
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # 共享 httpx.Client，避免每次 RAGRetriever 构造时泄漏连接池
 _shared_http_client: httpx.Client | None = None
@@ -154,8 +157,12 @@ class RAGRetriever:
         doc_results = self._retrieve_documents(query, category_ids, top_k)
 
         # KG 通道（独立检索，失败不影响文档结果）
-        from app.ai.rag.kg_retriever import KGRetriever
-        kg_retriever = KGRetriever(self.hospital_id)
-        kg_results = kg_retriever.retrieve(query)
+        try:
+            from app.ai.rag.kg_retriever import KGRetriever
+            kg_retriever = KGRetriever(self.hospital_id)
+            kg_results = kg_retriever.retrieve(query)
+        except Exception as e:
+            logger.warning("KG channel disabled (import/runtime error): %s", e)
+            kg_results = []
 
         return doc_results + kg_results

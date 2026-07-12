@@ -190,7 +190,7 @@ def _parse_text_with_llm(text: str) -> dict:
 6. 没有的字段填 null
 
 体检报告文本：
-{text[:8000]}
+{text[:24000]}
 """
     model = get_chat_model()
     resp = model.invoke([("user", prompt)], max_tokens=2048).content

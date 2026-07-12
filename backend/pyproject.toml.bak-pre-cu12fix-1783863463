@@ -27,7 +27,7 @@ dependencies = [
     "starlette>=0.45.0",
     "typing-extensions>=4.12.0",
     "uvicorn[standard]>=0.47.0",
-    "json-repair>=0.30,<1",
+    "vllm>=0.6.0,<1.0",
     "langchain>=1.0,<2.0",
     "langchain-core>=1.4.7,<2.0",
     "langchain-openai>=1.0,<2.0",
@@ -38,17 +38,7 @@ dependencies = [
     "llama-index-embeddings-openai>=0.3,<0.4",
     "llama-index-postprocessor-flag-embedding-reranker>=0.3,<0.4",
     "llama-index-retrievers-bm25>=0.5,<0.6",
-    "torch==2.7.0",  # cu12,匹配驱动535;否则uv默认拉cu13/torch2.11崩溃
-    "transformers==4.51.3",  # pin老版;transformers 5.x移除prepare_for_model,FlagEmbedding 1.4 还在用
-    "tokenizers==0.21.4",  # 与 transformers 4.51 配套;高版 tokenizers ABI 不兼容
     "FlagEmbedding>=1.3,<2",
-    "neo4j>=5.20,<6",  # KG 通道用,kg_client.py 顶层 import;否则 ModuleNotFoundError 连带丢弃文档向量结果
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
-
-# vllm 不作为本包依赖: 推理由 start.sh 拉起的独立 venv (backend/.venv-vllm-cu12)
-# 提供,业务代码不 import vllm。torch 这里仍 pin cu12 以匹配驱动 535/CUDA 12.2,
-# 否则 uv 默认会拉到 cu13 wheel,在该驱动上 import 即崩。
-[tool.uv]
-torch-backend = "cu126"

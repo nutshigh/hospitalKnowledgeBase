@@ -18,6 +18,7 @@ BACKEND_DIR="$ROOT_DIR/backend"
 INFRA_DIR="$ROOT_DIR/infra"
 VENV="$BACKEND_DIR/.venv/bin"
 PADDLE_VENV="$BACKEND_DIR/paddle_venv/bin"
+VLLM_VENV="$BACKEND_DIR/.venv-vllm-cu12/bin"
 
 export HF_ENDPOINT=https://hf-mirror.com
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -143,13 +144,16 @@ fi
 if [[ "$SKIP_MODELS" == "0" ]]; then
   log "启动模型服务..."
 
-  # MedGo (8004, GPU 0,1, TP=2)
+  # MedGo (8004, GPU 0-3, TP=4, 32K)
+  # 4卡并行 Qwen3-32B(FP16,权重~61G) -> 单卡权重~15G; util 0.6 预留~27.6G/卡
+  # 余量留给同卡共存的 BGE-M3(GPU2)/Reranker(GPU2)/PaddleOCR(GPU3)
+  # enforce-eager 关闭 CUDA 图,降低显存碎片,利于共存
   if [[ "$SKIP_MEDGO" == "0" ]]; then
     if curl -s -m 3 http://localhost:8004/health >/dev/null 2>&1; then
       log "MedGo 已运行 (8004)"
     else
-      log "启动 MedGo vLLM (8004, GPU 0,1, TP=2)..."
-      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1 $VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 2 --max-model-len 8192 --gpu-memory-utilization 0.85 --disable-custom-all-reduce --enable-auto-tool-choice --tool-call-parser hermes" > /tmp/vllm-medgo.log 2>&1 &
+      log "启动 MedGo vLLM (8004, GPU 0-3, TP=4, ctx=32K, util=0.6)..."
+      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes" > /tmp/vllm-medgo.log 2>&1 &
       echo $! > /tmp/start-sh-medgo.pid
       log "  MedGo 启动中 (PID: $!, log: /tmp/vllm-medgo.log)"
     fi
@@ -163,7 +167,7 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "BGE-M3 已运行 (8002)"
     else
       log "启动 BGE-M3 embedding vLLM (8002, GPU 2)..."
-      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PATH=$VENV:\$PATH; CUDA_VISIBLE_DEVICES=2 $VENV/vllm serve /data/models/bge-m3 --port 8002 --trust-remote-code --served-model-name BAAI/bge-m3 --task embed --max-model-len 8192 --gpu-memory-utilization 0.3" > /tmp/vllm-embed.log 2>&1 &
+      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=2 $VLLM_VENV/vllm serve /data/models/bge-m3 --port 8002 --trust-remote-code --served-model-name BAAI/bge-m3 --task embed --max-model-len 8192 --gpu-memory-utilization 0.12" > /tmp/vllm-embed.log 2>&1 &
       echo $! > /tmp/start-sh-embed.pid
       log "  BGE-M3 启动中 (PID: $!, log: /tmp/vllm-embed.log)"
     fi
