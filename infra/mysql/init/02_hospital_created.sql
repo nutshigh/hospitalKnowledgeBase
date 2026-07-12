@@ -105,6 +105,8 @@ BEGIN
         green_count INT NOT NULL DEFAULT 0,
         summary_text TEXT DEFAULT NULL,
         summary_refs JSON DEFAULT NULL,
+        comparison_summary TEXT DEFAULT NULL,
+        comparison_baseline_id BIGINT DEFAULT NULL,
         quality_note VARCHAR(255) DEFAULT NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'pending',
         retry_count INT NOT NULL DEFAULT 0,
