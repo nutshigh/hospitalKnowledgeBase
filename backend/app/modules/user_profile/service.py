@@ -83,6 +83,7 @@ def get_overview(db: Session, user_id: int) -> dict:
         })
 
     for v in by_key.values():
+        v["points"].sort(key=lambda p: p["report_date"] or "")
         v["trend_direction"] = trend_direction(v["points"])
         v["latest_deviation"] = v["points"][-1].get("color") if v["points"] else None
 
@@ -168,32 +169,29 @@ def _build_indicator_diff(db: Session, current: ReportInfo, baseline: ReportInfo
 
     matches = match_indicators(cur_dicts, base_dicts)
     indicators_diff = []
-    cur_keys = {(m["item_name_standard"], m["item_name"]) for m in matches}
-    base_keys = {(m["item_name_standard"], m["item_name"]) for m in matches}
+    matched_stds = {m["item_name_standard"] for m in matches if m["item_name_standard"]}
+    matched_raw_names = {m["item_name"] for m in matches if not m["item_name_standard"]}
     only_in_current = []
     only_in_baseline = []
 
     for ind in cur_inds:
-        key = (ind.item_name_standard or None, ind.item_name)
-        if key not in cur_keys:
-            try:
-                float(str(ind.result_value).strip())
-                only_in_current.append({
-                    "item_name": ind.item_name,
-                    "item_name_standard": ind.item_name_standard,
-                    "current_value": ind.result_value,
-                    "unit": ind.unit,
-                })
-            except (TypeError, ValueError):
-                only_in_current.append({
-                    "item_name": ind.item_name,
-                    "item_name_standard": ind.item_name_standard,
-                    "current_value": ind.result_value,
-                    "unit": ind.unit,
-                })
+        if ind.item_name_standard:
+            already_matched = ind.item_name_standard in matched_stds
+        else:
+            already_matched = ind.item_name in matched_raw_names
+        if not already_matched:
+            only_in_current.append({
+                "item_name": ind.item_name,
+                "item_name_standard": ind.item_name_standard,
+                "current_value": ind.result_value,
+                "unit": ind.unit,
+            })
     for ind in base_inds:
-        key = (ind.item_name_standard or None, ind.item_name)
-        if key not in base_keys:
+        if ind.item_name_standard:
+            already_matched = ind.item_name_standard in matched_stds
+        else:
+            already_matched = ind.item_name in matched_raw_names
+        if not already_matched:
             only_in_baseline.append({
                 "item_name": ind.item_name,
                 "item_name_standard": ind.item_name_standard,

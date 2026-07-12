@@ -211,3 +211,61 @@ def test_get_overview_aggregates_abnormal_by_item_name_standard(db):
     assert abnormal["red_count"] == 2
     assert abnormal["yellow_count"] == 0
     assert abnormal["last_color"] == "red"
+
+
+def test_get_comparison_does_not_double_count_baseline_with_diff_raw_names(db):
+    """当两边 item_name 不同但 item_name_standard 一致时,
+    基准侧的不应被误归为 only_in_baseline(原始 brief 的真实 bug,
+    修复后必须:出现在 indicators 里,不出现在 only_in_baseline)。
+    """
+    from app.modules.user_profile.service import get_comparison
+
+    db.add(ReportInfo(id=1, user_id=10, report_date=date(2025, 11, 2)))
+    db.add(ReportInfo(id=2, user_id=10, report_date=date(2026, 6, 15)))
+    db.add(ReportIndicator(report_id=1, item_name="GLU", item_name_standard="空腹血糖",
+                           result_value="7.2", unit="mmol/L"))
+    db.add(ReportIndicator(report_id=2, item_name="血糖", item_name_standard="空腹血糖",
+                           result_value="6.8", unit="mmol/L"))
+    db.commit()
+
+    result = get_comparison(db, user_id=10, report_id=2, baseline_id=1)
+    matched_names = {ind["item_name"] for ind in result["indicators"]}
+    assert "GLU" in matched_names or "血糖" in matched_names
+    baseline_only_names = {ind["item_name"] for ind in result["only_in_baseline"]}
+    assert "GLU" not in baseline_only_names, (
+        f"Bug: baseline indicator with same item_name_standard but different raw "
+        f"name was misclassified as only_in_baseline. only_in_baseline={baseline_only_names}"
+    )
+
+
+def test_get_overview_sorts_points_by_report_date(db):
+    """即使 ReportInfo.id 与 report_date 反向,points 仍按 report_date 排序,
+    latest_deviation 取到真正最新的报告日期对应的 color,趋势方向正确。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+
+    # id=2 is OLDER, id=1 is NEWER — non-monotonic, the case the bug surfaces in
+    db.add(ReportInfo(id=2, user_id=30, report_date=date(2025, 4, 10)))
+    db.add(ReportInfo(id=1, user_id=30, report_date=date(2026, 6, 15)))
+    db.add(ReportIndicator(id=500, report_id=2, item_name="血压", item_name_standard="收缩压",
+                          result_value="130", unit="mmHg"))
+    db.add(ReportIndicator(id=600, report_id=1, item_name="血压", item_name_standard="收缩压",
+                          result_value="145", unit="mmHg"))
+    db.commit()
+    db.add(ReportInterpretation(id=10, report_id=2, overall_level="green", status="completed",
+                                red_count=0, yellow_count=0, green_count=5))
+    db.add(ReportInterpretation(id=20, report_id=1, overall_level="red", status="completed",
+                                red_count=1, yellow_count=0, green_count=5))
+    db.add(IndicatorJudgment(interpretation_id=20, indicator_id=600, item_name="血压", color_level="red"))
+    db.commit()
+
+    result = get_overview(db, user_id=30)
+    sys_trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "收缩压")
+    # Points MUST be in chronological order by report_date
+    assert [p["report_date"] for p in sys_trend["points"]] == ["2025-04-10", "2026-06-15"]
+    # Values following that order
+    assert [p["value"] for p in sys_trend["points"]] == [130.0, 145.0]
+    # Latest color from newest report_date (2026-06-15 → red)
+    assert sys_trend["latest_deviation"] == "red"
+    # Trend up (newer > older)
+    assert sys_trend["trend_direction"] == "up"
