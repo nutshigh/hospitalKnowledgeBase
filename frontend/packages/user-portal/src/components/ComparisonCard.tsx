@@ -73,11 +73,14 @@ export default function ComparisonCard({ reportId, baselineId: initialBaseline }
 
   const switchBaseline = async (id: number) => {
     setCurrentBaseline(id);
-    if (!data) return;
     setSummaryLoading(true);
     try {
       const r = await api.get('/profile/ai-summary', { params: { report_id: reportId, baseline_id: id } });
-      setData({ ...data, ai_summary: r.data.ai_summary || '', ai_summary_cached: r.data.cached });
+      setData(prev => prev ? {
+        ...prev,
+        ai_summary: r.data.ai_summary || '',
+        ai_summary_cached: r.data.cached,
+      } : prev);
     } catch {
       message.error('AI 小结切换失败');
     } finally {

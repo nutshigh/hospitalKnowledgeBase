@@ -269,3 +269,43 @@ def test_get_overview_sorts_points_by_report_date(db):
     assert sys_trend["latest_deviation"] == "red"
     # Trend up (newer > older)
     assert sys_trend["trend_direction"] == "up"
+
+
+def test_get_comparison_raises_not_found_when_report_missing(db):
+    """report_id 不属于该 user 或不存在 -> NotFoundException,不是返回空dict。"""
+    import pytest
+    from app.utils.exceptions import NotFoundException
+
+    from app.modules.user_profile.service import get_comparison
+    with pytest.raises(NotFoundException):
+        get_comparison(db, user_id=10, report_id=999, baseline_id=None)
+
+
+def test_get_comparison_raises_validation_when_baseline_not_owned(db):
+    """baseline_id 提供但不属于该 user -> ValidationException(400),不是404。"""
+    import pytest
+    from app.utils.exceptions import ValidationException
+
+    from app.modules.user_profile.service import get_comparison
+
+    db.add(ReportInfo(id=1, user_id=10, report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=99, user_id=20, report_date=date(2025, 4, 10)))  # 属于另一 user
+    db.commit()
+
+    with pytest.raises(ValidationException):
+        get_comparison(db, user_id=10, report_id=1, baseline_id=99)
+
+
+def test_get_ai_summary_raises_validation_when_baseline_not_owned(db):
+    """get_ai_summary 的 baseline 非本用户历史 -> ValidationException。"""
+    import pytest
+    from app.utils.exceptions import ValidationException
+
+    from app.modules.user_profile.service import get_ai_summary
+
+    db.add(ReportInfo(id=1, user_id=10, report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=99, user_id=20, report_date=date(2025, 4, 10)))
+    db.commit()
+
+    with pytest.raises(ValidationException):
+        get_ai_summary(db, user_id=10, report_id=1, baseline_id=99)

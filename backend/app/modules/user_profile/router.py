@@ -36,10 +36,7 @@ def compare(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    result = service.get_comparison(db, current_user.user_id, report_id, baseline_id)
-    if not result:
-        raise NotFoundException(detail="Report not found")
-    return result
+    return service.get_comparison(db, current_user.user_id, report_id, baseline_id)
 
 
 @router.get("/ai-summary")
