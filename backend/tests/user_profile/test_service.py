@@ -159,3 +159,55 @@ def test_get_ai_summary_calls_llm_when_baseline_mismatch(db):
     assert cached is False
     interp = db.query(ReportInterpretation).filter_by(report_id=2).first()
     assert interp.comparison_summary == "针对旧基准的小结"
+
+
+def test_get_overview_returns_empty_when_no_reports(db):
+    """无报告时返回空结构(避免 get_overview 在 router 层崩)。"""
+    from app.modules.user_profile.service import get_overview
+    result = get_overview(db, user_id=999)
+    assert result["user_summary"] is None
+    assert result["indicator_trends"] == []
+    assert result["abnormal_distribution"] == []
+
+
+def test_get_overview_aggregates_abnormal_by_item_name_standard(db):
+    """get_overview 应通过 JOIN report_indicator 按 item_name_standard 聚合异常指标(覆盖 service.py:89-96 的修复)。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+
+    db.add(ReportInfo(id=1, user_id=10, report_date=date(2025, 11, 2)))
+    db.add(ReportInfo(id=2, user_id=10, report_date=date(2026, 6, 15)))
+    db.add(ReportIndicator(id=100, report_id=1, item_name="血糖", item_name_standard="空腹血糖",
+                           result_value="7.2", unit="mmol/L"))
+    db.add(ReportIndicator(id=200, report_id=2, item_name="GLU", item_name_standard="空腹血糖",
+                           result_value="6.8", unit="mmol/L"))
+    db.commit()
+
+    db.add(ReportInterpretation(id=1, report_id=1, overall_level="red", status="completed",
+                                red_count=1, yellow_count=0, green_count=5))
+    db.add(ReportInterpretation(id=2, report_id=2, overall_level="yellow", status="completed",
+                                red_count=1, yellow_count=0, green_count=6))
+    db.add(IndicatorJudgment(interpretation_id=1, indicator_id=100, item_name="血糖",
+                             color_level="red"))
+    db.add(IndicatorJudgment(interpretation_id=2, indicator_id=200, item_name="GLU",
+                             color_level="red"))
+    db.commit()
+
+    result = get_overview(db, user_id=10)
+
+    assert result["user_summary"]["total_reports"] == 2
+    assert result["user_summary"]["latest_overall_level"] == "yellow"
+    assert len(result["indicator_trends"]) >= 1
+    blood_trend = next((t for t in result["indicator_trends"]
+                        if t["item_name_standard"] == "空腹血糖"), None)
+    assert blood_trend is not None
+    assert len(blood_trend["points"]) == 2
+    assert blood_trend["trend_direction"] == "down"
+    assert blood_trend["latest_deviation"] == "red"
+
+    assert len(result["abnormal_distribution"]) == 1
+    abnormal = result["abnormal_distribution"][0]
+    assert abnormal["item_name_standard"] == "空腹血糖"
+    assert abnormal["red_count"] == 2
+    assert abnormal["yellow_count"] == 0
+    assert abnormal["last_color"] == "red"

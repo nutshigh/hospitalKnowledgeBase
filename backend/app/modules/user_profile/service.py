@@ -87,12 +87,13 @@ def get_overview(db: Session, user_id: int) -> dict:
         v["latest_deviation"] = v["points"][-1].get("color") if v["points"] else None
 
     abnormal_dist_q = text("""
-        SELECT ij.item_name, ij.item_name_standard, ij.color_level, COUNT(*) as cnt
+        SELECT ij.item_name, rind.item_name_standard, ij.color_level, COUNT(*) as cnt
         FROM indicator_judgment ij
         JOIN report_interpretation ri2 ON ij.interpretation_id = ri2.id
         JOIN report_info ri ON ri2.report_id = ri.id
+        JOIN report_indicator rind ON ij.indicator_id = rind.id
         WHERE ri.user_id = :uid AND ij.color_level IN ('red', 'yellow')
-        GROUP BY ij.item_name, ij.item_name_standard, ij.color_level
+        GROUP BY ij.item_name, rind.item_name_standard, ij.color_level
     """)
     rows = db.execute(abnormal_dist_q, {"uid": user_id}).fetchall()
     grouped = {}
@@ -157,11 +158,11 @@ def _build_indicator_diff(db: Session, current: ReportInfo, baseline: ReportInfo
     ).filter(ReportInterpretation.report_id == baseline.id).all()}
 
     cur_dicts = [
-        {**_indicator_to_dict(i), "color_level": cur_judgments.get(i.id, MagicMock(color_level=None)).color_level if cur_judgments.get(i.id) else None}
+        {**_indicator_to_dict(i), "color_level": cur_judgments[i.id].color_level if i.id in cur_judgments else None}
         for i in cur_inds
     ]
     base_dicts = [
-        {**_indicator_to_dict(i), "color_level": base_judgments.get(i.id, MagicMock(color_level=None)).color_level if base_judgments.get(i.id) else None}
+        {**_indicator_to_dict(i), "color_level": base_judgments[i.id].color_level if i.id in base_judgments else None}
         for i in base_inds
     ]
 
