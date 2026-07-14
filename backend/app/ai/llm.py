@@ -16,7 +16,7 @@ def get_chat_model(streaming: bool = False) -> ChatOpenAI:
             api_key=settings.REMOTE_LLM_API_KEY,
             temperature=settings.REMOTE_LLM_TEMPERATURE,
             max_tokens=settings.REMOTE_LLM_MAX_TOKENS,
-            timeout=settings.LLM_TIMEOUT_SECONDS,
+            timeout=None,
             streaming=streaming,
         )
     # local: MedGo via vLLM
@@ -26,6 +26,6 @@ def get_chat_model(streaming: bool = False) -> ChatOpenAI:
         api_key=settings.MEDGO_API_KEY,
         temperature=settings.MEDGO_TEMPERATURE,
         max_tokens=settings.MEDGO_MAX_TOKENS,
-        timeout=settings.LLM_TIMEOUT_SECONDS,
+        timeout=None,
         streaming=streaming,
     )

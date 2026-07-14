@@ -109,8 +109,8 @@ def test_judge_review_format_for_comprehensive_report():
     assert "ALT 知识" in text
 
 
-def test_run_judge_passes_when_agent_passthrough():
-    """Judge agent 抛异常时 run_judge 返回 passed=True，不阻塞"""
+def test_run_judge_passes_when_model_raises():
+    """Judge model 抛异常时 run_judge 返回 passed=True，不阻塞"""
     from unittest.mock import patch
     from app.ai.agents.judge_graph import run_judge
     from app.ai.agents.interp_graph import InterpretationReport
@@ -120,10 +120,51 @@ def test_run_judge_passes_when_agent_passthrough():
         "references": [],
         "abnormal_indicators": [],
     }
-    with patch("app.ai.agents.judge_graph.build_judge_agent") as mock_b:
+    with patch("app.ai.agents.judge_graph.build_judge_model") as mock_b:
         mock_b.side_effect = RuntimeError("boom")
         result = run_judge(state)
     assert result["passed"] is True
+
+
+def test_parse_judge_response_strips_think_and_parses_json():
+    """_parse_judge_response 剥 thinking 标签后能解析出 JudgeResult"""
+    from app.ai.agents.judge_graph import _parse_judge_response
+    raw = '\n{"passed": true, "issues": [], "suggestions": ""}'
+    jr = _parse_judge_response(raw)
+    assert jr is not None
+    assert jr.passed is True
+    assert jr.issues == []
+
+
+def test_parse_judge_response_returns_none_on_garbage():
+    """无法解析时返回 None，让上游回退到 passed=true"""
+    from app.ai.agents.judge_graph import _parse_judge_response
+    assert _parse_judge_response("") is None
+    assert _parse_judge_response("我是一条没有 JSON 的回复") is None
+
+
+def test_run_judge_parses_text_response():
+    """run_judge 在正常文本响应下返回结构化 JudgeResult（不再走 ToolStrategy）"""
+    from unittest.mock import patch, MagicMock
+    from app.ai.agents.judge_graph import run_judge
+    from app.ai.agents.interp_graph import InterpretationReport
+    state = {
+        "report": InterpretationReport(overall_summary="整体评估", abnormal_focus="异常",
+                                        trend_note="", suggestions="建议", risk_alert=""),
+        "references": [{"ref_id": 1, "entry_id": 12, "title": "知识A", "source": "document"}],
+        "abnormal_indicators": [{"indicator_id": 5, "item_name": "ALT",
+                                  "result_value": "62", "unit": "U/L",
+                                  "deviation": "high", "color_level": "yellow"}],
+    }
+    with patch("app.ai.agents.judge_graph.build_judge_model") as mock_b:
+        mock_model = MagicMock()
+        mock_b.return_value = mock_model
+        mock_model.invoke.return_value = MagicMock(
+            content='\n{"passed": true, "issues": [], "suggestions": ""}'
+        )
+        result = run_judge(state)
+    assert result["passed"] is True
+    assert result["issues"] == []
 
 
 def test_interp_state_has_report_and_references():

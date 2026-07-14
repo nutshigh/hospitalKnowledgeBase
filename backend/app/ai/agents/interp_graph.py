@@ -145,7 +145,7 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
 
 def build_interp_agent():
     model = get_chat_model(streaming=False)
-    model.max_tokens = 512
+    model.max_tokens = 16384
     return create_agent(
         model=model,
         tools=INTERP_TOOLS,
@@ -158,7 +158,7 @@ def build_interp_agent():
 
 def build_report_model():
     model = get_chat_model(streaming=False)
-    model.max_tokens = 4096
+    model.max_tokens = 16384
     return model
 
 
@@ -526,6 +526,18 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
     ).first()
     if existing:
         return {}
+
+    # 在 graph.invoke 前先建一行 status='processing'，让前端能通过
+    # /interpretations/{id} 看到解读正在进行中，而不是 404（"暂无 AI 解读"）。
+    pending = db.query(ReportInterpretation).filter(
+        ReportInterpretation.report_id == report_id,
+        ReportInterpretation.status.in_(("pending", "processing")),
+    ).first()
+    if pending:
+        pending.status = "processing"
+    else:
+        db.add(ReportInterpretation(report_id=report_id, status="processing"))
+    db.commit()
 
     graph = build_interp_graph(hospital_id, db)
     try:

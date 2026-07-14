@@ -13,9 +13,25 @@ export default function ReportDetailPage() {
   const { api } = useDoctorStore();
   const [report, setReport] = useState<any>(null);
   const [interp, setInterp] = useState<any>(null);
+
   useEffect(() => {
-    api.get(`/reports/${id}`).then(r => { setReport(r.data); });
-    api.get(`/interpretations/${id}`).then(r => setInterp(r.data));
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = () => {
+      Promise.all([
+        api.get(`/reports/${id}`).catch(() => ({ data: null })),
+        api.get(`/interpretations/${id}`).catch(() => ({ data: null })),
+      ]).then(([r, i]) => {
+        setReport(r.data);
+        setInterp(i.data);
+        const interpDone = i.data?.status === 'completed' || i.data?.status === 'failed';
+        const taskDone = !r.data?.task_status || r.data.task_status === 'completed' || r.data.task_status === 'failed';
+        if (!taskDone || !interpDone) {
+          timer = setTimeout(poll, 10000);
+        }
+      });
+    };
+    poll();
+    return () => { if (timer) clearTimeout(timer); };
   }, [id]);
 
   if (!report) return <DoctorLayout><Spin /></DoctorLayout>;
@@ -72,7 +88,7 @@ export default function ReportDetailPage() {
       <InterpretationReportCard
         summaries={interp?.summaries}
         references={interp?.references}
-        loading={interp?.status && interp.status !== 'completed'}
+        loading={!interp || interp.status !== 'completed'}
         qualityNote={interp?.quality_note}
       />
     </DoctorLayout>

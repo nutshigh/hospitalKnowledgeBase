@@ -26,7 +26,9 @@ export default function ReportDetailPage() {
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const fetchOnce = () => Promise.all([
       api.get(`/reports/${id}`).catch(() => ({ data: null })),
       api.get(`/interpretations/${id}`).catch(() => ({ data: null })),
     ]).then(([r, i]) => {
@@ -36,7 +38,24 @@ export default function ReportDetailPage() {
       if (taskId) {
         api.get(`/reports/tasks/${taskId}`).then(t => setTaskStatus(t.data?.status)).catch(() => {});
       }
-    }).finally(() => setLoading(false));
+      return { taskStatus: r.data?.task_status, interpStatus: i.data?.status };
+    });
+
+    const poll = async () => {
+      await fetchOnce().then(({ taskStatus: ts, interpStatus: is }) => {
+        const tState = ts || taskStatus;
+        const interpDone = is === 'completed' || is === 'failed';
+        const taskDone = tState === 'completed' || tState === 'failed';
+        if (!taskDone || !interpDone) {
+          timer = setTimeout(poll, 10000);
+        }
+      });
+    };
+
+    fetchOnce().finally(() => setLoading(false));
+    poll();
+
+    return () => { if (timer) clearTimeout(timer); };
   }, [id]);
 
   useEffect(() => {
@@ -59,8 +78,18 @@ export default function ReportDetailPage() {
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
   if (!report) return <Layout title="报告详情"><p>报告不存在</p></Layout>;
 
-  const isProcessing = taskStatus && taskStatus !== 'completed' && taskStatus !== 'failed';
-  const interpLoading = !!isProcessing || (interpretation?.status && interpretation.status !== 'completed');
+  // 统一用 ReportCard 一致的 effectiveStatus 计算,避免首页/详情页状态显示不一致
+  const displayStatus = (() => {
+    const ts = taskStatus || report?.task_status;
+    const is = interpretation?.status;
+    if (ts === 'failed' || is === 'failed') return 'failed';
+    if (ts && ts !== 'completed') return ts;
+    if (!is) return 'processing';
+    if (is === 'completed') return 'completed';
+    return is; // processing / pending
+  })();
+  const isProcessing = displayStatus !== 'completed' && displayStatus !== 'failed';
+  const interpLoading = isProcessing;
 
   if (isProcessing) {
     return (
@@ -69,7 +98,7 @@ export default function ReportDetailPage() {
           <Spin size="large" />
           <h3 style={{ marginTop: 24, marginBottom: 8 }}>报告处理中</h3>
           <p style={{ color: '#888', marginBottom: 16 }}>AI 正在解析这份报告，请稍后回来查看</p>
-          <StatusTag status={taskStatus!} />
+          <StatusTag status={displayStatus} />
           <div style={{ marginTop: 32 }}>
             <Button onClick={() => nav('/')}>返回首页</Button>
           </div>
@@ -122,7 +151,7 @@ export default function ReportDetailPage() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {overallLevel && <ColorBadge level={overallLevel} size="md" />}
-            {interpretation?.status && <StatusTag status={interpretation.status} />}
+            <StatusTag status={displayStatus} />
           </div>
         </div>
       </div>

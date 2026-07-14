@@ -193,7 +193,7 @@ def _parse_text_with_llm(text: str) -> dict:
 {text[:24000]}
 """
     model = get_chat_model()
-    resp = model.invoke([("user", prompt)], max_tokens=2048).content
+    resp = model.invoke([("user", prompt)], max_tokens=16384).content
     import json, re
     from json_repair import repair_json
     match = re.search(r'\{[\s\S]*\}', resp)
@@ -247,9 +247,21 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
         tasks = {t.id: t for t in db.query(ReportTask).filter(ReportTask.id.in_(task_ids)).all()}
     else:
         tasks = {}
+    # Attach interpretation status (latest report_interpretation per report)
+    report_ids = [r.id for r in items]
+    if report_ids:
+        from app.modules.interpretation.models import ReportInterpretation
+        interps = {}
+        for ri in db.query(ReportInterpretation).filter(
+            ReportInterpretation.report_id.in_(report_ids)
+        ).order_by(ReportInterpretation.id.desc()).all():
+            interps.setdefault(ri.report_id, ri)
+    else:
+        interps = {}
     results = []
     for r in items:
         task = tasks.get(r.task_id)
+        interp = interps.get(r.id)
         results.append({
             "id": r.id,
             "task_id": r.task_id,
@@ -260,6 +272,8 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
             "check_type": r.check_type,
             "unit_name": r.unit_name,
             "task_status": task.status if task else None,
+            "interp_status": interp.status if interp else None,
+            "overall_level": interp.overall_level if interp else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return results, total
