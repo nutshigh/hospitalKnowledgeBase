@@ -1,6 +1,18 @@
+import asyncio
+import os
+
 from langchain_openai import ChatOpenAI
 
 from app.config import settings
+
+_MEDGO_MAX = int(os.getenv("MEDGO_MAX_CONCURRENCY", "2"))
+medgo_sem = asyncio.Semaphore(_MEDGO_MAX)
+
+
+async def _guarded(coro):
+    """统一 MedGo 并发计数闸。所有 MedGo 调用必须经此包装。"""
+    async with medgo_sem:
+        return await coro
 
 
 def get_chat_model(streaming: bool = False) -> ChatOpenAI:
