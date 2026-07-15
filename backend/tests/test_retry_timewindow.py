@@ -1,5 +1,8 @@
+from datetime import datetime
+
 import pytest
-from freezegun import freeze_time
+
+import app.core.retry as retry_mod
 from app.core.retry import backoff_for_retry, is_bulk_window_now
 
 
@@ -19,5 +22,12 @@ def test_backoff(rc, expected):
 def test_bulk_window(hour, start, end, expected, monkeypatch):
     monkeypatch.setenv("BULK_WINDOW_START", str(start))
     monkeypatch.setenv("BULK_WINDOW_END", str(end))
-    with freeze_time(f"2026-07-15 {hour:02d}:30:00"):
-        assert is_bulk_window_now() is expected
+    fake_now = datetime(2026, 7, 15, hour, 30, 0)
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, *args, **kwargs):
+            return fake_now
+
+    monkeypatch.setattr(retry_mod, "datetime", FakeDateTime)
+    assert is_bulk_window_now() is expected
