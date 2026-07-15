@@ -11,7 +11,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated, NotRequired
 
-from app.ai.llm import get_chat_model
+from app.ai.llm import get_chat_model, medgo_sem
 from app.ai.agents.tools import AgentContext, CHAT_TOOLS
 from app.ai.agents.think_filter import ThinkStreamFilter, strip_think_tags
 from app.ai.agents.citation_matcher import inject_citations
@@ -264,7 +264,7 @@ async def run_chat_agent(
         # ── 1. Planner：决定调用哪些工具（结构化输出，不执行工具）──
         ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id)
         planner_history = history_msgs[-PLANNER_HISTORY_MSGS:] if PLANNER_HISTORY_MSGS > 0 else []
-        plan = run_planner(hospital_id, planner_history, user_message, session.report_id, user_id)
+        plan = await run_planner(hospital_id, planner_history, user_message, session.report_id, user_id)
 
         # ── 2. Execute plan：Python 执行工具，收集 refs + context ──
         refs: list[dict] = []
@@ -283,12 +283,13 @@ async def run_chat_agent(
 
         final_response = ""
         think_filter = ThinkStreamFilter()
-        async for chunk in model.astream(messages):
-            if chunk and hasattr(chunk, "content") and chunk.content:
-                final_response += chunk.content
-                clean = think_filter.feed(chunk.content)
-                if clean:
-                    yield {"event": "token", "data": {"content": clean}}
+        async with medgo_sem:
+            async for chunk in model.astream(messages):
+                if chunk and hasattr(chunk, "content") and chunk.content:
+                    final_response += chunk.content
+                    clean = think_filter.feed(chunk.content)
+                    if clean:
+                        yield {"event": "token", "data": {"content": clean}}
 
         tail = think_filter.flush()
         if tail:

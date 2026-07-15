@@ -2,7 +2,7 @@
 无 DB 依赖,使用 sqlalchemy in-memory SQLite + mock LLM。
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import date
 
 from sqlalchemy import create_engine
@@ -54,9 +54,9 @@ def test_try_generate_comparison_summary_writes_cache_on_first_call(db):
     _make_completed_interpretation(db)
 
     fake_model = MagicMock()
-    fake_model.invoke.return_value = MagicMock(
+    fake_model.ainvoke = AsyncMock(return_value=MagicMock(
         content="本次血糖从 7.2 降至 6.8,改善明显。" * 5
-    )
+    ))
 
     from app.modules.user_profile.service import try_generate_comparison_summary
     with patch("app.modules.user_profile.service.get_chat_model", return_value=fake_model):
@@ -92,7 +92,7 @@ def test_try_generate_comparison_summary_swallows_llm_failure(db):
     _make_completed_interpretation(db)
 
     fake_model = MagicMock()
-    fake_model.invoke.side_effect = RuntimeError("LLM down")
+    fake_model.ainvoke = AsyncMock(side_effect=RuntimeError("LLM down"))
 
     from app.modules.user_profile.service import try_generate_comparison_summary
     with patch("app.modules.user_profile.service.get_chat_model", return_value=fake_model):
@@ -149,7 +149,7 @@ def test_get_ai_summary_calls_llm_when_baseline_mismatch(db):
     db.commit()
 
     fake_model = MagicMock()
-    fake_model.invoke.return_value = MagicMock(content="针对新基准的小结")
+    fake_model.ainvoke = AsyncMock(return_value=MagicMock(content="针对新基准的小结"))
 
     from app.modules.user_profile.service import get_ai_summary
     with patch("app.modules.user_profile.service.get_chat_model", return_value=fake_model):

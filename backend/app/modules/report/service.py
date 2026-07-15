@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import os
 from datetime import datetime, timezone
@@ -168,8 +169,24 @@ def _extract_pdf_text(file_path: str) -> str:
 
 def _parse_text_with_llm(text: str) -> dict:
     """Send extracted PDF text to LLM for indicator parsing."""
-    from app.ai.llm import get_chat_model
-    prompt = f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
+    return asyncio.run(_parse_text_with_llm_async(text))
+
+
+async def _parse_text_with_llm_async(text: str) -> dict:
+    """实际 async 解析，包裹在 medgo_sem 内。"""
+    from app.ai.llm import get_chat_model, _guarded
+    prompt = _build_parse_prompt(text)
+    model = get_chat_model()
+
+    async def _call():
+        return await model.ainvoke([("user", prompt)], max_tokens=16384)
+
+    resp = (await _guarded(_call())).content
+    return _parse_llm_json(resp)
+
+
+def _build_parse_prompt(text: str) -> str:
+    return f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
 
 {{
   "name": "姓名",
@@ -192,8 +209,9 @@ def _parse_text_with_llm(text: str) -> dict:
 体检报告文本：
 {text[:24000]}
 """
-    model = get_chat_model()
-    resp = model.invoke([("user", prompt)], max_tokens=16384).content
+
+
+def _parse_llm_json(resp: str) -> dict:
     import json, re
     from json_repair import repair_json
     match = re.search(r'\{[\s\S]*\}', resp)
@@ -203,7 +221,6 @@ def _parse_text_with_llm(text: str) -> dict:
         data = json.loads(match.group())
     except json.JSONDecodeError:
         data = json.loads(repair_json(match.group()))
-    # Ensure indicators have ref_low/ref_high
     for ind in data.get("indicators", []):
         ref = ind.pop("ref_range", None)
         if ref and "ref_low" not in ind:

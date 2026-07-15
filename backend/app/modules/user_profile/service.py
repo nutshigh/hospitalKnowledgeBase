@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -9,7 +10,7 @@ from app.modules.user_profile.comparison import (
     match_indicators, compute_delta, judge_status, trend_direction,
     build_comparison_prompt,
 )
-from app.ai.llm import get_chat_model
+from app.ai.llm import get_chat_model, _guarded
 from app.ai.agents.think_filter import strip_think_tags
 
 logger = logging.getLogger(__name__)
@@ -354,7 +355,7 @@ def _call_llm_for_summary(prompt: str) -> str:
     """调用 MedGo 生成小结。失败返回空串并记 warning。"""
     try:
         model = get_chat_model(streaming=False)
-        resp = model.invoke([("user", prompt)], max_tokens=512)
+        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=512)))
         return strip_think_tags(resp.content or "")
     except Exception as e:
         logger.warning("comparison summary LLM call failed: %s", e)
@@ -388,7 +389,7 @@ def try_generate_comparison_summary(db: Session, report_id: int) -> None:
     )
     try:
         model = get_chat_model(streaming=False)
-        resp = model.invoke([("user", prompt)], max_tokens=512)
+        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=512)))
         summary = strip_think_tags(resp.content or "")
         if summary:
             interp.comparison_summary = summary

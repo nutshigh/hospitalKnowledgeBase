@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -19,7 +20,7 @@ from app.ai.agents.tools import AgentContext, INTERP_TOOLS
 from app.ai.agents.think_filter import strip_think_tags
 from app.ai.agents.citation_matcher import inject_citations
 from app.ai.agents.judge_graph import run_judge
-from app.ai.llm import get_chat_model
+from app.ai.llm import get_chat_model, _guarded
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -250,7 +251,10 @@ def _generate_report(state: InterpState, db: Session) -> dict:
 按 system 提示的 5 节字段返回 JSON。"""
 
     model = build_report_model()
-    resp = model.invoke([("system", GENERATE_SYSTEM_PROMPT), ("user", user_content)]).content
+    resp = asyncio.run(_guarded(model.ainvoke([
+        ("system", GENERATE_SYSTEM_PROMPT),
+        ("user", user_content),
+    ]))).content
     import re as _re
     from json_repair import repair_json
     match = _re.search(r'\{[\s\S]*\}', resp or "")
@@ -407,11 +411,11 @@ def build_interp_graph(hospital_id: str, db: Session):
         for i in range(0, len(names), batch_size):
             batch = names[i:i + batch_size]
             user_content = "\n".join(f"- {n}" for n in batch)
-            result = agent.invoke(
+            result = asyncio.run(_guarded(agent.ainvoke(
                 {"messages": [HumanMessage(content=user_content)]},
                 config={"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2},
                 context=AgentContext(hospital_id=state["hospital_id"]),
-            )
+            )))
             batch_results = result.get("knowledge_results", {}) or {}
             all_results.update(batch_results)
         return {"knowledge_results": all_results}

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.ai.llm import get_chat_model
+from app.ai.llm import get_chat_model, _guarded
 from app.ai.agents.tools import AgentContext
 from app.config import settings
 from app.core.database import get_session
@@ -62,7 +62,7 @@ class ChatPlan(BaseModel):
     summary: str = Field(default="", description="规划简述")
 
 
-def run_planner(
+async def run_planner(
     hospital_id: str,
     history_msgs: list,
     user_message: str,
@@ -72,6 +72,7 @@ def run_planner(
     """运行 planner：用结构化输出决定调用哪些工具（不执行工具）。
 
     返回 ChatPlan 实例，tool_calls 为空列表表示无需工具。
+    MedGo 调用经 medgo_sem 收口。
     """
     model = get_chat_model(streaming=False)
     model.max_tokens = 16384  # 16k：MedGo 长历史下 structured-output JSON 容易超 512 被截断，导致 fallback 空计划
@@ -79,7 +80,7 @@ def run_planner(
     structured = model.with_structured_output(ChatPlan)
     messages = [SystemMessage(content=PLANNER_SYSTEM_PROMPT)] + history_msgs + [HumanMessage(content=user_message)]
     try:
-        plan = structured.invoke(messages)
+        plan = await _guarded(structured.ainvoke(messages))
         return plan
     except Exception as e:
         logger.warning("planner failed: %s, returning empty plan", e)

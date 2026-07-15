@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 def test_interp_state_fields():
@@ -159,9 +159,9 @@ def test_run_judge_parses_text_response():
     with patch("app.ai.agents.judge_graph.build_judge_model") as mock_b:
         mock_model = MagicMock()
         mock_b.return_value = mock_model
-        mock_model.invoke.return_value = MagicMock(
+        mock_model.ainvoke = AsyncMock(return_value=MagicMock(
             content='\n{"passed": true, "issues": [], "suggestions": ""}'
-        )
+        ))
         result = run_judge(state)
     assert result["passed"] is True
     assert result["issues"] == []
@@ -230,7 +230,7 @@ def test_generate_report_with_abnormal_calls_llm_and_injects():
          patch("app.ai.agents.interp_graph.strip_think_tags", side_effect=lambda x: x):
         mock_model = MagicMock()
         mock_build.return_value = mock_model
-        mock_model.invoke.return_value = MagicMock(content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T","suggestions":"G","risk_alert":"R"}')
+        mock_model.ainvoke = AsyncMock(return_value=MagicMock(content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T","suggestions":"G","risk_alert":"R"}'))
         mock_inj.side_effect = lambda text, sources, **kw: (text, [{"ref_id": 1, "entry_id": 12, "title": "ALT 知识", "source": "document", "content": "ALT 升高"}] if "ALT" in text else [])
 
         result = _generate_report(state, MagicMock())
@@ -260,8 +260,8 @@ def test_generate_report_increments_judge_retry_count_on_abnormal_branch():
          patch("app.ai.agents.interp_graph.strip_think_tags", side_effect=lambda x: x):
         mock_model = MagicMock()
         mock_build.return_value = mock_model
-        mock_model.invoke.return_value = MagicMock(
-            content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T","suggestions":"G","risk_alert":"R"}')
+        mock_model.ainvoke = AsyncMock(return_value=MagicMock(
+            content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T","suggestions":"G","risk_alert":"R"}'))
         mock_inj.side_effect = lambda text, sources, **kw: (text, [])
         result = _generate_report(state, MagicMock())
     assert result["judge_retry_count"] == 1

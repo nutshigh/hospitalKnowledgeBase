@@ -5,7 +5,7 @@
 """
 import pytest
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from langchain.messages import HumanMessage, AIMessage
 
@@ -25,20 +25,21 @@ def test_chat_plan_schema_defaults():
     assert tc.item_name is None
 
 
-def test_run_planner_returns_plan_with_tools():
+@pytest.mark.asyncio
+async def test_run_planner_returns_plan_with_tools():
     """run_planner 对医学问题返回带 tool_calls 的计划"""
     from app.ai.agents.chat_planner import run_planner, ChatPlan, PlannedToolCall
 
     fake_model = MagicMock()
     fake_model.max_tokens = 4096
     fake_model.temperature = 0.1
-    fake_model.with_structured_output.return_value.invoke.return_value = ChatPlan(
+    fake_model.with_structured_output.return_value.ainvoke = AsyncMock(return_value=ChatPlan(
         need_tools=True,
         tool_calls=[PlannedToolCall(tool="search_knowledge", query="高血压 并发症")],
-    )
+    ))
 
     with patch("app.ai.agents.chat_planner.get_chat_model", return_value=fake_model):
-        plan = run_planner("H001", [], "高血压有什么并发症", None, 4)
+        plan = await run_planner("H001", [], "高血压有什么并发症", None, 4)
 
     assert plan.need_tools is True
     assert len(plan.tool_calls) == 1
@@ -46,31 +47,33 @@ def test_run_planner_returns_plan_with_tools():
     assert plan.tool_calls[0].query == "高血压 并发症"
 
 
-def test_run_planner_returns_empty_plan_for_greeting():
+@pytest.mark.asyncio
+async def test_run_planner_returns_empty_plan_for_greeting():
     """run_planner 对问候返回空计划"""
     from app.ai.agents.chat_planner import run_planner, ChatPlan
 
     fake_model = MagicMock()
-    fake_model.with_structured_output.return_value.invoke.return_value = ChatPlan(
+    fake_model.with_structured_output.return_value.ainvoke = AsyncMock(return_value=ChatPlan(
         need_tools=False, tool_calls=[], summary="纯问候",
-    )
+    ))
 
     with patch("app.ai.agents.chat_planner.get_chat_model", return_value=fake_model):
-        plan = run_planner("H001", [], "你好", None, 4)
+        plan = await run_planner("H001", [], "你好", None, 4)
 
     assert plan.need_tools is False
     assert plan.tool_calls == []
 
 
-def test_run_planner_handles_error():
+@pytest.mark.asyncio
+async def test_run_planner_handles_error():
     """run_planner 在模型异常时返回空计划"""
     from app.ai.agents.chat_planner import run_planner, ChatPlan
 
     fake_model = MagicMock()
-    fake_model.with_structured_output.return_value.invoke.side_effect = RuntimeError("model down")
+    fake_model.with_structured_output.return_value.ainvoke = AsyncMock(side_effect=RuntimeError("model down"))
 
     with patch("app.ai.agents.chat_planner.get_chat_model", return_value=fake_model):
-        plan = run_planner("H001", [], "高血压", None, 4)
+        plan = await run_planner("H001", [], "高血压", None, 4)
 
     assert plan.need_tools is False
     assert "planner error" in plan.summary
