@@ -54,7 +54,9 @@ def get_task_status(db: Session, task_id: int) -> Optional[ReportTask]:
     return db.query(ReportTask).filter(ReportTask.id == task_id).first()
 
 
-def process_task(db: Session, task_id: int, hospital_id: str):
+def process_task(db: Session, task_id: int, hospital_id: str,
+                 batch_id: Optional[str] = None,
+                 file_id: Optional[str] = None):
     task = get_task_status(db, task_id)
     if not task:
         return
@@ -137,9 +139,14 @@ def process_task(db: Session, task_id: int, hospital_id: str):
 
         # task.priority 已是 DB int (0/1/100),TaskMessage 需要 str priority 路由
         publish_priority = {0: "normal", 1: "urgent", 100: "bulk"}.get(task.priority or 0, "normal")
+        payload = {"report_id": report.id, "hospital_id": hospital_id}
+        if batch_id is not None:
+            payload["batch_id"] = batch_id
+        if file_id is not None:
+            payload["file_id"] = file_id
         rabbitmq.publish(TaskMessage(
             task_type="interpretation", hospital_id=hospital_id, priority=publish_priority,
-            payload={"report_id": report.id, "hospital_id": hospital_id},
+            payload=payload,
         ))
 
     except Exception as e:

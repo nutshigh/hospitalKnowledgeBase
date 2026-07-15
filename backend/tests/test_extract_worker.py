@@ -241,3 +241,57 @@ def test_T2_7_corrupt_zip(env):
     assert b1.status == "partial_failed"
     assert "archive_corrupt" in (b1.error_message or "")
     assert len(msgs) == 0
+
+
+# ---------------------------------------------------------------------------
+# T2.8 瞬时异常(retry_count<3)→ publish_retry("extract.bulk"),batch 仍 extracting
+# ---------------------------------------------------------------------------
+def test_T2_8_transient_retry_publish_retry(env):
+    db, tmp, Mq, msgs = env
+    ap = os.path.join(tmp, "a.zip")
+    _make_zip(ap, [("a.pdf", b"x")])
+    _make_batch(env, ap)
+
+    from app.modules.report import extract_worker
+    with patch.object(extract_worker, "_extract_and_enqueue",
+                      side_effect=RuntimeError("transient blip")):
+        handle_extract_task = extract_worker.handle_extract_task
+        handle_extract_task(_msg(archive_path=ap))
+
+    Mq.publish_retry.assert_called_once()
+    args, kwargs = Mq.publish_retry.call_args
+    assert args[0] == "extract.bulk"
+    assert kwargs.get("batch_id") == "b1"
+    # retry 队列存了带 retry_count 的副本
+    import json as _json
+    body = args[1]
+    parsed = _json.loads(body)
+    assert parsed["payload"]["retry_count"] == 1
+    # batch 不进终态,仍 extracting(等延迟副本回流)
+    db.refresh(db.query(BatchImport).get("b1"))
+    assert db.query(BatchImport).get("b1").status == "extracting"
+    assert len(msgs) == 0  # 未 publish 新 parsing task
+
+
+# ---------------------------------------------------------------------------
+# T2.9 瞬时异常 retry_count>=3 → partial_failed, 不再 publish_retry
+# ---------------------------------------------------------------------------
+def test_T2_9_transient_retry_exhausted_partial_failed(env):
+    db, tmp, Mq, msgs = env
+    ap = os.path.join(tmp, "a.zip")
+    _make_zip(ap, [("a.pdf", b"x")])
+    _make_batch(env, ap)
+
+    from app.modules.report import extract_worker
+    with patch.object(extract_worker, "_extract_and_enqueue",
+                      side_effect=RuntimeError("transient blip")):
+        handle_extract_task = extract_worker.handle_extract_task
+        # payload 已带 retry_count=2 → 本次 +1 = 3 → 终态 partial_failed
+        msg = {"payload": {"batch_id": "b1", "hospital_id": "H001",
+                           "archive_path": ap, "retry_count": 2}}
+        handle_extract_task(msg)
+
+    Mq.publish_retry.assert_not_called()
+    b1 = db.query(BatchImport).get("b1")
+    assert b1.status == "partial_failed"
+    assert "extract_failed_after_retries" in (b1.error_message or "")

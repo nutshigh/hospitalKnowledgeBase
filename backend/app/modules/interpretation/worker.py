@@ -25,6 +25,19 @@ def handle_interpretation_task(message: dict):
 
     db = next(get_hospital_db(hospital_id))
     try:
+        # F15 running-skip:已存在 processing/completed 的解读行 → ack 跳过,
+        # 避免重复投递并发跑两次 agent / 抢同一行。
+        from app.modules.interpretation.models import ReportInterpretation
+        existing = (
+            db.query(ReportInterpretation)
+            .filter(
+                ReportInterpretation.report_id == report_id,
+                ReportInterpretation.status.in_(("processing", "completed")),
+            )
+            .first()
+        )
+        if existing:
+            return  # ack and skip — another worker is/has handled this report
         try:
             run_interpretation_agent(hospital_id, db, report_id)
             # register comparison summary(failures don't affect interp completion)

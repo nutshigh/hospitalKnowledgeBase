@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import time
 import zlib
@@ -7,8 +9,11 @@ import tarfile
 from app.config import settings
 from app.core.database import get_hospital_db
 from app.core.rabbitmq import rabbitmq, TaskMessage
+from app.core.retry import backoff_for_retry
 from app.modules.report.batch_models import BatchImport, BatchImportFile
 from app.modules.report.batch_service import BatchService
+
+_log = logging.getLogger("extract_worker")
 
 # 不含 docx(Spec F8:DOCX 从批量上传白名单移除)
 ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
@@ -32,6 +37,27 @@ def handle_extract_task(message: dict):
             b.error_message = f"archive_corrupt: {e}"
             db.commit()
             return
+        except Exception as e:
+            # 瞬时异常(DB 抖动 / publish 失败 / OS 错等):走延迟队列重试,不直接 DLQ。
+            _log.warning("extract transient failure for batch %s: %s", batch_id, e)
+            retry_count = payload.get("retry_count", 0) + 1
+            if retry_count >= 3:
+                b = db.query(BatchImport).get(batch_id)
+                b.status = "partial_failed"
+                b.error_message = f"extract_failed_after_retries: {e}"
+                db.commit()
+                return  # 重试耗尽,ack 当前消息(batch 已置 partial_failed 终态)
+            body = json.dumps({
+                "task_type": "extract",
+                "hospital_id": hospital_id,
+                "payload": {**payload, "retry_count": retry_count},
+            }).encode()
+            rabbitmq.publish_retry(
+                "extract.bulk", body,
+                backoff_for_retry(retry_count - 1),
+                batch_id=batch_id,
+            )
+            return  # ack 当前消息;retry 队列已存延迟副本,batch 仍 extracting
         b = db.query(BatchImport).get(batch_id)
         total = db.query(BatchImportFile).filter_by(batch_id=batch_id).count()
         b.total = total

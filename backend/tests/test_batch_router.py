@@ -137,6 +137,43 @@ def test_T11_2b_complete_crc_mismatch_400(env):
     assert cr.json()["detail"] == "crc_mismatch"
 
 
+def test_complete_archive_too_large_400(env):
+    """I4: F1 archive_too_large 端到端 + M1 分片清理。"""
+    import glob
+    from app.config import settings
+    with patch.object(settings, "BATCH_ARCHIVE_MAX_SIZE", 100):
+        bid = env["client"].post(
+            "/api/v1/reports/batches", data={"filename": "big.zip"}
+        ).json()["batch_id"]
+
+        chunks = [b"x" * 100, b"y" * 100]  # total 200 bytes > 100
+        for i, c in enumerate(chunks):
+            r = env["client"].post(
+                f"/api/v1/reports/batches/{bid}/chunk",
+                data={"index": i, "total": 2},
+                files={"data": ("p", c, "application/octet-stream")},
+            )
+            assert r.status_code == 200, r.text
+
+        cr = env["client"].post(
+            f"/api/v1/reports/batches/{bid}/complete",
+            json={"expected_crc32": None, "expected_total": 2, "expected_size": 200},
+        )
+        assert cr.status_code == 400
+        assert cr.json()["detail"] == "archive_too_large"
+
+        # batch cancelled
+        s = env["Session"]()
+        b = s.query(BatchImport).get(bid)
+        assert b.status == "cancelled"
+        assert b.error_message == "archive_too_large"
+        # M1: .partN 分片已被清理
+        part_dir = os.path.dirname(b.archive_path)
+        parts = glob.glob(os.path.join(part_dir, f"{bid}.part*"))
+        assert parts == []
+        s.close()
+
+
 def test_T11_3_progress_with_failing_files(env):
     s = env["Session"]()
     b = BatchImport(id="b1", hospital_id="H001", user_id="1", filename="x.zip",

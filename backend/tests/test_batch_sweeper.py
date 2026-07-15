@@ -66,10 +66,12 @@ def _past(seconds):
 class TestSweep:
 
     def test_sweep_advances_stuck_parsing(self, sweeper_db):
+        # C3 后:终态完成条件 = interp_ok + failed == total。
+        # 一个已全部 interp_ok 但状态卡在 interpreting 的 batch → sweeper 推进到 completed。
         b = BatchImport(
             id="b1", hospital_id="H001", user_id="u", filename="x.zip",
-            archive_path="/tmp/x.zip", status="parsing", total=2, parsed_ok=2,
-            interp_ok=0, failed=0,
+            archive_path="/tmp/x.zip", status="interpreting", total=2,
+            parsed_ok=2, interp_ok=2, failed=0,
         )
         b.updated_at = _past(2000)
         sweeper_db.add(b)

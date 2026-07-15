@@ -25,7 +25,7 @@ def handle_parsing_task(message: dict):
         if task and task.status == "completed":
             return
         try:
-            process_task(db, task_id, hospital_id)
+            process_task(db, task_id, hospital_id, batch_id=batch_id, file_id=file_id)
             # 成功 → 计 batch file 进度(parsed_ok)
             if batch_id and file_id:
                 BatchService.increment_progress(db, batch_id, file_id, "parsed_ok")

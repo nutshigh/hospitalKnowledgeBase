@@ -211,3 +211,45 @@ def test_comparison_summary_failure_doesnt_break(env):
     batch_mock.increment_progress.assert_called_once_with(
         s, "b1", "f1", "interp_ok")
     Mq.publish_retry.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 7. F15 running-skip: 已有 processing/completed 行 → ack 跳过,不跑 agent
+# ---------------------------------------------------------------------------
+def test_f15_running_skip_existing_processing(env):
+    s, Mq, agent_mock, cmp_mock, batch_mock = env
+    r = _make_report(s)
+    _make_batch_file(s)
+    # 已存在 processing 行(另一 worker 正在跑)→ 跳过
+    existing = ReportInterpretation(report_id=r.id, status="processing",
+                                    retry_count=0)
+    s.add(existing); s.commit()
+
+    from app.modules.interpretation.worker import handle_interpretation_task
+    msg = {"_routing_key": "interpretation.normal",
+           "payload": {"report_id": r.id, "hospital_id": "H001",
+                       "batch_id": "b1", "file_id": "f1"}}
+    handle_interpretation_task(msg)
+
+    agent_mock.assert_not_called()
+    batch_mock.increment_progress.assert_not_called()
+    Mq.publish_retry.assert_not_called()
+
+
+def test_f15_running_skip_existing_completed(env):
+    s, Mq, agent_mock, cmp_mock, batch_mock = env
+    r = _make_report(s)
+    _make_batch_file(s)
+    # 已存在 completed 行 → 跳过
+    existing = ReportInterpretation(report_id=r.id, status="completed",
+                                    retry_count=0)
+    s.add(existing); s.commit()
+
+    from app.modules.interpretation.worker import handle_interpretation_task
+    msg = {"_routing_key": "interpretation.normal",
+           "payload": {"report_id": r.id, "hospital_id": "H001",
+                       "batch_id": "b1", "file_id": "f1"}}
+    handle_interpretation_task(msg)
+
+    agent_mock.assert_not_called()
+    batch_mock.increment_progress.assert_not_called()

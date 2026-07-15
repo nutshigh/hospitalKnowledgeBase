@@ -118,7 +118,7 @@ def test_retry_count_1_publish_retry(env):
     t = _make_task(s, retry_count=0)
     _make_batch_file(s)
 
-    def _fail(db, task_id, hospital_id):
+    def _fail(db, task_id, hospital_id, batch_id=None, file_id=None):
         tt = s.query(ReportTask).get(task_id)
         tt.retry_count += 1
         tt.status = "queued"
@@ -153,7 +153,7 @@ def test_retry_count_3_raises_and_failed(env):
     t = _make_task(s, retry_count=2)  # 本次 process 会增到 3
     _make_batch_file(s)
 
-    def _fail(db, task_id, hospital_id):
+    def _fail(db, task_id, hospital_id, batch_id=None, file_id=None):
         tt = s.query(ReportTask).get(task_id)
         tt.retry_count += 1
         tt.status = "failed"

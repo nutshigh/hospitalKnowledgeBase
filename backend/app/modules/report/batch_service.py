@@ -1,6 +1,5 @@
 import os
 import uuid
-import zipfile
 import zlib
 from datetime import datetime, timezone
 from typing import Optional
@@ -49,12 +48,25 @@ class BatchService:
         b = db.query(BatchImport).get(batch_id)
         if b is None:
             raise ValueError("batch not found")
+        part_dir = os.path.dirname(b.archive_path)
+
+        def _cleanup_parts():
+            """删除所有已上传的 .partN 分片 (失败/拒收路径;spec F1 分片清理)。"""
+            if not os.path.isdir(part_dir):
+                return
+            for fn in os.listdir(part_dir):
+                if fn.startswith(f"{batch_id}.part"):
+                    try:
+                        os.remove(os.path.join(part_dir, fn))
+                    except OSError:
+                        pass
+
         if expected_size > settings.BATCH_ARCHIVE_MAX_SIZE:
             b.status = "cancelled"
             b.error_message = "archive_too_large"
             db.commit()
+            _cleanup_parts()
             raise ValueError("archive_too_large")
-        part_dir = os.path.dirname(b.archive_path)
         got_indices = sorted(
             int(fn.split(".part")[-1])
             for fn in os.listdir(part_dir)
@@ -64,6 +76,7 @@ class BatchService:
             b.status = "cancelled"
             b.error_message = "chunks_incomplete"
             db.commit()
+            _cleanup_parts()
             raise ValueError("chunks_incomplete")
         with open(b.archive_path, "wb") as out:
             crc = 0
@@ -77,6 +90,7 @@ class BatchService:
             b.status = "cancelled"
             b.error_message = "crc_mismatch"
             db.commit()
+            _cleanup_parts()
             raise ValueError("crc_mismatch")
         for i in got_indices:
             try:
@@ -111,9 +125,20 @@ class BatchService:
         db.commit()
         return fid
 
+    # 字段相关的合法前态守门。key=进度字段, value=该字段已计数过的终态集合
+    # (这些态不应再被本字段推进,以此实现幂等 + 顺向状态机):
+    #   parsed_ok 仅 queued → parsed
+    #   interp_ok queued|parsed → interp_ok
+    #   failed    queued|parsed|interp_ok → failed
+    _PRIOR_OK = {
+        "parsed_ok": ("parsed", "interp_ok", "failed"),
+        "interp_ok": ("interp_ok", "failed"),
+        "failed": ("failed",),
+    }
+
     @staticmethod
     def increment_progress(db: Session, batch_id: str, file_id: str, field: str) -> None:
-        """field ∈ {'parsed_ok','interp_ok','failed'}。幂等:靠 file.status 守护只 ++ 一次。"""
+        """field ∈ {'parsed_ok','interp_ok','failed'}。幂等:靠 field 相关的 file.status 守门只 ++ 一次。"""
         f = db.query(BatchImportFile).get(file_id)
         if f is None:
             return
@@ -124,7 +149,7 @@ class BatchService:
         }[field]
         result = db.query(BatchImportFile).filter(
             BatchImportFile.id == file_id,
-            BatchImportFile.status.notin_(["parsed", "interp_ok", "failed"]),
+            BatchImportFile.status.notin_(BatchService._PRIOR_OK[field]),
         ).update({BatchImportFile.status: new_state})
         if result == 0:
             db.commit()
@@ -144,9 +169,16 @@ class BatchService:
             return
         if b.total <= 0:
             return
-        if (b.parsed_ok or 0) + (b.interp_ok or 0) + (b.failed or 0) < b.total:
+        # Note: parsed_ok 统计的是"解析完成但解读尚未完成"的中间态文件;
+        # 终态完成条件是 interp_ok + failed == total (解读是 batch 终态阶段)。
+        terminal_done = (b.interp_ok or 0) + (b.failed or 0)
+        if terminal_done < b.total:
+            # 解读阶段一经产出第一个 interp_ok,自动由 parsing 推进到 interpreting
+            if b.status == "parsing" and (b.interp_ok or 0) > 0:
+                b.status = "interpreting"
+                db.commit()
             return
-        if b.failed == 0:
+        if (b.failed or 0) == 0:
             b.status = "completed"
         else:
             b.status = "partial_failed"
