@@ -22,10 +22,12 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
     # 向后兼容: legacy int priority(0=normal, 1=urgent)
     if isinstance(priority, int):
         priority = "urgent" if priority else "normal"
+    # DB 列 priority 是 Integer(BIGINT),不能存字符串;按 str→int 映射落库
+    priority_for_db = {"normal": 0, "urgent": 1, "bulk": 100}[priority]
     task = ReportTask(
         user_id=user_id, original_file_path=file_path, original_filename=filename,
         file_type=file_type, file_size=file_size, thumbnail_path=thumbnail_path,
-        status="queued", priority=priority,
+        status="queued", priority=priority_for_db,
     )
     db.add(task)
     db.commit()
@@ -133,8 +135,10 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         task.completed_at = datetime.now(timezone.utc)
         db.commit()
 
+        # task.priority 已是 DB int (0/1/100),TaskMessage 需要 str priority 路由
+        publish_priority = {0: "normal", 1: "urgent", 100: "bulk"}.get(task.priority or 0, "normal")
         rabbitmq.publish(TaskMessage(
-            task_type="interpretation", hospital_id=hospital_id, priority=task.priority,
+            task_type="interpretation", hospital_id=hospital_id, priority=publish_priority,
             payload={"report_id": report.id, "hospital_id": hospital_id},
         ))
 
@@ -145,12 +149,10 @@ def process_task(db: Session, task_id: int, hospital_id: str):
             task.status = "failed"
         else:
             task.status = "queued"
-            db.commit()
-            rabbitmq.publish(TaskMessage(
-                task_type="parsing", hospital_id=hospital_id, priority=task.priority,
-                payload={"task_id": task.id, "hospital_id": hospital_id, "file_path": task.original_file_path},
-            ))
+        task.updated_at = datetime.now(timezone.utc)
         db.commit()
+        # 重试决策交给 worker(走 publish_retry 延迟)
+        raise
 
 
 def _pdf_has_text(file_path: str) -> bool:
