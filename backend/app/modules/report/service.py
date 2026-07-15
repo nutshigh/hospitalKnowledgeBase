@@ -15,7 +15,13 @@ from app.core.rabbitmq import rabbitmq, TaskMessage
 
 def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
                 filename: str, file_type: str, file_size: int,
-                thumbnail_path: Optional[str] = None, priority: int = 0) -> ReportTask:
+                thumbnail_path: Optional[str] = None,
+                priority: str = "normal",
+                batch_id: Optional[str] = None,
+                file_id: Optional[str] = None) -> ReportTask:
+    # 向后兼容: legacy int priority(0=normal, 1=urgent)
+    if isinstance(priority, int):
+        priority = "urgent" if priority else "normal"
     task = ReportTask(
         user_id=user_id, original_file_path=file_path, original_filename=filename,
         file_type=file_type, file_size=file_size, thumbnail_path=thumbnail_path,
@@ -30,9 +36,14 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
     db.add(report)
     db.commit()
 
+    payload = {"task_id": task.id, "hospital_id": hospital_id, "file_path": file_path}
+    if batch_id is not None:
+        payload["batch_id"] = batch_id
+    if file_id is not None:
+        payload["file_id"] = file_id
     rabbitmq.publish(TaskMessage(
         task_type="parsing", hospital_id=hospital_id, priority=priority,
-        payload={"task_id": task.id, "hospital_id": hospital_id, "file_path": file_path},
+        payload=payload,
     ))
     return task
 
