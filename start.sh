@@ -56,6 +56,7 @@ cleanup() {
   pkill -f "uvicorn app.main:app" 2>/dev/null || true
   pkill -f "app.modules.report.worker" 2>/dev/null || true
   pkill -f "app.modules.interpretation.worker" 2>/dev/null || true
+  pkill -f "app.modules.report.extract_worker" 2>/dev/null || true
   log "Done. Docker 中间件保持运行（如需停止：cd $INFRA_DIR && docker compose down）"
   exit 0
 }
@@ -281,6 +282,17 @@ else
   log "  解读 Worker 已启动 (log: /tmp/worker-interpretation.log)"
 fi
 
+if pgrep -f "app.modules.report.extract_worker" >/dev/null 2>&1; then
+  log "批量解压 Worker 已运行"
+else
+  log "启动批量解压 Worker..."
+  cd "$BACKEND_DIR"
+  nohup $VENV/python -c "from app.modules.report.extract_worker import start_worker; start_worker()" > /tmp/worker-extract.log 2>&1 &
+  echo $! > /tmp/start-sh-worker-extract.pid
+  cd "$ROOT_DIR"
+  log "  批量解压 Worker 已启动 (log: /tmp/worker-extract.log)"
+fi
+
 # ── 8. 创建测试用户（如不存在）──────────────────────────────────
 log "确保测试用户存在..."
 curl -s -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application/json" \
@@ -303,7 +315,7 @@ echo "  MySQL:          localhost:3306  (root/root)"
 echo "  RabbitMQ:       localhost:5672  (root/root)"
 echo "  Redis:          localhost:6379"
 echo "  Milvus:         localhost:19530"
-echo "  Workers:        parsing + interpretation"
+echo "  Workers:        parsing + interpretation + extract"
 echo ""
 echo "  测试用户: doctor1/123456 (医生), user1/123456 (用户)"
 echo ""
