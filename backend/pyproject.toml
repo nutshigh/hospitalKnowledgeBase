@@ -45,6 +45,7 @@ dependencies = [
     "neo4j>=5.20,<6",  # KG 通道用,kg_client.py 顶层 import;否则 ModuleNotFoundError 连带丢弃文档向量结果
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "freezegun>=1.5",
 ]
 
 # vllm 不作为本包依赖: 推理由 start.sh 拉起的独立 venv (backend/.venv-vllm-cu12)
