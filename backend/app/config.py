@@ -103,6 +103,18 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
+    # Batch Import (spec §6.2)
+    MEDGO_MAX_CONCURRENCY: int = 2
+    BATCH_ARCHIVE_MAX_SIZE: int = 10737418240  # 10GB
+    BATCH_CHUNK_SIZE: int = 5242880            # 5MB
+    BATCH_CHUNK_TIMEOUT: int = 7200            # 2h,孤儿 uploading 阈值
+    BATCH_SWEEP_INTERVAL: int = 300            # 5min
+    BATCH_SWEEP_STALL_THRESHOLD: int = 1800    # 30min
+    BULK_WINDOW_START: int = 22
+    BULK_WINDOW_END: int = 8
+    BATCH_FILE_MAX_SIZE: int = 52428800        # 50MB
+    DEAD_LETTER_TTL: int = 604800              # 7d
+
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"
 
