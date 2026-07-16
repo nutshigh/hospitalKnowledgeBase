@@ -108,9 +108,14 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                 cum_uncompressed += info.file_size
                 if cum_uncompressed > 5 * archive_size:
                     _record_oversize(db, b.id, info.filename, info.file_size)
-                    continue  # zip 炸弹防护(F6)
+                    continue
+                user_id = _resolve_user_id(info.filename)
+                if user_id is None:
+                    _record_dispatch_unmatched(db, b.id, info.filename, info.file_size)
+                    continue
                 with zf.open(info) as fh:
-                    _stream_to_report(db, b, hospital_id, info.filename, fh, info.file_size)
+                    _stream_to_report(db, b, hospital_id, info.filename, fh,
+                                      info.file_size, user_id)
     else:
         with tarfile.open(archive_path) as tf:
             for member in tf.getmembers():
@@ -129,8 +134,12 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                 if cum_uncompressed > 5 * archive_size:
                     _record_oversize(db, b.id, member.name, member.size)
                     continue
+                user_id = _resolve_user_id(member.name)
+                if user_id is None:
+                    _record_dispatch_unmatched(db, b.id, member.name, member.size)
+                    continue
                 fh = tf.extractfile(member)
-                _stream_to_report(db, b, hospital_id, member.name, fh, member.size)
+                _stream_to_report(db, b, hospital_id, member.name, fh, member.size, user_id)
 
 
 def _record_oversize(db, batch_id, file_path, size):
@@ -148,7 +157,27 @@ def _record_oversize(db, batch_id, file_path, size):
         db.commit()
 
 
-def _stream_to_report(db, b, hospital_id, rel_path, fh, size):
+def _record_dispatch_unmatched(db, batch_id, file_path, size,
+                                reason="dispatch_unmatched"):
+    """记一行 file failed,既不落盘也不投 parsing(与 oversize 同等级短路)。
+
+    直接新建一行 BatchImportFile(uuid 主键,占位唯一 crc 不参与批内去重),
+    复用 handle_extracted_file 会因占位 crc 把两个同 size unmatched 文件误去重。
+    """
+    import uuid as _uuid
+    fid = _uuid.uuid4().hex
+    db.add(BatchImportFile(
+        id=fid, batch_id=batch_id, file_path=file_path, file_size=size,
+        crc32=f"unm{_uuid.uuid4().hex[:8]}",
+        status="failed", failed_stage=reason, error_message=reason,
+    ))
+    b = db.query(BatchImport).get(batch_id)
+    if b is not None:
+        b.failed = (b.failed or 0) + 1
+    db.commit()
+
+
+def _stream_to_report(db, b, hospital_id, rel_path, fh, size, user_id: int):
     """读流,算 crc32,落盘,建 report_task 并 publish parsing.bulk(幂等)。"""
     data = fh.read()
     crc = f"{zlib.crc32(data) & 0xffffffff:08x}"
@@ -170,7 +199,7 @@ def _stream_to_report(db, b, hospital_id, rel_path, fh, size):
     from app.modules.report.service import create_task
     task = create_task(
         db=db, hospital_id=hospital_id,
-        user_id=int(b.user_id) if str(b.user_id).isdigit() else 0,
+        user_id=user_id,   # ← 文件名解析出的目标终端用户
         file_path=disk_path, filename=os.path.basename(rel_path),
         file_type=file_type, file_size=size, priority="bulk",
         batch_id=b.id, file_id=fid,

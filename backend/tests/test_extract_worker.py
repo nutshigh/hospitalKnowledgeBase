@@ -108,7 +108,7 @@ def _msg(batch_id="b1", archive_path=None):
 def test_T2_1_three_pdfs(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("a.pdf", b"pdf1"), ("b.pdf", b"pdf2"), ("c.pdf", b"pdf3")])
+    _make_zip(ap, [("u1_H001_1.pdf", b"pdf1"), ("u2_H001_2.pdf", b"pdf2"), ("u3_H001_3.pdf", b"pdf3")])
     _make_batch(env, ap)
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -132,7 +132,7 @@ def test_T2_2_oversize(env):
     # patch a tiny limit
     from app.config import settings
     with patch.object(settings, "BATCH_FILE_MAX_SIZE", 10):
-        _make_zip(ap, [("big.pdf", b"x" * 200)])
+        _make_zip(ap, [("big_H001_1.pdf", b"x" * 200)])
         _make_batch(env, ap)
         from app.modules.report.extract_worker import handle_extract_task
         handle_extract_task(_msg(archive_path=ap))
@@ -153,9 +153,9 @@ def test_T2_3_mixed_exts(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
     _make_zip(ap, [
-        ("ok1.pdf", b"pdf"),
-        ("ok2.jpg", b"jpg"),
-        ("ok3.png", b"png"),
+        ("ok1_H001_1.pdf", b"pdf"),
+        ("ok2_H001_2.jpg", b"jpg"),
+        ("ok3_H001_3.png", b"png"),
         ("skip1.docx", b"docx"),
         ("skip2.txt", b"txt"),
     ])
@@ -177,7 +177,7 @@ def test_T2_3_mixed_exts(env):
 def test_T2_4_dup_crc32(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("a.pdf", b"same"), ("b.pdf", b"same")])
+    _make_zip(ap, [("u1_H001_1.pdf", b"same"), ("u2_H001_2.pdf", b"same")])
     _make_batch(env, ap)
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -193,7 +193,7 @@ def test_T2_4_dup_crc32(env):
 def test_T2_5_cancelled_skipped(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("a.pdf", b"x")])
+    _make_zip(ap, [("cn_H001_1.pdf", b"x")])
     _make_batch(env, ap, status="cancelled")
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -209,7 +209,7 @@ def test_T2_5_cancelled_skipped(env):
 def test_T2_6_requeue_only_fills_gap(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("a.pdf", b"x"), ("b.pdf", b"y")])
+    _make_zip(ap, [("q1_H001_1.pdf", b"x"), ("q2_H001_2.pdf", b"y")])
     _make_batch(env, ap)
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -249,7 +249,7 @@ def test_T2_7_corrupt_zip(env):
 def test_T2_8_transient_retry_publish_retry(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("a.pdf", b"x")])
+    _make_zip(ap, [("t1_H001_1.pdf", b"x")])
     _make_batch(env, ap)
 
     from app.modules.report import extract_worker
@@ -279,7 +279,7 @@ def test_T2_8_transient_retry_publish_retry(env):
 def test_T2_9_transient_retry_exhausted_partial_failed(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("a.pdf", b"x")])
+    _make_zip(ap, [("t1_H001_1.pdf", b"x")])
     _make_batch(env, ap)
 
     from app.modules.report import extract_worker
@@ -319,3 +319,49 @@ def test_resolve_user_id_rejects_non_numeric_or_missing_segment():
     assert _resolve_user_id("张三_H001_1001_extra.pdf") is None  # 4 段
     assert _resolve_user_id("张三H0011001.pdf") is None      # 无下划线
     assert _resolve_user_id(".pdf") is None                 # 空 basename
+
+
+# ---------------------------------------------------------------------------
+# T2.12 zip 内文件名不合规 → file.failed_stage='dispatch_unmatched',不投 parsing
+# ---------------------------------------------------------------------------
+def test_T2_12_dispatch_unmatched(env):
+    db, tmp, Mq, msgs = env
+    ap = os.path.join(tmp, "a.zip")
+    _make_zip(ap, [("report.pdf", b"x")])  # 无下划线
+    _make_batch(env, ap)
+
+    from app.modules.report.extract_worker import handle_extract_task
+    handle_extract_task(_msg(archive_path=ap))
+
+    f = db.query(BatchImportFile).one()
+    assert f.status == "failed"
+    assert f.failed_stage == "dispatch_unmatched"
+    assert f.error_message == "dispatch_unmatched"
+    assert f.report_task_id is None        # 不 create_task
+    assert len(msgs) == 0                  # 不投 parsing
+    b1 = db.query(BatchImport).get("b1")
+    assert b1.failed == 1
+    assert b1.status == "partial_failed"   # 全 unmatched → partial_failed
+
+
+# ---------------------------------------------------------------------------
+# T2.13 命中三段命名 → report_task.user_id == 文件名第 3 段(而非上传者 b.user_id)
+# ---------------------------------------------------------------------------
+def test_T2_13_dispatch_uses_filename_user_id(env):
+    db, tmp, Mq, msgs = env
+    ap = os.path.join(tmp, "a.zip")
+    _make_zip(ap, [("张三_H001_1001.pdf", b"x"), ("李四_H002_2048.pdf", b"y")])
+    _make_batch(env, ap, user_id="999")  # 上传者 admin user_id=999
+
+    from app.modules.report.extract_worker import handle_extract_task
+    handle_extract_task(_msg(archive_path=ap))
+
+    from app.modules.report.models import ReportTask
+    tasks = db.query(ReportTask).order_by(ReportTask.id).all()
+    assert len(tasks) == 2
+    assert {t.user_id for t in tasks} == {1001, 2048}
+    assert 999 not in {t.user_id for t in tasks}
+    file_rows = db.query(BatchImportFile).order_by(BatchImportFile.id).all()
+    for f in file_rows:
+        assert f.report_task_id is not None
+    assert len(msgs) == 2
