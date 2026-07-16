@@ -4,6 +4,10 @@ import os
 import tempfile
 from unittest.mock import patch, MagicMock
 
+from app.models.base import Base
+# 触发 report/interpretation 表注册到 Base.metadata(retry_failed 懒导入这些模型)
+from app.modules.report.models import ReportTask, ReportInfo, ReportIndicator  # noqa: F401
+from app.modules.interpretation.models import ReportInterpretation  # noqa: F401
 from app.modules.report.batch_models import BatchImport, BatchImportFile
 from app.modules.report.batch_service import BatchService
 
@@ -12,7 +16,6 @@ from app.modules.report.batch_service import BatchService
 def db():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
-    from app.models.base import Base
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -85,6 +88,88 @@ def test_retry_failed_requeues(db):
         patcher.stop()
 
 
+def test_retry_failed_interp_stage_routes_to_interp_bulk(db):
+    """I3: interp 阶段失败的 file 重投 interpretation.bulk,只重置 ReportInterpretation,
+    不清零 ReportTask.retry_count(parse 仍 OK)。"""
+    b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
+                    archive_path="/x", status="partial_failed", failed=1)
+    # parse 已完成(ReportTask.status=completed),但 interp 失败
+    task = ReportTask(id=100, user_id=1, original_file_path="/x/a.pdf",
+                     original_filename="a.pdf", file_type="pdf", file_size=1,
+                     status="completed", priority=0, retry_count=0)
+    db.add(b); db.add(task); db.commit()
+    report = ReportInfo(id=200, task_id=task.id, user_id=1)
+    db.add(report); db.commit()
+    interp = ReportInterpretation(id=300, report_id=report.id, status="failed", retry_count=3)
+    db.add(interp); db.commit()
+    f = BatchImportFile(id="f1", batch_id="b1", file_path="/x/a.pdf", file_size=1,
+                       crc32="abc12345", status="failed", failed_stage="interpretation",
+                       report_task_id=task.id, error_message="interp boom")
+    db.add(f); db.commit()
+
+    patcher, msgs = _mock_publish()
+    try:
+        r = BatchService.retry_failed(db, "b1")
+        assert r["requeued"] == 1
+        db.refresh(f)
+        assert f.status == "queued"
+        assert f.failed_stage is None
+        # 重投 interpretation.bulk,带正确 report_id
+        interp_msgs = [m for m in msgs if m.task_type == "interpretation"]
+        assert len(interp_msgs) == 1
+        assert interp_msgs[0].priority == "bulk"
+        assert interp_msgs[0].payload["report_id"] == report.id
+        assert interp_msgs[0].payload["file_id"] == "f1"
+        # 不应重投 parsing(parse 已 OK)
+        assert not any(m.task_type == "parsing" for m in msgs)
+        # ReportTask.retry_count 未被清零
+        db.refresh(task)
+        assert task.retry_count == 0
+        # ReportInterpretation 已重置为 pending
+        db.refresh(interp)
+        assert interp.status == "pending"
+        assert interp.retry_count == 0
+        # batch 回到 interpreting 态
+        db.refresh(b)
+        assert b.status == "interpreting"
+        assert b.failed == 0
+    finally:
+        patcher.stop()
+
+
+def test_retry_failed_parsing_stage_routes_to_parsing_bulk(db):
+    """I3: parsing 阶段失败的 file 重投 parsing.bulk,重置 ReportTask.retry_count。"""
+    from app.core.rabbitmq import TaskMessage
+    b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
+                    archive_path="/x", status="partial_failed", failed=1)
+    task = ReportTask(id=100, user_id=1, original_file_path="/x/a.pdf",
+                     original_filename="a.pdf", file_type="pdf", file_size=1,
+                     status="failed", priority=0, retry_count=3,
+                     error_message="parse boom")
+    db.add(b); db.add(task); db.commit()
+    f = BatchImportFile(id="f1", batch_id="b1", file_path="/x/a.pdf", file_size=1,
+                       crc32="abc12345", status="failed", failed_stage="parsing",
+                       report_task_id=task.id, error_message="parse boom")
+    db.add(f); db.commit()
+
+    patcher, msgs = _mock_publish()
+    try:
+        r = BatchService.retry_failed(db, "b1")
+        assert r["requeued"] == 1
+        db.refresh(f)
+        assert f.status == "queued" and f.failed_stage is None
+        parse_msgs = [m for m in msgs if m.task_type == "parsing"]
+        assert len(parse_msgs) == 1
+        assert parse_msgs[0].priority == "bulk"
+        assert parse_msgs[0].payload["task_id"] == task.id
+        db.refresh(task)
+        assert task.status == "queued" and task.retry_count == 0
+        db.refresh(b)
+        assert b.status == "parsing" and b.failed == 0
+    finally:
+        patcher.stop()
+
+
 def test_status_complete_or_partial(db):
     # T1.6: all succeeded (interp 终态完成) → completed。
     # 终态判定 = interp_ok + failed == total (C3 修正后)。parsed_ok 是中间态,不计入。
@@ -144,3 +229,82 @@ def test_parsed_to_interp_ok_progression(db):
     assert f2.status == "interp_ok"
     assert b.parsed_ok == 2 and b.interp_ok == 2 and (b.failed or 0) == 0
     assert b.status == "completed"
+
+
+def test_retry_failed_skips_dispatch_unmatched_and_oversize(db):
+    """retry_failed 对 oversize / dispatch_unmatched 两类 unretryable
+    短路跳过,不计入 requeued,只在 skipped_unretryable 计数。
+    无 report_task_id 的两类不会 publish。"""
+    b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
+                    archive_path="/x", status="partial_failed", failed=2)
+    f_unm = BatchImportFile(id="funm", batch_id="b1", file_path="/x/report.pdf",
+                            file_size=1, crc32="aaaa1111",
+                            status="failed", failed_stage="dispatch_unmatched",
+                            error_message="dispatch_unmatched")
+    f_oversize = BatchImportFile(id="fovz", batch_id="b1", file_path="/x/big.pdf",
+                                 file_size=99, crc32="bbbb2222",
+                                 status="failed", failed_stage="oversize",
+                                 error_message="oversize")
+    db.add_all([b, f_unm, f_oversize]); db.commit()
+
+    patcher, msgs = _mock_publish()
+    try:
+        r = BatchService.retry_failed(db, "b1")
+        assert r["requeued"] == 0
+        assert r["skipped_unretryable"] == 2
+        # 两个 file 行的 status 仍是 failed(未被重置为 queued)
+        db.refresh(f_unm); db.refresh(f_oversize)
+        assert f_unm.status == "failed"
+        assert f_oversize.status == "failed"
+        # 没有 publish
+        assert msgs == []
+        # batch 状态未变 partial_failed,failed 未扣减
+        db.refresh(b)
+        assert b.status == "partial_failed"
+        assert b.failed == 2
+    finally:
+        patcher.stop()
+
+
+def test_retry_failed_mixed_retryable_and_unretryable(db):
+    """混合场景:1 个 dispatch_unmatched + 1 个 parsing 失败 → 重投 1,
+    skipped_unretryable=1, batch failed 扣减 1。"""
+    from app.modules.report.models import ReportTask
+    b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
+                    archive_path="/x", status="partial_failed", failed=2)
+    f_unm = BatchImportFile(id="funm", batch_id="b1", file_path="/x/report.pdf",
+                            file_size=1, crc32="aaaa1111", status="failed",
+                            failed_stage="dispatch_unmatched",
+                            error_message="dispatch_unmatched")
+    task = ReportTask(id=100, user_id=1, original_file_path="/x/a.pdf",
+                      original_filename="a.pdf", file_type="pdf", file_size=1,
+                      status="failed", priority=0, retry_count=3,
+                      error_message="parse boom")
+    db.add(b); db.add(task); db.commit()
+    f_parse = BatchImportFile(id="fparse", batch_id="b1",
+                              file_path="/x/a.pdf", file_size=1,
+                              crc32="bbbb2222", status="failed",
+                              failed_stage="parsing",
+                              report_task_id=task.id,
+                              error_message="parse boom")
+    db.add_all([f_unm, f_parse]); db.commit()
+
+    patcher, msgs = _mock_publish()
+    try:
+        r = BatchService.retry_failed(db, "b1")
+        assert r["requeued"] == 1
+        assert r["skipped_unretryable"] == 1
+        # parsing 失败被重投;report_task 重置
+        parse_msgs = [m for m in msgs if m.task_type == "parsing"]
+        assert len(parse_msgs) == 1
+        db.refresh(task)
+        assert task.status == "queued" and task.retry_count == 0
+        # dispatch_unmatched 文件保持 failed
+        db.refresh(f_unm)
+        assert f_unm.status == "failed"
+        # batch status 从 partial_failed → parsing(requeued>0 触发)
+        db.refresh(b)
+        assert b.status == "parsing"
+        assert b.failed == 1  # 扣减了 1(requeued=1)
+    finally:
+        patcher.stop()

@@ -110,8 +110,10 @@ class BatchService:
 
     @staticmethod
     def handle_extracted_file(db: Session, batch_id: str, file_path: str,
-                              crc32: str, file_size: int) -> str:
+                               crc32: str, file_size: int) -> str:
         """幂等去重:同 (batch_id,crc32) 返回已存在 file_id,不重复记账。"""
+        # FUTURE: global dedupe by crc32 —— 跨批查 batch_import_file 全表 (crc32+file_size)
+        # 命中则复用旧 report_task_id 短路(OOC spec §3.4 故意不做,改 future)。
         existing = db.query(BatchImportFile).filter_by(
             batch_id=batch_id, crc32=crc32,
         ).first()
@@ -137,8 +139,12 @@ class BatchService:
     }
 
     @staticmethod
-    def increment_progress(db: Session, batch_id: str, file_id: str, field: str) -> None:
-        """field ∈ {'parsed_ok','interp_ok','failed'}。幂等:靠 field 相关的 file.status 守门只 ++ 一次。"""
+    def increment_progress(db: Session, batch_id: str, file_id: str, field: str,
+                           stage: Optional[str] = None) -> None:
+        """field ∈ {'parsed_ok','interp_ok','failed'}。幂等:靠 field 相关的 file.status 守门只 ++ 一次。
+
+        stage:仅 field=='failed' 时有意义,记录失败发生在哪一阶段
+              ("parsing"|"interpretation"|"oversize"),供 retry_failed 分流。"""
         f = db.query(BatchImportFile).get(file_id)
         if f is None:
             return
@@ -147,10 +153,13 @@ class BatchService:
             "interp_ok": "interp_ok",
             "failed": "failed",
         }[field]
+        update_values = {BatchImportFile.status: new_state}
+        if field == "failed" and stage:
+            update_values[BatchImportFile.failed_stage] = stage
         result = db.query(BatchImportFile).filter(
             BatchImportFile.id == file_id,
             BatchImportFile.status.notin_(BatchService._PRIOR_OK[field]),
-        ).update({BatchImportFile.status: new_state})
+        ).update(update_values)
         if result == 0:
             db.commit()
             return
@@ -202,7 +211,8 @@ class BatchService:
                 "completed_at": b.completed_at.isoformat() if b.completed_at else None,
             },
             "failing_files": [
-                {"id": f.id, "file_path": f.file_path, "error_message": f.error_message}
+                {"id": f.id, "file_path": f.file_path,
+                 "failed_stage": f.failed_stage, "error_message": f.error_message}
                 for f in failing
             ],
         }
@@ -217,27 +227,71 @@ class BatchService:
             q = q.filter(BatchImportFile.id.in_(file_ids))
         files = q.all()
         requeued = 0
+        skipped_unretryable = 0
+        saw_interp = False
+        UNRETRYABLE_STAGES = ("oversize", "dispatch_unmatched")
         for f in files:
+            stage = f.failed_stage
+            if stage in UNRETRYABLE_STAGES:
+                # oversize / dispatch_unmatched 无 report_task_id,重试无意义;
+                # 跳过且不重置状态,仅累计跳过数供前端提示。
+                skipped_unretryable += 1
+                continue
             f.status = "queued"
             f.error_message = None
-            if f.report_task_id:
-                from app.modules.report.models import ReportTask
-                t = db.query(ReportTask).get(f.report_task_id)
-                if t:
-                    t.status = "queued"
-                    t.retry_count = 0
+            f.failed_stage = None
+            if stage == "interpretation":
+                # 解读失败:parse 仍 OK,只重置 ReportInterpretation 并重投 interpretation.bulk,
+                # 不动 ReportTask.retry_count。
+                report_id = BatchService._report_id_for_file(db, f)
+                if report_id is not None:
+                    BatchService._reset_interp_for_retry(db, report_id)
                     rabbitmq.publish(TaskMessage(
-                        task_type="parsing", hospital_id=b.hospital_id,
+                        task_type="interpretation", hospital_id=b.hospital_id,
                         priority="bulk",
-                        payload={"task_id": t.id, "hospital_id": b.hospital_id,
-                                 "file_path": t.original_file_path, "batch_id": batch_id,
-                                 "file_id": f.id},
+                        payload={"report_id": report_id, "hospital_id": b.hospital_id,
+                                 "batch_id": batch_id, "file_id": f.id},
                     ))
+                    saw_interp = True
+            else:
+                # parsing 或 oversize:有 report_task_id 才重投解析(oversize 一般无 task_id)。
+                if f.report_task_id:
+                    from app.modules.report.models import ReportTask
+                    t = db.query(ReportTask).get(f.report_task_id)
+                    if t:
+                        t.status = "queued"
+                        t.retry_count = 0
+                        rabbitmq.publish(TaskMessage(
+                            task_type="parsing", hospital_id=b.hospital_id,
+                            priority="bulk",
+                            payload={"task_id": t.id, "hospital_id": b.hospital_id,
+                                     "file_path": t.original_file_path, "batch_id": batch_id,
+                                     "file_id": f.id},
+                        ))
             requeued += 1
         b.failed = max(0, (b.failed or 0) - requeued)
-        if b.status == "partial_failed":
-            b.status = "parsing"
+        if b.status == "partial_failed" and requeued > 0:
+            # 解读失败重投应回到 interpreting 解读态,parsing/oversize 重投回到 parsing。
+            b.status = "interpreting" if saw_interp else "parsing"
         b.updated_at = datetime.now(timezone.utc)
         db.commit()
         BatchService._maybe_advance_status(db, b)
-        return {"requeued": requeued}
+        return {"requeued": requeued, "skipped_unretryable": skipped_unretryable}
+
+    @staticmethod
+    def _report_id_for_file(db: Session, f: BatchImportFile) -> Optional[int]:
+        """由 file 关联的 report_task 推回 ReportInfo.id(report_id)。"""
+        if not f.report_task_id:
+            return None
+        from app.modules.report.models import ReportInfo
+        report = db.query(ReportInfo).filter(ReportInfo.task_id == f.report_task_id).first()
+        return report.id if report else None
+
+    @staticmethod
+    def _reset_interp_for_retry(db: Session, report_id: int) -> None:
+        """把某 report_id 下所有解读行重置为 pending、retry_count=0,允许重跑。"""
+        from app.modules.interpretation.models import ReportInterpretation
+        db.query(ReportInterpretation).filter(
+            ReportInterpretation.report_id == report_id
+        ).update({ReportInterpretation.status: "pending",
+                  ReportInterpretation.retry_count: 0})

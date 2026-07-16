@@ -212,7 +212,8 @@ def test_T11_5_retry_failed_partial(env):
 
     r = env["client"].post("/api/v1/reports/batches/rb/retry", json={})
     assert r.status_code == 200, r.text
-    assert r.json() == {"requeued": 1}
+    assert r.json()["requeued"] == 1
+    assert r.json()["skipped_unretryable"] == 0
 
 
 def test_T11_6_cancel_uploading_then_completed_400(env):
@@ -255,3 +256,25 @@ def test_T11_list_batches_pagination(env):
     assert body["total"] == 3
     assert len(body["items"]) == 3
     assert "created_at" in body["items"][0]
+
+
+def test_T11_progress_exposes_failed_stage(env):
+    """failing_files 项包含 failed_stage 字段,供前端区分可/不可重试。"""
+    s = env["Session"]()
+    b = BatchImport(id="bfs", hospital_id="H001", user_id="1", filename="x.zip",
+                    archive_path="/x.zip", status="partial_failed", total=2, failed=2)
+    f1 = BatchImportFile(id="f_1", batch_id="bfs", file_path="/r.pdf",
+                         file_size=1, crc32="aaaa1111", status="failed",
+                         failed_stage="dispatch_unmatched",
+                         error_message="dispatch_unmatched")
+    f2 = BatchImportFile(id="f_2", batch_id="bfs", file_path="/b.pdf",
+                         file_size=1, crc32="bbbb2222", status="failed",
+                         failed_stage="parsing", error_message="parse boom")
+    s.add_all([b, f1, f2]); s.commit(); s.close()
+
+    g = env["client"].get("/api/v1/reports/batches/bfs")
+    assert g.status_code == 200
+    ff = g.json()["failing_files"]
+    stages = {x["id"]: x["failed_stage"] for x in ff}
+    assert stages["f_1"] == "dispatch_unmatched"
+    assert stages["f_2"] == "parsing"
