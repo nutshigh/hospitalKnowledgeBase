@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDoctorStore } from '../stores/doctorStore';
 
-const MENU = [
+const MENU_BASE = [
   { key: '/', label: '工作台', icon: '📊' },
   { key: '/reports', label: '报告管理', icon: '📋' },
   { key: '/high-risk', label: '高风险人群', icon: '🚨' },
@@ -17,10 +17,15 @@ const MENU = [
   { key: '/dispatch', label: '调度管理', icon: '⚙️' },
 ];
 
+const ADMIN_MENU = [
+  { key: '/batch', label: '批量上传分发', icon: '📦' },
+];
+
 export default function DoctorLayout({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const loc = useLocation();
-  const { logout, sidebarCollapsed, toggleSidebar } = useDoctorStore();
+  const { logout, sidebarCollapsed, toggleSidebar, role } = useDoctorStore();
+  const MENU = role === 'admin' ? [...MENU_BASE.slice(0, MENU_BASE.length - 1), ...ADMIN_MENU, MENU_BASE[MENU_BASE.length - 1]] : MENU_BASE;
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>

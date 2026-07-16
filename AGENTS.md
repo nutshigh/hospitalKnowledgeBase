@@ -100,3 +100,31 @@ curl -s http://localhost:8003/rerank -H 'Content-Type: application/json' \
 - `/tmp/nvidia-snap-latest.txt` —— 驱动包列表只读快照,可删
 
 git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml backend/uv.lock` 回滚;`.venv-vllm-cu12` 是新目录不在 git 内,如需彻底回滚需手动删。
+
+---
+
+## 新 tenant 初始化必读
+
+`start.sh` 的数据库初始化 DDL 块只对 `hospital_H001` 跑一次(`CREATE TABLE IF NOT EXISTS`)。**新增 tenant 时必须照此 DDL 块为新 tenant 的库完整执行一遍**,否则该 tenant 缺表会直接报错。完整表清单(逐表对应 `start.sh` 内的 `CREATE TABLE IF NOT EXISTS`):
+
+| 旧业务表 | 用途 |
+|------|------|
+| `hospital_user` | 医院用户档案 |
+| `knowledge_category` / `knowledge_entry` | 知识库分类与条目 |
+| `report_task` / `report_info` / `report_indicator` | 体检报告解析 |
+| `report_interpretation` / `indicator_judgment` | AI 解读与指标判定 |
+| `triage_rule` | 分诊规则 |
+| `report_template` / `statistic_cache` / `dispatch_config` / `resource_metric` | 模板/统计缓存/分诊配置/资源监控 |
+| `chat_session` / `chat_message` | 聊天会话 |
+
+| 批量上传新增表(易遗漏) | 用途 |
+|------|------|
+| `batch_import` | 批量上传批次 |
+| `batch_import_file` | 批次内单文件(含 `failed_stage` 列,记录失败阶段) |
+
+`batch_import_file.failed_stage` 是增量列,旧库需 `ALTER TABLE batch_import_file ADD COLUMN IF NOT EXISTS failed_stage VARCHAR(24) DEFAULT NULL`(`start.sh` 已带,新 tenant 建表时直接包含)。
+
+`failed_stage` 已知取值:`parsing` / `interpretation` / `oversize` / `dispatch_unmatched`。
+- `oversize`:单文件 > 50MB,无 `report_task_id`,**不可重试**(UI 禁用重试按钮)。
+- `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<医院编号>_<用户编号>.<ext>` 约定(三段下划线、末段纯数字),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
+- 后端 `retry_failed` 把这两类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
