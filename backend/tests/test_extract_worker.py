@@ -295,3 +295,27 @@ def test_T2_9_transient_retry_exhausted_partial_failed(env):
     b1 = db.query(BatchImport).get("b1")
     assert b1.status == "partial_failed"
     assert "extract_failed_after_retries" in (b1.error_message or "")
+
+
+# ---------------------------------------------------------------------------
+# T2.10 _resolve_user_id: 三段命名命中
+# ---------------------------------------------------------------------------
+def test_resolve_user_id_matches_three_segment():
+    from app.modules.report.extract_worker import _resolve_user_id
+    assert _resolve_user_id("张三_H001_1001.pdf") == 1001
+    assert _resolve_user_id("LiSi_H002_2048.pdf") == 2048
+    # 路径前缀 OK(basename 拆解)
+    assert _resolve_user_id("sub/dir/王五_H003_7.pdf") == 7
+
+
+# ---------------------------------------------------------------------------
+# T2.11 _resolve_user_id: 反例不命中(返回 None)
+# ---------------------------------------------------------------------------
+def test_resolve_user_id_rejects_non_numeric_or_missing_segment():
+    from app.modules.report.extract_worker import _resolve_user_id
+    assert _resolve_user_id("1001.pdf") is None              # 只 1 段
+    assert _resolve_user_id("张三_1001.pdf") is None         # 只 2 段
+    assert _resolve_user_id("张三_H001_abc.pdf") is None     # 末段非数字
+    assert _resolve_user_id("张三_H001_1001_extra.pdf") is None  # 4 段
+    assert _resolve_user_id("张三H0011001.pdf") is None      # 无下划线
+    assert _resolve_user_id(".pdf") is None                 # 空 basename

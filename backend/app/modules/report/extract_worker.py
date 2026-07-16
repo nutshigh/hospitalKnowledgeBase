@@ -1,10 +1,12 @@
 import json
 import logging
 import os
+import re
 import time
 import zlib
 import zipfile
 import tarfile
+from typing import Optional
 
 from app.config import settings
 from app.core.database import get_hospital_db
@@ -17,6 +19,19 @@ _log = logging.getLogger("extract_worker")
 
 # 不含 docx(Spec F8:DOCX 从批量上传白名单移除)
 ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
+
+# 文件名约定: <姓名>_<医院编号>_<用户编号>.<ext>
+# basename 去扩展后,3 段半角下划线分隔,末段纯数字 = user_id。
+_FILENAME_RE = re.compile(r"^([^_]+)_([^_]+)_(\d+)$")
+
+
+def _resolve_user_id(filename: str) -> Optional[int]:
+    """从 zip/tar 内文件名抽取终端用户 user_id。
+    Returns int user_id on match, None on mismatch。
+    """
+    base = os.path.splitext(os.path.basename(filename))[0]
+    m = _FILENAME_RE.match(base)
+    return int(m.group(3)) if m else None
 
 
 def handle_extract_task(message: dict):
@@ -125,6 +140,7 @@ def _record_oversize(db, batch_id, file_path, size):
     f = db.query(BatchImportFile).get(fid)
     if f and f.status == "queued":
         f.status = "failed"
+        f.failed_stage = "oversize"
         f.error_message = "oversize"
         b = db.query(BatchImport).get(batch_id)
         if b is not None:
