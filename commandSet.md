@@ -1,5 +1,5 @@
 创建用户：
-curl -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application '{"username":"user2","password":"123456","role":"user","hospital_id":"H001"}'
+curl -X POST http://localhost:8000/api/v1/auth/register  -H "Content-Type: application/json" -d '{"username":"user2","password":"123456","role":"user","hospital_id":"H002"}'
 role:user,doctor,admin
 
 创建医院表：
@@ -9,4 +9,4 @@ curl -X POST http://localhost:8000/api/v1/tenants -H "Content-Type: application/
 pkill -f "uvicorn app.main:app" && bash start.sh
 
 重启worker：
-pkill -f "app.modules.interpretation.worker" && bash start.sh
+pkill -f "app.modules.interpretation.worker" && pkill -f "app.modules.report.worker" && pkill -f "app.modules.report.extract_worker" && bash start.sh
