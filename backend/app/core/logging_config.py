@@ -72,6 +72,17 @@ class MonthlyRotatingFileHandler(TimedRotatingFileHandler):
             return False
         return True
 
+    def doRollover(self) -> None:
+        """切分时若 rename 失败(目标已存在/权限错/磁盘错),记一条 WARNING
+        到当前 handler 并继续 append,不丢失日志、不抛;下个月切分再重试。"""
+        try:
+            super().doRollover()
+        except OSError as e:
+            logging.getLogger("app.core.logging_config").warning(
+                "monthly rollover failed for %s (continue appending): %r",
+                self.baseFilename, e,
+            )
+
 
 def setup_logging(default_level: str = "INFO") -> None:
     """在每个 Python 进程入口调用一次。

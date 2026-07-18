@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
         _sweeper_log = logging.getLogger("app.batch.sweeper")
 
         def _on_sweeper_done(task: asyncio.Task) -> None:
+            # cancelled 是正常关闭路径;仅异常退出打 error,便于运维发现 sweeper 静默死亡。
             if task.cancelled():
                 return
             exc = task.exception()
