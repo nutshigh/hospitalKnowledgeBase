@@ -128,3 +128,53 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 - `oversize`:单文件 > 50MB,无 `report_task_id`,**不可重试**(UI 禁用重试按钮)。
 - `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<医院编号>_<用户编号>.<ext>` 约定(三段下划线、末段纯数字),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
 - 后端 `retry_failed` 把这两类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
+---
+
+## 日志收口(2026-07-18 起)
+
+**完整设计**: `docs/superpowers/specs/2026-07-18-logging-consolidation-design.md`
+
+### 写入路径与轮转
+
+- 所有 Python `logging` 调用收口到 **`/data/logs/app.log`**
+- 按月初切分:旧月 rename 为 **`app.log.<YYYY-MM>``,`backupCount=0` 永久保留**(运维人工清理)
+- 进程 stdout(via `start.sh` `nohup ... > /data/logs/<svc>.stdout.log 2>&1 &`):vllm-medgo / vllm-embed / reranker / paddle-ocr / backend / worker-parsing / worker-interpretation / worker-extract
+- 配置入口: `backend/app/core/logging_config.py::setup_logging()`,纯 stdlib,无三方依赖
+
+### 重要 logger 命名表(引用请用这些名字)
+
+| logger name | 用途 |
+|------|------|
+| `app.parse` | 报告解析(report/worker.py 预留,现仍用 print) |
+| `app.upload` | 上传(batch_router,当前未加 logger) |
+| `app.interp` | LLM 解读(interp_graph.py) |
+| `app.interp.worker` | 解读 worker(interpretation/worker.py 预留,现仍用 print) |
+| `app.judge` | judge_graph.py |
+| `app.planner` | chat_planner.py |
+| `app.batch` | batch_router/batch_service(预留) |
+| `app.batch.sweeper` | batch_sweeper.py + main.py 启动回调 |
+| `app.batch.extract` | extract_worker.py(批量解压) |
+| `app` | 全局异常 handler |
+
+其余模块保持 `__name__` logger,retriever / kg_* / citation_matcher / term_normalizer / redis / tenant / user_profile 等均由 root handler 统一捕获写入 `app.log`,无需改动。
+
+### LOG_LEVEL 环境变量
+
+- `start.sh` 顶部 `export LOG_LEVEL=${LOG_LEVEL:-INFO}`,所有子进程继承
+- `setup_logging()` 优先读 `os.environ["LOG_LEVEL"]`;`Settings.LOG_LEVEL` 字段仅作文档,不被 setup_logging 消费(避免循环依赖)
+- 调级别示例: `LOG_LEVEL=DEBUG bash start.sh --no-models`
+
+### Worker `print()` 双轨说明
+
+per spec 决策:workers (report/worker.py / interpretation/worker.py / extract_worker.py) 现有 `print()` **不强迁**到 logging。结果:
+- `print()` → 经 `nohup > /data/logs/worker-*.stdout.log` 落 stdout 文件
+- 新加的 `logging.getLogger("app.parse")` / `app.interp.worker` / `app.batch.extract` 已就位,未来新增 `logger.info(...)` 会自动写入 `/data/logs/app.log`
+- 排查 worker 时需同时看 `app.log`(logging)与 `worker-*.stdout.log`(print),双轨并存直到全量迁移完成
+
+### 多进程边界提示
+
+`MonthlyRotatingFileHandler` 不加文件锁。月初同时由多个 worker 进程触发 `doRollover()` 的极小概率会让当月文件被 rename 两次,导致约一条日志重写。月切本身就极低频,不引入第三方库的代价换来的这一边角可接受。若日后需要严格进程安全,再单独评估 `concurrent-log-handler` 在 cu126 主 venv 内的兼容性。
+
+### freezegun 测试 quirk
+
+`backend/tests/core/test_logging_config.py` 的 `freezegun.freeze_time(...)` 调用必须传 `ignore=["transformers"]`,否则在跑全 suite 时 freezegun 会迭代 `dir(transformers)` 触发 `RuntimeError: cannot import name 'pil_torch_interpolation_mapping'`(pinned `transformers==4.51.3` 已移除该名字,而 freezegun 不捕获 RuntimeError)。未来其它测试用 `freeze_time` 也要加此 ignore 列表。
