@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     SECRET_KEY: str = "change-me-in-production"
 
+    # Logging
+    LOG_LEVEL: str = "INFO"  # 控制日志级别;setup_logging() 优先读环境变量 LOG_LEVEL
+
     # MySQL
     MYSQL_HOST: str = "localhost"
     MYSQL_PORT: int = 3306
