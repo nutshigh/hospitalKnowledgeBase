@@ -37,7 +37,7 @@ def handle_parsing_task(message: dict):
                 # 走 DLQ;同时回写 file failed
                 if batch_id and file_id:
                     try:
-                        BatchService.increment_progress(db, batch_id, file_id, "failed")
+                        BatchService.increment_progress(db, batch_id, file_id, "failed", stage="parsing")
                     except Exception:
                         pass
                 raise  # 让 _callback nack(requeue=False) → DLQ

@@ -169,7 +169,7 @@ def test_retry_count_3_raises_and_failed(env):
 
     Mq.publish_retry.assert_not_called()
     batch_mock.increment_progress.assert_called_once_with(
-        s, "b1", "f1", "failed")
+        s, "b1", "f1", "failed", stage="interpretation")
 
 
 # ---------------------------------------------------------------------------

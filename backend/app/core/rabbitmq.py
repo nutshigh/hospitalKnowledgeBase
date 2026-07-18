@@ -79,7 +79,10 @@ class RabbitMQClient:
         ch.queue_bind(exchange=self.DLX, queue=self.DEAD_LETTER_QUEUE, routing_key="dead")
 
     def _ensure(self):
-        if not self.connection or self.connection.is_closed:
+        # 同时检查 connection 和 channel:channel 可能独立于 connection 被关闭
+        # (例如 RabbitMQ 因 heartbeat/网络静默关闭了 channel,而本地 connection
+        # 对象仍认为自己是 open)。两者任一失效都要重连并重建 exchange/queue。
+        if not self.connection or self.connection.is_closed or not self.channel or self.channel.is_closed:
             self._connect()
             self._ensure_resources()
 
@@ -101,8 +104,11 @@ class RabbitMQClient:
                 exchange=self.EXCHANGE, routing_key=task.routing_key(),
                 body=json.dumps(body_dict), properties=props,
             )
-        except (pika.exceptions.ConnectionClosed, pika.exceptions.StreamLostError,
-                pika.exceptions.ChannelClosed):
+        except pika.exceptions.AMQPError:
+            # AMQPError 是所有 pika 异常的公共基类,涵盖:
+            #   ConnectionClosed / StreamLostError (AMQPConnectionError)
+            #   ChannelClosed / ChannelWrongStateError (AMQPChannelError)
+            # 等"连接或 channel 已失效"类异常,一次性重连 + 重建 topology + 再 publish。
             self._ensure()
             self.channel.basic_publish(
                 exchange=self.EXCHANGE, routing_key=task.routing_key(),

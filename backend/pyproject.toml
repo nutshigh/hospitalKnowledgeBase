@@ -43,6 +43,7 @@ dependencies = [
     "tokenizers==0.21.4",  # 与 transformers 4.51 配套;高版 tokenizers ABI 不兼容
     "FlagEmbedding>=1.3,<2",
     "neo4j>=5.20,<6",  # KG 通道用,kg_client.py 顶层 import;否则 ModuleNotFoundError 连带丢弃文档向量结果
+    "jieba>=0.42.1",  # KG 检索中文分词;主 venv 缺它会导致 kg_client 走 fallback 整串分词,KG 命中能力腰斩
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "freezegun>=1.5",

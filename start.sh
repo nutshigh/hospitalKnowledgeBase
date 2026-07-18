@@ -97,6 +97,8 @@ docker exec hospital-redis redis-cli ping >/dev/null 2>&1 && log "Redis OK" || w
 curl -s http://localhost:7474 >/dev/null 2>&1 && log "Neo4j OK" || warn "Neo4j 未就绪"
 
 # ── 2. 数据库初始化（仅首次）────────────────────────────────────
+# NOTE: 新 tenant 初始化必须照此 DDL 块完整复制;尤其别忘了 batch_import /
+#       batch_import_file 两表(批量上传),以及 failed_stage 列。
 TABLE_COUNT=$(docker exec hospital-mysql mysql -uroot -proot -N -e \
   "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='hospital_H001';" 2>/dev/null || echo 0)
 if [[ "$TABLE_COUNT" == "0" ]]; then
@@ -119,7 +121,7 @@ CREATE TABLE IF NOT EXISTS resource_metric (id BIGINT AUTO_INCREMENT PRIMARY KEY
 CREATE TABLE IF NOT EXISTS chat_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, hospital_id VARCHAR(32) NOT NULL, report_id BIGINT DEFAULT NULL, title VARCHAR(200) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS chat_message (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_id BIGINT NOT NULL, role VARCHAR(10) NOT NULL, content TEXT NOT NULL, knowledge_refs JSON DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (session_id) REFERENCES chat_session(id)) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS batch_import (id VARCHAR(36) PRIMARY KEY, hospital_id VARCHAR(32) NOT NULL, user_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, archive_path VARCHAR(512) NOT NULL, total BIGINT NOT NULL DEFAULT 0, parsed_ok BIGINT NOT NULL DEFAULT 0, interp_ok BIGINT NOT NULL DEFAULT 0, failed BIGINT NOT NULL DEFAULT 0, status VARCHAR(24) NOT NULL DEFAULT 'uploading', error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, KEY idx_batch_status (status), KEY idx_batch_hospital (hospital_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'queued', report_task_id BIGINT, error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) REFERENCES batch_import(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'queued', failed_stage VARCHAR(24) DEFAULT NULL, report_task_id BIGINT, error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) REFERENCES batch_import(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 SQL
   docker exec -i hospital-mysql mysql -uroot -proot hospital_template <<'SQL' 2>/dev/null || true
 INSERT INTO hospital_tenant (hospital_id, hospital_name, db_name, is_active)
@@ -134,6 +136,9 @@ else
     "ALTER TABLE indicator_judgment ADD COLUMN IF NOT EXISTS certainty VARCHAR(10) DEFAULT NULL;" 2>/dev/null || true
   docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
     "ALTER TABLE indicator_judgment ADD COLUMN IF NOT EXISTS certainty_reason TEXT DEFAULT NULL;" 2>/dev/null || true
+  # 批量导入失败阶段列(增量迁移,兼容旧库 Spec I3)
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE batch_import_file ADD COLUMN IF NOT EXISTS failed_stage VARCHAR(24) DEFAULT NULL;" 2>/dev/null || true
 fi
 
 # ── 3. 确保 .env ────────────────────────────────────────────────
@@ -299,6 +304,8 @@ curl -s -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: app
   -d '{"username":"doctor1","password":"123456","role":"doctor","hospital_id":"H001"}' >/dev/null 2>&1 || true
 curl -s -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application/json" \
   -d '{"username":"user1","password":"123456","role":"user","hospital_id":"H001"}' >/dev/null 2>&1 || true
+curl -s -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application/json" \
+  -d '{"username":"admin1","password":"123456","role":"admin","hospital_id":"H001"}' >/dev/null 2>&1 || true
 
 # ── 9. 汇总 ─────────────────────────────────────────────────────
 echo ""
@@ -317,7 +324,7 @@ echo "  Redis:          localhost:6379"
 echo "  Milvus:         localhost:19530"
 echo "  Workers:        parsing + interpretation + extract"
 echo ""
-echo "  测试用户: doctor1/123456 (医生), user1/123456 (用户)"
+echo "  测试用户: admin1/123456 (管理员), doctor1/123456 (医生), user1/123456 (用户)"
 echo ""
 echo "  启动前端:  bash start_front.sh"
 echo "  停止全部:  Ctrl+C  (Docker 中间件需手动 docker compose down)"

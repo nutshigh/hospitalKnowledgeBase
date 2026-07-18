@@ -143,6 +143,21 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
                 return Command(update={"knowledge_results": refs_dict, "messages": [result]})
         return result
 
+    async def awrap_tool_call(self, request: ToolCallRequest, handler):
+        # 异步路径同步实现:agent_search_knowledge 用 asyncio.run(agent.ainvoke(...))
+        # 走 langgraph 的 ainvoke 链路,会调用 awrap_tool_call 而非 sync wrap_tool_call。
+        # 不实现 awrap_tool_call 会抛 NotImplementedError 导致解读失败(retry_count=3)。
+        result = await handler(request)
+        if request.tool_call["name"] == "search_knowledge":
+            refs_dict = _extract_refs_dict_from_tool_result(result)
+            if refs_dict:
+                if isinstance(result, Command):
+                    update = dict(result.update or {})
+                    update["knowledge_results"] = refs_dict
+                    return Command(update=update)
+                return Command(update={"knowledge_results": refs_dict, "messages": [result]})
+        return result
+
 
 def build_interp_agent():
     model = get_chat_model(streaming=False)

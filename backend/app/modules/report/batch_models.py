@@ -30,6 +30,7 @@ class BatchImportFile(Base):
     file_size = Column(BigInteger, default=0)
     crc32 = Column(String(8), nullable=False, index=True)
     status = Column(String(24), default="queued", nullable=False)
+    failed_stage = Column(String(24))  # "parsing"|"interpretation"|"oversize" (失败阶段)
     report_task_id = Column(BigInteger)
     error_message = Column(Text)
     created_at = Column(DateTime, default=func.now(), nullable=False)

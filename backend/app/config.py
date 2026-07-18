@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
+    # Tenant admin (POST /api/v1/tenants)
+    # 空 = 接口完全开放(开发环境);填值 = 要求请求头 X-Admin-Token 匹配
+    ADMIN_TOKEN: str = ""
+
     # Batch Import (spec §6.2)
     MEDGO_MAX_CONCURRENCY: int = 2
     BATCH_ARCHIVE_MAX_SIZE: int = 10737418240  # 10GB

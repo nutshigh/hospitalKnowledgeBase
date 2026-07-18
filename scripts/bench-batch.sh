@@ -68,11 +68,11 @@ ZIP_SIZE=$(stat -c%s "$ZIP_PATH")
 log "zip 大小: $ZIP_SIZE bytes"
 
 # ── 3. 创建 batch ────────────────────────────────────────────
+# POST /batches:multipart Form 字段 filename(非 JSON)
 log "创建 batch..."
 CREATE_RESP=$(curl -s -X POST "$API_BASE/api/v1/reports/batches" \
   -H "Authorization: Bearer $JWT" \
-  -H "Content-Type: application/json" \
-  -d "{\"filename\":\"bench.zip\",\"total\":$PDF_COUNT}")
+  -F "filename=bench.zip")
 log "create resp: $CREATE_RESP"
 
 BATCH_ID=$(echo "$CREATE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('batch_id',''))" 2>/dev/null || echo "")
@@ -83,6 +83,7 @@ fi
 log "batch_id = $BATCH_ID"
 
 # ── 4. 分片上传 ──────────────────────────────────────────────
+# POST /batches/{id}/chunk(单数):multipart index(total 0 起),total,data=UploadFile
 log "分片上传 (chunk_size=$CHUNK_SIZE)..."
 split -b "$CHUNK_SIZE" "$ZIP_PATH" "$WORK_DIR/chunk_"
 CHUNKS=( "$WORK_DIR"/chunk_* )
@@ -90,19 +91,21 @@ TOTAL_CHUNKS=${#CHUNKS[@]}
 log "总分片数: $TOTAL_CHUNKS"
 
 for idx in "${!CHUNKS[@]}"; do
-  seq_no=$((idx + 1))
-  log "  上传分片 $seq_no / $TOTAL_CHUNKS (${CHUNKS[$idx]})"
-  curl -s -X POST "$API_BASE/api/v1/reports/batches/$BATCH_ID/chunks" \
+  log "  上传分片 $((idx + 1)) / $TOTAL_CHUNKS (${CHUNKS[$idx]})"
+  curl -s -X POST "$API_BASE/api/v1/reports/batches/$BATCH_ID/chunk" \
     -H "Authorization: Bearer $JWT" \
-    -H "X-Chunk-Seq: $seq_no" \
-    -H "X-Total-Chunks: $TOTAL_CHUNKS" \
-    --form "file=@${CHUNKS[$idx]}" >/dev/null
+    -F "index=$idx" \
+    -F "total=$TOTAL_CHUNKS" \
+    -F "data=@${CHUNKS[$idx]}" >/dev/null
 done
 
 # ── 5. 标记上传完成 ─────────────────────────────────────────
+# POST /batches/{id}/complete:JSON body {expected_total, expected_size}(expected_crc32 可选)
 log "标记上传完成..."
 curl -s -X POST "$API_BASE/api/v1/reports/batches/$BATCH_ID/complete" \
-  -H "Authorization: Bearer $JWT" >/dev/null
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d "{\"expected_total\":$TOTAL_CHUNKS,\"expected_size\":$ZIP_SIZE}" >/dev/null
 
 # ── 6. 后台采样 nvidia-smi ──────────────────────────────────
 log "启动 GPU 采样 (每 ${GPU_SAMPLE_INTERVAL}s) -> $GPU_LOG"

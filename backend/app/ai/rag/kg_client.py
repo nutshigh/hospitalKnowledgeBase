@@ -257,7 +257,16 @@ class KGClient:
         return stats
 
     def search_entities(self, query: str, top_k: int = 3) -> list[KGResult]:
-        """关键词匹配实体 → 查 1-hop 邻居 → 返回 KGResult 列表。"""
+        """关键词匹配实体 → 查 1-hop 邻居 → 返回 KGResult 列表。
+
+        两个匹配通道并行(对每个分词 term):
+        1. Disease 通道:疾病名 CONTAINS term → 1-hop 邻居(Symptom/Drug/Check/...)
+        2. Check 通道:检验项名 CONTAINS term → 反查 (Disease)-[:RECOMMEND_CHECK]->(Check)
+           用来覆盖"指标名"类 query,如"淋巴细胞百分数"/"血清丙氨酸氨基转移酶"——
+           KG 里这类概念挂在 Check 节点上而不在 Disease 名里,旧版只查 Disease 会全空命中。
+
+        结果按 degree 降序、按 entity 去重后取前 top_k 条。
+        """
         driver = self._get_driver()
         if not driver:
             return []
@@ -267,16 +276,21 @@ class KGClient:
             import jieba
             terms = [t.strip() for t in jieba.cut(query) if len(t.strip()) >= 2]
         except ImportError:
+            # fallback:无 jieba 时退化为按标点/空格切分
             terms = [w.strip() for w in query.replace(",", " ").replace("，", " ").replace("?", " ").replace("？", " ").replace("的", " ").split() if len(w.strip()) >= 2]
 
         if not terms:
             terms = [query.strip()]
 
         results = []
+        # Check 通道过采:degree 列宽易把"通用化验"(degree 高、语义不专一)顶上来
+        # 所以这里 LIMIT 拉到 5×top_k,Python 端再按 query↔entity 字符相似度 + degree 综合排序
+        check_oversample = max(top_k * 5, 15)
         try:
             with driver.session() as session:
                 for term in terms:
-                    cypher = """
+                    # --- Disease 通道:疾病名 CONTAINS term → 邻居 ---
+                    cypher_disease = """
                     MATCH (d:Disease)
                     WHERE d.name CONTAINS $term
                     WITH d, COUNT { (d)--() } AS degree
@@ -291,8 +305,7 @@ class KGClient:
                            }) AS neighbors,
                            degree
                     """
-                    records = session.run(cypher, term=term, top_k=top_k)
-                    for rec in records:
+                    for rec in session.run(cypher_disease, term=term, top_k=top_k):
                         entity = rec["entity"]
                         if not entity:
                             continue
@@ -303,7 +316,6 @@ class KGClient:
                         desc = rec["desc"] or ""
                         degree = rec["degree"] or 0
 
-                        # 组装文本
                         text_lines = [f"实体: {entity} (疾病)"]
                         if desc:
                             text_lines.append(f"描述: {desc[:200]}")
@@ -323,6 +335,50 @@ class KGClient:
                             score=float(degree),
                             text=text,
                         ))
+
+                    # --- Check 通道:检验项名 CONTAINS term → 反查疾病 ---
+                    cypher_check = """
+                    MATCH (c:Check)
+                    WHERE c.name CONTAINS $term
+                    WITH c, COUNT { (c)--() } AS degree
+                    ORDER BY degree DESC
+                    LIMIT $cap
+                    OPTIONAL MATCH (d:Disease)-[:RECOMMEND_CHECK]->(c)
+                    RETURN c.name AS entity,
+                           collect(DISTINCT d.name) AS diseases,
+                           degree
+                    """
+                    for rec in session.run(cypher_check, term=term, cap=check_oversample):
+                        entity = rec["entity"]
+                        if not entity:
+                            continue
+                        diseases = [d for d in (rec["diseases"] or []) if d]
+                        degree = rec["degree"] or 0
+
+                        text_lines = [f"实体: {entity} (检验项)"]
+                        if diseases:
+                            text_lines.append("相关疾病:")
+                            for d in diseases[:8]:
+                                text_lines.append(f"  - {d}")
+                        text = "\n".join(text_lines)
+
+                        results.append(KGResult(
+                            entity=entity,
+                            entity_type="Check",
+                            description="",
+                            neighbors=[],
+                            score=float(degree),
+                            text=text,
+                        ))
+
+            # 综合 score = query↔entity 字符相似度 boost + degree。
+            # SequenceMatcher.ratio() 通常 0.1~0.5, *1000 = 100~500,
+            # 远大于 degree(KG node degree 极少 >100),
+            # 即"与 query 字面贴近的实体"优先于"邻居数多的热门实体"。
+            from difflib import SequenceMatcher
+            for r in results:
+                boost = SequenceMatcher(None, query, r.entity).ratio() * 1000
+                r.score = r.score + boost
 
             # 去重 + 排序
             seen = set()
