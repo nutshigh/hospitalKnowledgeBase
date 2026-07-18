@@ -89,3 +89,58 @@ def test_T13_sweeper_starts_on_startup_and_cancels_on_shutdown():
 
         # after shutdown context exit, task should be cancelled
         assert main_mod.app.state.batch_sweeper_task.cancelled()
+
+
+def test_T14_setup_logging_called_in_create_app(monkeypatch):
+    """create_app() 进入时 setup_logging 应被调用一次。"""
+    import app.main as main_mod
+    calls = {"count": 0}
+
+    def _spy(default_level: str = "INFO"):
+        calls["count"] += 1
+
+    # main.py 用 `from app.core.logging_config import setup_logging` 把名字绑到
+    # app.main 模块上,所以 patch app.main 的 binding,而不是源模块。
+    monkeypatch.setattr(main_mod, "setup_logging", _spy)
+    # 避免 create_app() 真连 Milvus
+    monkeypatch.setattr("app.ai.config.ensure_milvus_started", lambda: None)
+    main_mod.create_app()
+    assert calls["count"] >= 1, "create_app 必须调用 setup_logging()"
+
+
+def test_T15_sweeper_logger_namespaced_under_app_batch(monkeypatch):
+    """sweeper 启动回调应使用 app.batch.sweeper logger。
+
+    Re-edit block 把 getLogger 放在 `@app.on_event("startup")` 回调里,
+    只有 lifespan start 才触发,因此用 TestClient 进入上下文以 fire startup。
+    """
+    import app.main as main_mod
+    import logging
+    from fastapi.testclient import TestClient
+
+    async def _noop_async():
+        return None
+
+    # main.py 顶部 `from app.core.batch_sweeper import start as start_sweeper`,
+    # binding 在 app.main.start_sweeper;patch 它以防真起 sweeper 后台任务。
+    monkeypatch.setattr(main_mod, "start_sweeper", _noop_async)
+    monkeypatch.setattr("app.ai.config.ensure_milvus_started", lambda: None)
+    # 防止 setup_logging 真写盘到 /data/logs
+    monkeypatch.setattr(main_mod, "setup_logging", lambda: None)
+
+    names_seen = set()
+    orig_get = logging.getLogger
+
+    def _spy_get(name=None):
+        if name and "batch" in name:
+            names_seen.add(name)
+        return orig_get(name)
+
+    monkeypatch.setattr(logging, "getLogger", _spy_get)
+
+    app = main_mod.create_app()
+    with TestClient(app):  # 触发 lifespan startup
+        pass
+    assert "app.batch.sweeper" in names_seen, (
+        "sweeper 应使用 app.batch.sweeper 命名空间,实际见到:%r" % names_seen
+    )

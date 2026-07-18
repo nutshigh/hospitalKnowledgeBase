@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.core.logging_config import setup_logging
 from app.api.health import router as health_router
 from app.api.auth import router as auth_router
 from app.modules.knowledge.router import router as knowledge_router
@@ -21,6 +22,7 @@ from app.modules.tenant.router import router as tenant_router
 
 
 def create_app() -> FastAPI:
+    setup_logging()
     app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
 
     from app.ai.config import ensure_milvus_started
@@ -61,10 +63,9 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def _start_batch_sweeper():
         import logging
-        _sweeper_log = logging.getLogger("batch_sweeper")
+        _sweeper_log = logging.getLogger("app.batch.sweeper")
 
         def _on_sweeper_done(task: asyncio.Task) -> None:
-            # cancelled 是正常关闭路径;仅异常退出打 error,便于运维发现 sweeper 静默死亡。
             if task.cancelled():
                 return
             exc = task.exception()
