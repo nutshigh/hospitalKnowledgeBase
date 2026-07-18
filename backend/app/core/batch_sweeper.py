@@ -8,7 +8,7 @@ from app.core.database import get_hospital_db
 from app.modules.report.batch_models import BatchImport, BatchImportFile
 from app.modules.report.batch_service import BatchService
 
-log = logging.getLogger("batch_sweeper")
+log = logging.getLogger("app.batch.sweeper")
 
 
 # TODO: replace with a hospital registry when multi-tenant sweep is needed

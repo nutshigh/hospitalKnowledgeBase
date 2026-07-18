@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from app.ai.agents.think_filter import strip_think_tags
 from app.ai.llm import get_chat_model, _guarded
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.judge")
 
 JUDGE_SYSTEM_PROMPT = """你是体检报告解读质量审核员。审查的是一份综合性的 AI 解读报告(5 节 markdown),不是逐指标的解释。
 

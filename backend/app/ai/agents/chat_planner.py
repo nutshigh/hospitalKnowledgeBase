@@ -26,7 +26,7 @@ from app.ai.agents.tools import AgentContext
 from app.config import settings
 from app.core.database import get_session
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.planner")
 
 PLANNER_SYSTEM_PROMPT = """你是体检报告解读系统的工具调度器。你的唯一职责是根据用户问题决定需要调用哪些工具，不做任何医学回答。
 

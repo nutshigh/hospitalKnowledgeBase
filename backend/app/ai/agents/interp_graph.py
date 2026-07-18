@@ -23,7 +23,7 @@ from app.ai.agents.judge_graph import run_judge
 from app.ai.llm import get_chat_model, _guarded
 from app.config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.interp")
 
 SEARCH_SYSTEM_PROMPT = """你是医学知识检索工具的执行器。你**唯一**能做的是对每个异常指标调用 search_knowledge 工具。
 
