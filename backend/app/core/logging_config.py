@@ -117,5 +117,9 @@ def setup_logging(default_level: str = "INFO") -> None:
     root.setLevel(level)
 
     # 高频噪音收口到 WARNING:只在出错时打,不打每条 HTTP access 行
-    for noisy in ("httpx", "httpcore", "uvicorn.access", "urllib3"):
+    for noisy in (
+        "httpx", "httpcore", "uvicorn.access", "urllib3",
+        "pika", "pika.adapters", "pika.adapters.utils",
+        "openai", "sentence_transformers",
+    ):
         logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
