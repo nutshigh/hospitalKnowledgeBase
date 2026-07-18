@@ -1,11 +1,15 @@
 import json
+import logging
 
 from app.core.database import get_hospital_db
+from app.core.logging_config import setup_logging
 from app.core.rabbitmq import rabbitmq, _NackOnce
 from app.core.retry import backoff_for_retry, is_bulk_window_now
 from app.modules.report.service import process_task, get_task_status
 from app.modules.report.batch_models import BatchImportFile
 from app.modules.report.batch_service import BatchService
+
+_log = logging.getLogger("app.parse")
 
 
 def handle_parsing_task(message: dict):
@@ -59,6 +63,7 @@ def handle_parsing_task(message: dict):
 
 
 def start_worker():
+    setup_logging()
     while True:
         try:
             rabbitmq.consume("parsing.urgent", handle_parsing_task)

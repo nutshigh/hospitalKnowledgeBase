@@ -365,3 +365,37 @@ def test_T2_13_dispatch_uses_filename_user_id(env):
     for f in file_rows:
         assert f.report_task_id is not None
     assert len(msgs) == 2
+
+
+def test_extract_worker_logger_namespaced_under_app_batch():
+    """extract_worker.py 模块级 logger 应为 app.batch.extract。"""
+    import app.modules.report.extract_worker as mod
+    assert mod._log.name == "app.batch.extract", (
+        f"expected app.batch.extract, got {mod._log.name}"
+    )
+
+
+def test_extract_worker_start_worker_calls_setup_logging(monkeypatch):
+    """start_worker() 第一行应调用 setup_logging()。"""
+    import pytest
+    import app.modules.report.extract_worker as mod
+
+    calls = {"n": 0}
+
+    def _spy(default_level="INFO"):
+        calls["n"] += 1
+
+    # patch the binding in the worker module, not the source module,
+    # because `from ... import setup_logging` makes a separate binding.
+    monkeypatch.setattr(mod, "setup_logging", _spy)
+    # consume 在 try 块里返回 None 即可;start_consuming 用 SystemExit
+    # 跳出 start_worker 的 except Exception(不会被 RuntimeError 触发到)
+    monkeypatch.setattr(mod.rabbitmq, "consume", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mod.rabbitmq, "start_consuming",
+        lambda *a, **k: (_ for _ in ()).throw(SystemExit("stop-loop")),
+    )
+
+    with pytest.raises(SystemExit):
+        mod.start_worker()
+    assert calls["n"] >= 1, "start_worker 必须先调 setup_logging()"

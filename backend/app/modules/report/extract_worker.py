@@ -10,12 +10,13 @@ from typing import Optional
 
 from app.config import settings
 from app.core.database import get_hospital_db
+from app.core.logging_config import setup_logging
 from app.core.rabbitmq import rabbitmq, TaskMessage
 from app.core.retry import backoff_for_retry
 from app.modules.report.batch_models import BatchImport, BatchImportFile
 from app.modules.report.batch_service import BatchService
 
-_log = logging.getLogger("extract_worker")
+_log = logging.getLogger("app.batch.extract")
 
 # 不含 docx(Spec F8:DOCX 从批量上传白名单移除)
 ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
@@ -209,6 +210,7 @@ def _stream_to_report(db, b, hospital_id, rel_path, fh, size, user_id: int):
 
 
 def start_worker():
+    setup_logging()
     while True:
         try:
             rabbitmq.consume("extract.bulk", handle_extract_task, prefetch_count=1)

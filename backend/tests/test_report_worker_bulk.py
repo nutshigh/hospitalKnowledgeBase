@@ -196,3 +196,31 @@ def test_success_increments_parsed_ok(env):
     f = s.query(BatchImportFile).get("f1")
     assert f.status == "parsed"
     Mq.publish_retry.assert_not_called()
+
+
+def test_report_worker_has_app_parse_logger():
+    """report/worker.py 应预留 app.parse logger。"""
+    import app.modules.report.worker as mod
+    assert mod._log.name == "app.parse"
+
+
+def test_report_worker_start_worker_calls_setup_logging(monkeypatch):
+    """start_worker() 第一行应调用 setup_logging()。"""
+    import pytest
+    import app.modules.report.worker as mod
+
+    calls = {"n": 0}
+
+    def _spy(default_level="INFO"):
+        calls["n"] += 1
+
+    monkeypatch.setattr(mod, "setup_logging", _spy)
+    monkeypatch.setattr(mod.rabbitmq, "consume", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mod.rabbitmq, "start_consuming",
+        lambda *a, **k: (_ for _ in ()).throw(SystemExit("stop-loop")),
+    )
+
+    with pytest.raises(SystemExit):
+        mod.start_worker()
+    assert calls["n"] >= 1

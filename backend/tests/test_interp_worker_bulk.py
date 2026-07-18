@@ -253,3 +253,31 @@ def test_f15_running_skip_existing_completed(env):
 
     agent_mock.assert_not_called()
     batch_mock.increment_progress.assert_not_called()
+
+
+def test_interp_worker_has_app_interp_worker_logger():
+    """interpretation/worker.py 应预留 app.interp.worker logger。"""
+    import app.modules.interpretation.worker as mod
+    assert mod._log.name == "app.interp.worker"
+
+
+def test_interp_worker_start_worker_calls_setup_logging(monkeypatch):
+    """start_worker() 第一行应调用 setup_logging()。"""
+    import pytest
+    import app.modules.interpretation.worker as mod
+
+    calls = {"n": 0}
+
+    def _spy(default_level="INFO"):
+        calls["n"] += 1
+
+    monkeypatch.setattr(mod, "setup_logging", _spy)
+    monkeypatch.setattr(mod.rabbitmq, "consume", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mod.rabbitmq, "start_consuming",
+        lambda *a, **k: (_ for _ in ()).throw(SystemExit("stop-loop")),
+    )
+
+    with pytest.raises(SystemExit):
+        mod.start_worker()
+    assert calls["n"] >= 1

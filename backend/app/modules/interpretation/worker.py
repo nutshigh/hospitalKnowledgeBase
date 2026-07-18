@@ -1,10 +1,14 @@
 import json
+import logging
 
 from app.core.database import get_hospital_db
+from app.core.logging_config import setup_logging
 from app.core.rabbitmq import rabbitmq, _NackOnce
 from app.core.retry import backoff_for_retry, is_bulk_window_now
 from app.ai.agents import run_interpretation_agent
 from app.modules.report.batch_service import BatchService
+
+_log = logging.getLogger("app.interp.worker")
 
 
 def handle_interpretation_task(message: dict):
@@ -93,6 +97,7 @@ def handle_interpretation_task(message: dict):
 
 
 def start_worker():
+    setup_logging()
     while True:
         try:
             rabbitmq.consume("interpretation.urgent", handle_interpretation_task)
