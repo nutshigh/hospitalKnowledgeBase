@@ -24,6 +24,9 @@ export HF_ENDPOINT=https://hf-mirror.com
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PATH="$VENV:$PATH"
 
+export LOG_LEVEL=${LOG_LEVEL:-INFO}
+mkdir -p /data/logs
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
@@ -161,9 +164,9 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "MedGo 已运行 (8004)"
     else
       log "启动 MedGo vLLM (8004, GPU 0-3, TP=4, ctx=32K, util=0.6)..."
-      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes" > /tmp/vllm-medgo.log 2>&1 &
+      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes" > /data/logs/vllm-medgo.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-medgo.pid
-      log "  MedGo 启动中 (PID: $!, log: /tmp/vllm-medgo.log)"
+      log "  MedGo 启动中 (PID: $!, log: /data/logs/vllm-medgo.stdout.log)"
     fi
   else
     log "跳过 MedGo (--no-medgo)"
@@ -175,9 +178,9 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "BGE-M3 已运行 (8002)"
     else
       log "启动 BGE-M3 embedding vLLM (8002, GPU 2)..."
-      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=2 $VLLM_VENV/vllm serve /data/models/bge-m3 --port 8002 --trust-remote-code --served-model-name BAAI/bge-m3 --task embed --max-model-len 8192 --gpu-memory-utilization 0.12" > /tmp/vllm-embed.log 2>&1 &
+      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=2 $VLLM_VENV/vllm serve /data/models/bge-m3 --port 8002 --trust-remote-code --served-model-name BAAI/bge-m3 --task embed --max-model-len 8192 --gpu-memory-utilization 0.12" > /data/logs/vllm-embed.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-embed.pid
-      log "  BGE-M3 启动中 (PID: $!, log: /tmp/vllm-embed.log)"
+      log "  BGE-M3 启动中 (PID: $!, log: /data/logs/vllm-embed.stdout.log)"
     fi
   else
     log "跳过 BGE-M3 (--no-embed)"
@@ -189,9 +192,9 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "Reranker 已运行 (8003)"
     else
       log "启动 Reranker (8003, GPU 2)..."
-      nohup bash -c "cd $BACKEND_DIR && export HF_ENDPOINT=https://hf-mirror.com; CUDA_VISIBLE_DEVICES=2 RERANKER_MODEL=/data/models/bge-reranker-v2-m3 $VENV/python -m uvicorn reranker_service.main:app --host 127.0.0.1 --port 8003" > /tmp/reranker.log 2>&1 &
+      nohup bash -c "cd $BACKEND_DIR && export HF_ENDPOINT=https://hf-mirror.com; CUDA_VISIBLE_DEVICES=2 RERANKER_MODEL=/data/models/bge-reranker-v2-m3 $VENV/python -m uvicorn reranker_service.main:app --host 127.0.0.1 --port 8003" > /data/logs/reranker.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-reranker.pid
-      log "  Reranker 启动中 (PID: $!, log: /tmp/reranker.log)"
+      log "  Reranker 启动中 (PID: $!, log: /data/logs/reranker.stdout.log)"
     fi
   else
     log "跳过 Reranker (--no-reranker)"
@@ -203,9 +206,9 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "PaddleOCR-VL 已运行 (8001)"
     else
       log "启动 PaddleOCR-VL (8001, GPU 3)..."
-      nohup bash -c "cd $BACKEND_DIR && export HF_ENDPOINT=https://hf-mirror.com; CUDA_VISIBLE_DEVICES=3 PADDLEOCR_VL_MODEL=/data/models/PaddleOCR-VL-1.5 PP_DOCLAYOUT_MODEL=/data/models/PP-DocLayoutV2 $PADDLE_VENV/python -m uvicorn paddle_ocr_service.main:app --host 0.0.0.0 --port 8001" > /tmp/paddle-ocr.log 2>&1 &
+      nohup bash -c "cd $BACKEND_DIR && export HF_ENDPOINT=https://hf-mirror.com; CUDA_VISIBLE_DEVICES=3 PADDLEOCR_VL_MODEL=/data/models/PaddleOCR-VL-1.5 PP_DOCLAYOUT_MODEL=/data/models/PP-DocLayoutV2 $PADDLE_VENV/python -m uvicorn paddle_ocr_service.main:app --host 0.0.0.0 --port 8001" > /data/logs/paddle-ocr.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-ocr.pid
-      log "  PaddleOCR-VL 启动中 (PID: $!, log: /tmp/paddle-ocr.log)"
+      log "  PaddleOCR-VL 启动中 (PID: $!, log: /data/logs/paddle-ocr.stdout.log)"
     fi
   else
     log "跳过 PaddleOCR-VL (--no-ocr)"
@@ -227,7 +230,7 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
         log "  $name 就绪 (:$port)"
         break
       fi
-      [[ $i -eq 180 ]] && warn "  $name 180秒未就绪 (检查 /tmp/vllm-*.log)"
+      [[ $i -eq 180 ]] && warn "  $name 180秒未就绪 (检查 /data/logs/vllm-*.stdout.log)"
       sleep 2
     done
   done
@@ -237,7 +240,7 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
         log "  PaddleOCR-VL 就绪 (:8001)"
         break
       fi
-      [[ $i -eq 60 ]] && warn "  PaddleOCR-VL 60秒未就绪 (检查 /tmp/paddle-ocr.log)"
+      [[ $i -eq 60 ]] && warn "  PaddleOCR-VL 60秒未就绪 (检查 /data/logs/paddle-ocr.stdout.log)"
       sleep 2
     done
   fi
@@ -249,17 +252,17 @@ if curl -s -m 3 http://localhost:8000/api/v1/health >/dev/null 2>&1; then
 else
   log "启动后端 API (8000)..."
   cd "$BACKEND_DIR"
-  nohup $VENV/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+  nohup $VENV/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /data/logs/backend.stdout.log 2>&1 &
   echo $! > /tmp/start-sh-backend.pid
   BACKEND_PID=$!
   cd "$ROOT_DIR"
-  log "  后端启动中 (PID: $BACKEND_PID, log: /tmp/backend.log)"
+  log "  后端启动中 (PID: $BACKEND_PID, log: /data/logs/backend.stdout.log)"
   for i in $(seq 1 30); do
     if curl -s -m 3 http://localhost:8000/api/v1/health >/dev/null 2>&1; then
       log "  后端就绪: http://localhost:8000"
       break
     fi
-    [[ $i -eq 30 ]] && warn "  后端30秒未就绪 (检查 /tmp/backend.log)"
+    [[ $i -eq 30 ]] && warn "  后端30秒未就绪 (检查 /data/logs/backend.stdout.log)"
     sleep 1
   done
 fi
@@ -270,10 +273,10 @@ if pgrep -f "app.modules.report.worker" >/dev/null 2>&1; then
 else
   log "启动报告解析 Worker..."
   cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.report.worker import start_worker; start_worker()" > /tmp/worker-parsing.log 2>&1 &
+  nohup $VENV/python -c "from app.modules.report.worker import start_worker; start_worker()" > /data/logs/worker-parsing.stdout.log 2>&1 &
   echo $! > /tmp/start-sh-worker-parsing.pid
   cd "$ROOT_DIR"
-  log "  报告解析 Worker 已启动 (log: /tmp/worker-parsing.log)"
+  log "  报告解析 Worker 已启动 (log: /data/logs/worker-parsing.stdout.log)"
 fi
 
 if pgrep -f "app.modules.interpretation.worker" >/dev/null 2>&1; then
@@ -281,10 +284,10 @@ if pgrep -f "app.modules.interpretation.worker" >/dev/null 2>&1; then
 else
   log "启动解读 Worker..."
   cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.interpretation.worker import start_worker; start_worker()" > /tmp/worker-interpretation.log 2>&1 &
+  nohup $VENV/python -c "from app.modules.interpretation.worker import start_worker; start_worker()" > /data/logs/worker-interpretation.stdout.log 2>&1 &
   echo $! > /tmp/start-sh-worker-interpretation.pid
   cd "$ROOT_DIR"
-  log "  解读 Worker 已启动 (log: /tmp/worker-interpretation.log)"
+  log "  解读 Worker 已启动 (log: /data/logs/worker-interpretation.stdout.log)"
 fi
 
 if pgrep -f "app.modules.report.extract_worker" >/dev/null 2>&1; then
@@ -292,10 +295,10 @@ if pgrep -f "app.modules.report.extract_worker" >/dev/null 2>&1; then
 else
   log "启动批量解压 Worker..."
   cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.report.extract_worker import start_worker; start_worker()" > /tmp/worker-extract.log 2>&1 &
+  nohup $VENV/python -c "from app.modules.report.extract_worker import start_worker; start_worker()" > /data/logs/worker-extract.stdout.log 2>&1 &
   echo $! > /tmp/start-sh-worker-extract.pid
   cd "$ROOT_DIR"
-  log "  批量解压 Worker 已启动 (log: /tmp/worker-extract.log)"
+  log "  批量解压 Worker 已启动 (log: /data/logs/worker-extract.stdout.log)"
 fi
 
 # ── 8. 创建测试用户（如不存在）──────────────────────────────────
@@ -313,10 +316,10 @@ echo "=============================================="
 echo "  后端全套服务已启动"
 echo "=============================================="
 echo "  后端 API:       http://localhost:8000"
-echo "  MedGo (LLM):    http://localhost:8004  (log: /tmp/vllm-medgo.log)"
-echo "  BGE-M3 (Embed): http://localhost:8002  (log: /tmp/vllm-embed.log)"
-echo "  Reranker:       http://localhost:8003  (log: /tmp/reranker.log)"
-echo "  PaddleOCR-VL:   http://localhost:8001  (log: /tmp/paddle-ocr.log)"
+echo "  MedGo (LLM):    http://localhost:8004  (log: /data/logs/vllm-medgo.stdout.log)"
+echo "  BGE-M3 (Embed): http://localhost:8002  (log: /data/logs/vllm-embed.stdout.log)"
+echo "  Reranker:       http://localhost:8003  (log: /data/logs/reranker.stdout.log)"
+echo "  PaddleOCR-VL:   http://localhost:8001  (log: /data/logs/paddle-ocr.stdout.log)"
 echo "  Neo4j:          http://localhost:7474  (neo4j/medgraph123)"
 echo "  MySQL:          localhost:3306  (root/root)"
 echo "  RabbitMQ:       localhost:5672  (root/root)"
