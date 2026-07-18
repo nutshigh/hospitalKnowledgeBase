@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import AsyncIterator, Optional
 
 from langchain.agents import AgentState, create_agent
@@ -18,7 +19,7 @@ from app.ai.agents.citation_matcher import inject_citations
 from app.ai.agents.chat_planner import run_planner, execute_plan
 from app.config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.chat")
 
 CHAT_ANSWER_SYSTEM_PROMPT = """你是体检报告解读医生助手。基于下方检索结果和报告数据，为体检者提供易懂的健康咨询。
 
@@ -264,7 +265,20 @@ async def run_chat_agent(
         # ── 1. Planner：决定调用哪些工具（结构化输出，不执行工具）──
         ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id)
         planner_history = history_msgs[-PLANNER_HISTORY_MSGS:] if PLANNER_HISTORY_MSGS > 0 else []
+        logger.info(
+            "session=%s user=%s hospital=%s report_id=%s msg=%s",
+            session_id, user_id, hospital_id,
+            session.report_id, (user_message or "")[:200],
+        )
+        t_planner_start = time.time()
         plan = await run_planner(hospital_id, planner_history, user_message, session.report_id, user_id)
+        logger.info(
+            "session=%s planner done tools=%s need_tools=%s latency_ms=%d",
+            session_id,
+            [tc.tool for tc in plan.tool_calls],
+            plan.need_tools,
+            int((time.time() - t_planner_start) * 1000),
+        )
 
         # ── 2. Execute plan：Python 执行工具，收集 refs + context ──
         refs: list[dict] = []
@@ -272,7 +286,13 @@ async def run_chat_agent(
         if plan.need_tools and plan.tool_calls:
             for tc in plan.tool_calls:
                 yield {"event": "tool_status", "data": {"tool": tc.tool, "status": "start"}}
+            t_exec_start = time.time()
             refs, context_text = execute_plan(plan, ctx)
+            logger.info(
+                "session=%s tools_executed refs=%d context_chars=%d latency_ms=%d",
+                session_id, len(refs), len(context_text),
+                int((time.time() - t_exec_start) * 1000),
+            )
             for tc in plan.tool_calls:
                 yield {"event": "tool_status", "data": {"tool": tc.tool, "status": "end"}}
 
@@ -283,6 +303,7 @@ async def run_chat_agent(
 
         final_response = ""
         think_filter = ThinkStreamFilter()
+        t_answer_start = time.time()
         async with medgo_sem:
             async for chunk in model.astream(messages):
                 if chunk and hasattr(chunk, "content") and chunk.content:
@@ -297,6 +318,11 @@ async def run_chat_agent(
 
         # 入库前统一清洗 thinking 标签
         final_response = strip_think_tags(final_response)
+        logger.info(
+            "session=%s answer done chars=%d latency_ms=%d",
+            session_id, len(final_response),
+            int((time.time() - t_answer_start) * 1000),
+        )
 
         # ── 3. 后置 citation 注入 + 确定性分类 ──
         structured_data = await _extract_structured_metadata(final_response, refs)

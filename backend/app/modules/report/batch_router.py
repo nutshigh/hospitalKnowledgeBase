@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Optional
 
@@ -13,6 +14,7 @@ from app.modules.report.batch_service import BatchService
 
 
 router = APIRouter()
+_log = logging.getLogger("app.upload")
 
 
 def _db(current_user: CurrentUser = Depends(get_current_user)):
@@ -33,6 +35,10 @@ def create_batch(filename: str = Form(...),
                  db: Session = Depends(_db),
                  user: CurrentUser = Depends(get_current_user)):
     b = BatchService.create_batch(db, user.hospital_id, str(user.user_id), filename)
+    _log.info(
+        "batch created hospital=%s user=%s batch=%s filename=%s",
+        user.hospital_id, user.user_id, b.id, (filename or "")[:200],
+    )
     return {"batch_id": b.id}
 
 
@@ -43,6 +49,10 @@ async def upload_chunk(batch_id: str,
                        data: UploadFile = File(...),
                        db: Session = Depends(_db)):
     chunk = await data.read()
+    _log.debug(
+        "chunk received batch=%s index=%d/%d bytes=%d",
+        batch_id, index, total, len(chunk),
+    )
     try:
         BatchService.append_chunk(db, batch_id, index, total, chunk)
     except ValueError as e:
@@ -59,12 +69,20 @@ def complete_batch(batch_id: str, body: dict,
     except (KeyError, TypeError, ValueError):
         raise HTTPException(400, "expected_total and expected_size required")
     expected_crc32 = body.get("expected_crc32")
+    _log.info(
+        "batch complete batch=%s expected_total=%d expected_size=%d crc=%s",
+        batch_id, expected_total, expected_size, expected_crc32,
+    )
     try:
         BatchService.finalize_batch(
             db, batch_id, expected_crc32, expected_total, expected_size,
         )
     except ValueError as e:
         code = str(e)
+        _log.warning(
+            "batch complete failed batch=%s code=%s",
+            batch_id, code,
+        )
         if code in ("archive_too_large", "crc_mismatch", "chunks_incomplete"):
             raise HTTPException(400, detail=code)
         raise HTTPException(400, detail=code)

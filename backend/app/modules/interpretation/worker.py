@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from app.core.database import get_hospital_db
 from app.core.logging_config import setup_logging
@@ -41,9 +42,16 @@ def handle_interpretation_task(message: dict):
             .first()
         )
         if existing:
+            _log.debug("interp skip (already running/completed) report=%s hospital=%s", report_id, hospital_id)
             return  # ack and skip — another worker is/has handled this report
+        t_start = time.time()
         try:
             run_interpretation_agent(hospital_id, db, report_id)
+            latency_ms = int((time.time() - t_start) * 1000)
+            _log.info(
+                "interp ok report=%s hospital=%s batch=%s file=%s latency_ms=%d",
+                report_id, hospital_id, batch_id, file_id, latency_ms,
+            )
             # register comparison summary(failures don't affect interp completion)
             try:
                 from app.modules.user_profile.service import (
@@ -59,6 +67,11 @@ def handle_interpretation_task(message: dict):
             if batch_id and file_id:
                 BatchService.increment_progress(db, batch_id, file_id, "interp_ok")
         except Exception as e:
+            latency_ms = int((time.time() - t_start) * 1000)
+            _log.warning(
+                "interp fail report=%s hospital=%s batch=%s file=%s latency_ms=%d: %s",
+                report_id, hospital_id, batch_id, file_id, latency_ms, e,
+            )
             import traceback as _tb
             print(f"Interpretation failed for report {report_id}: {e}", flush=True)
             _tb.print_exc()

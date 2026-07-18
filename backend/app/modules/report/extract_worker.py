@@ -145,6 +145,10 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
 
 def _record_oversize(db, batch_id, file_path, size):
     """记一行 failed='oversize' 但不投 parsing(F6)。"""
+    _log.info(
+        "extract stage=oversize batch=%s file=%s size=%d",
+        batch_id, file_path, size,
+    )
     fid = BatchService.handle_extracted_file(db, batch_id, file_path,
                                               f"ovs{size:08x}", size)
     f = db.query(BatchImportFile).get(fid)
@@ -165,6 +169,10 @@ def _record_dispatch_unmatched(db, batch_id, file_path, size,
     直接新建一行 BatchImportFile(uuid 主键,占位唯一 crc 不参与批内去重),
     复用 handle_extracted_file 会因占位 crc 把两个同 size unmatched 文件误去重。
     """
+    _log.info(
+        "extract stage=dispatch_unmatched batch=%s file=%s size=%d",
+        batch_id, file_path, size,
+    )
     import uuid as _uuid
     fid = _uuid.uuid4().hex
     db.add(BatchImportFile(
@@ -188,6 +196,10 @@ def _stream_to_report(db, b, hospital_id, rel_path, fh, size, user_id: int):
         return
     if f.report_task_id is not None:
         return  # 已发布(幂等命中,F18 补差),不再 publish
+    _log.info(
+        "extract stage=queued batch=%s file=%s file_id=%s user=%d size=%d",
+        b.id, rel_path, fid, user_id, size,
+    )
     # 落盘至 FILE_STORAGE_ROOT/<h>/batch/extracted/<batch_id>/<fid>.<ext>
     ext = os.path.splitext(rel_path)[1].lstrip(".")
     extract_dir = os.path.join(os.path.dirname(b.archive_path), "extracted", b.id)

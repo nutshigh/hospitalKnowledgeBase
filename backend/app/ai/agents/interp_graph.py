@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Annotated, List, Optional, TypedDict
 
@@ -537,6 +538,7 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
 
     report = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
     if not report:
+        logger.warning("interpretation skipped: report %s not found", report_id)
         return {}
 
     existing = db.query(ReportInterpretation).filter(
@@ -544,6 +546,7 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
         ReportInterpretation.status == "completed",
     ).first()
     if existing:
+        logger.info("interpretation report=%s skipped (already completed)", report_id)
         return {}
 
     # 在 graph.invoke 前先建一行 status='processing'，让前端能通过
@@ -558,6 +561,11 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
         db.add(ReportInterpretation(report_id=report_id, status="processing"))
     db.commit()
 
+    logger.info(
+        "interpretation start report=%s hospital=%s",
+        report_id, hospital_id,
+    )
+    t_start = time.time()
     graph = build_interp_graph(hospital_id, db)
     try:
         final_state = graph.invoke({
@@ -575,8 +583,26 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
             "judge_result": {},
             "judge_retry_count": 0,
         })
+        latency_ms = int((time.time() - t_start) * 1000)
+        judge_result = final_state.get("judge_result", {}) or {}
+        logger.info(
+            "interpretation done report=%s verdict=%s judge_retries=%d "
+            "red=%d yellow=%d refs=%d latency_ms=%d",
+            report_id,
+            "pass" if judge_result.get("passed", True) else "fail",
+            final_state.get("judge_retry_count", 0),
+            final_state.get("red_count", 0),
+            final_state.get("yellow_count", 0),
+            len(final_state.get("references", []) or []),
+            latency_ms,
+        )
         return final_state
     except Exception as e:
+        latency_ms = int((time.time() - t_start) * 1000)
+        logger.exception(
+            "interpretation failed report=%s latency_ms=%d: %s",
+            report_id, latency_ms, e,
+        )
         interp = db.query(ReportInterpretation).filter(
             ReportInterpretation.report_id == report_id,
             ReportInterpretation.status == "processing",

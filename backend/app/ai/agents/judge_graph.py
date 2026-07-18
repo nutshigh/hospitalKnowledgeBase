@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 
 from json_repair import repair_json
 from langchain.messages import HumanMessage, SystemMessage
@@ -127,10 +128,13 @@ def _format_for_review(state: dict) -> str:
 
 
 def run_judge(state: dict) -> dict:
+    report_id = state.get("report_id")
     review_text = _format_for_review(state)
     if not review_text.strip():
+        logger.info("judge report=%s skipped (empty review)", report_id)
         return {"passed": True, "issues": [], "suggestions": ""}
 
+    t0 = time.time()
     try:
         model = build_judge_model()
         resp = asyncio.run(_guarded(model.ainvoke([
@@ -138,11 +142,24 @@ def run_judge(state: dict) -> dict:
             ("user", review_text),
         ]))).content
         judge_result = _parse_judge_response(resp)
+        latency_ms = int((time.time() - t0) * 1000)
         if judge_result is None:
-            logger.warning("Judge returned unparseable response, assuming passed. raw=%r",
-                           (resp or "")[:200])
+            logger.warning(
+                "judge report=%s unparseable, assuming passed. raw=%r latency_ms=%d",
+                report_id, (resp or "")[:200], latency_ms,
+            )
             return {"passed": True, "issues": [], "suggestions": ""}
+        logger.info(
+            "judge report=%s verdict=%s issues=%d latency_ms=%d",
+            report_id,
+            "pass" if judge_result.passed else "fail",
+            len(judge_result.issues or []),
+            latency_ms,
+        )
         return judge_result.model_dump()
     except Exception as e:
-        logger.warning("Judge model failed: %s, assuming passed", e)
+        logger.warning(
+            "judge report=%s model failed (assume passed) latency_ms=%d: %s",
+            report_id, int((time.time() - t0) * 1000), e,
+        )
         return {"passed": True, "issues": [], "suggestions": ""}

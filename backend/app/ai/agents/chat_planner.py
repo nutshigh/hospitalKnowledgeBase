@@ -14,6 +14,7 @@
 """
 import json
 import logging
+import time
 from typing import List, Optional
 
 from langchain.messages import HumanMessage, SystemMessage
@@ -79,8 +80,16 @@ async def run_planner(
     model.temperature = 0.0
     structured = model.with_structured_output(ChatPlan)
     messages = [SystemMessage(content=PLANNER_SYSTEM_PROMPT)] + history_msgs + [HumanMessage(content=user_message)]
+    t0 = time.time()
     try:
         plan = await _guarded(structured.ainvoke(messages))
+        logger.info(
+            "planner decision need_tools=%s tools=%s summary=%s latency_ms=%d",
+            plan.need_tools,
+            [tc.tool for tc in plan.tool_calls],
+            (plan.summary or "")[:200],
+            int((time.time() - t0) * 1000),
+        )
         return plan
     except Exception as e:
         logger.warning("planner failed: %s, returning empty plan", e)
@@ -201,26 +210,40 @@ def execute_plan(plan: ChatPlan, ctx: AgentContext) -> tuple[list[dict], str]:
 
     for tc in plan.tool_calls:
         tool = tc.tool
+        t_tool = time.time()
         try:
             if tool == "search_knowledge" and tc.query:
                 refs, text = _execute_search_knowledge(ctx, tc.query, top_k=tc.limit)
                 all_refs.extend(refs)
+                logger.debug(
+                    "tool=%s query=%s hits=%d latency_ms=%d",
+                    tool, (tc.query or "")[:200], len(refs),
+                    int((time.time() - t_tool) * 1000),
+                )
                 if text:
                     context_blocks.append(f"### search_knowledge(\"{tc.query}\")\n{text}")
             elif tool == "get_report_indicators":
                 _, text = _execute_get_report_indicators(ctx)
+                logger.debug("tool=%s latency_ms=%d", tool, int((time.time() - t_tool) * 1000))
                 context_blocks.append(f"### {tool}\n{text}")
             elif tool == "get_report_summary":
                 _, text = _execute_get_report_summary(ctx)
+                logger.debug("tool=%s latency_ms=%d", tool, int((time.time() - t_tool) * 1000))
                 context_blocks.append(f"### {tool}\n{text}")
             elif tool == "get_user_history_reports":
                 _, text = _execute_get_user_history_reports(ctx, limit=tc.limit or 5)
+                logger.debug("tool=%s latency_ms=%d", tool, int((time.time() - t_tool) * 1000))
                 context_blocks.append(f"### {tool}\n{text}")
             elif tool == "get_indicator_history" and tc.item_name:
                 _, text = _execute_get_indicator_history(ctx, tc.item_name)
+                logger.debug(
+                    "tool=%s item=%s latency_ms=%d",
+                    tool, tc.item_name, int((time.time() - t_tool) * 1000),
+                )
                 context_blocks.append(f"### {tool}(\"{tc.item_name}\")\n{text}")
             elif tool == "get_triage_rules":
                 _, text = _execute_get_triage_rules(ctx)
+                logger.debug("tool=%s latency_ms=%d", tool, int((time.time() - t_tool) * 1000))
                 context_blocks.append(f"### {tool}\n{text}")
             else:
                 logger.warning("execute_plan: unknown/incomplete tool call: %s", tool)

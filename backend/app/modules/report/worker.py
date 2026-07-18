@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from app.core.database import get_hospital_db
 from app.core.logging_config import setup_logging
@@ -27,13 +28,25 @@ def handle_parsing_task(message: dict):
     try:
         task = get_task_status(db, task_id)
         if task and task.status == "completed":
+            _log.debug("parsing skip (already completed) task=%s hospital=%s", task_id, hospital_id)
             return
+        t_start = time.time()
         try:
             process_task(db, task_id, hospital_id, batch_id=batch_id, file_id=file_id)
+            latency_ms = int((time.time() - t_start) * 1000)
+            _log.info(
+                "parsing ok task=%s hospital=%s batch=%s file=%s latency_ms=%d",
+                task_id, hospital_id, batch_id, file_id, latency_ms,
+            )
             # 成功 → 计 batch file 进度(parsed_ok)
             if batch_id and file_id:
                 BatchService.increment_progress(db, batch_id, file_id, "parsed_ok")
         except Exception:
+            latency_ms = int((time.time() - t_start) * 1000)
+            _log.warning(
+                "parsing fail task=%s hospital=%s batch=%s file=%s latency_ms=%d",
+                task_id, hospital_id, batch_id, file_id, latency_ms,
+            )
             # 失败:由 process_task 已写 retry_count/status;此处按 retry_count 决策
             task = get_task_status(db, task_id)
             retries = task.retry_count if task else 0

@@ -90,6 +90,8 @@ def setup_logging(default_level: str = "INFO") -> None:
     - 优先读 ``os.environ["LOG_LEVEL"]``,否则用 ``default_level``
     - mkdir -p ``LOG_DIR`` (mode=0o775)
     - 给 root logger 装一个 MonthlyRotatingFileHandler,Formatter 含时间戳
+    - 静音高频噪音 logger (httpx/uvicorn.access/httpcore) 到 WARNING,
+      只在出错时打;业务过程日志走 INFO/DEBUG 由各模块自报
     - 失败不抛,回退 StreamHandler 到 stdout,确保进程能启动
     """
     level_name = os.environ.get("LOG_LEVEL", default_level).upper()
@@ -113,3 +115,7 @@ def setup_logging(default_level: str = "INFO") -> None:
         root.removeHandler(h)
     root.addHandler(handler)
     root.setLevel(level)
+
+    # 高频噪音收口到 WARNING:只在出错时打,不打每条 HTTP access 行
+    for noisy in ("httpx", "httpcore", "uvicorn.access", "urllib3"):
+        logging.getLogger(noisy).setLevel(max(level, logging.WARNING))

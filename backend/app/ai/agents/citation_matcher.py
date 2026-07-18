@@ -111,8 +111,12 @@ def _get_source_embeddings(source_texts: list[str]) -> list[Optional[list[float]
     else:
         cached = [None] * n
 
-    # 2. 收集未命中的，批量算 embedding
+    hits = sum(1 for v in results if v is not None)
     miss_indices = [i for i in range(n) if results[i] is None]
+    logger.debug(
+        "citation embed_cache total=%d hits=%d misses=%d",
+        n, hits, len(miss_indices),
+    )
     if not miss_indices:
         return results
 
