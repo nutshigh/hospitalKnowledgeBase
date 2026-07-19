@@ -22,23 +22,24 @@ _log = logging.getLogger("app.batch.extract")
 ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
 
 # 文件名约定: <姓名>_<医院编号>_<用户编号>.<ext>
-# basename 去扩展后,3 段半角下划线分隔,末段纯数字 = user_id。
 _FILENAME_RE = re.compile(r"^([^_]+)_([^_]+)_(\d+)$")
 
 
-def _resolve_user_id(filename: str) -> Optional[int]:
-    """从 zip/tar 内文件名抽取终端用户 user_id。
-    Returns int user_id on match, None on mismatch。
+def _parse_filename(filename: str) -> Optional[tuple[int, str]]:
+    """从 zip/tar 内文件名抽取 (user_id, hospital_code)。
+    Returns (int, str) on match, None on mismatch。
     """
     base = os.path.splitext(os.path.basename(filename))[0]
     m = _FILENAME_RE.match(base)
-    return int(m.group(3)) if m else None
+    if m:
+        return int(m.group(3)), m.group(2)
+    return None
 
 
 def handle_extract_task(message: dict):
     payload = message.get("payload", {})
     batch_id = payload.get("batch_id")
-    hospital_id = payload.get("hospital_id")
+    hospital_id = message.get("hospital_id") or payload.get("hospital_id")
     archive_path = payload.get("archive_path")
 
     db = next(get_hospital_db(hospital_id))
@@ -110,13 +111,19 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                 if cum_uncompressed > 5 * archive_size:
                     _record_oversize(db, b.id, info.filename, info.file_size)
                     continue
-                user_id = _resolve_user_id(info.filename)
-                if user_id is None:
+                parsed = _parse_filename(info.filename)
+                if parsed is None:
                     _record_dispatch_unmatched(db, b.id, info.filename, info.file_size)
                     continue
-                with zf.open(info) as fh:
-                    _stream_to_report(db, b, hospital_id, info.filename, fh,
-                                      info.file_size, user_id)
+                user_id, file_hospital = parsed
+                file_db = next(get_hospital_db(file_hospital)) if file_hospital != hospital_id else db
+                try:
+                    with zf.open(info) as fh:
+                        _stream_to_report(file_db, b, file_hospital, info.filename, fh,
+                                          info.file_size, user_id, batch_db=db)
+                finally:
+                    if file_db is not db:
+                        file_db.close()
     else:
         with tarfile.open(archive_path) as tf:
             for member in tf.getmembers():
@@ -135,12 +142,19 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                 if cum_uncompressed > 5 * archive_size:
                     _record_oversize(db, b.id, member.name, member.size)
                     continue
-                user_id = _resolve_user_id(member.name)
-                if user_id is None:
+                parsed = _parse_filename(member.name)
+                if parsed is None:
                     _record_dispatch_unmatched(db, b.id, member.name, member.size)
                     continue
-                fh = tf.extractfile(member)
-                _stream_to_report(db, b, hospital_id, member.name, fh, member.size, user_id)
+                user_id, file_hospital = parsed
+                file_db = next(get_hospital_db(file_hospital)) if file_hospital != hospital_id else db
+                try:
+                    fh = tf.extractfile(member)
+                    _stream_to_report(file_db, b, file_hospital, member.name, fh,
+                                      member.size, user_id, batch_db=db)
+                finally:
+                    if file_db is not db:
+                        file_db.close()
 
 
 def _record_oversize(db, batch_id, file_path, size):
@@ -150,7 +164,7 @@ def _record_oversize(db, batch_id, file_path, size):
         batch_id, file_path, size,
     )
     fid = BatchService.handle_extracted_file(db, batch_id, file_path,
-                                              f"ovs{size:08x}", size)
+                                              f"o{size:07x}", size)
     f = db.query(BatchImportFile).get(fid)
     if f and f.status == "queued":
         f.status = "failed"
@@ -177,7 +191,7 @@ def _record_dispatch_unmatched(db, batch_id, file_path, size,
     fid = _uuid.uuid4().hex
     db.add(BatchImportFile(
         id=fid, batch_id=batch_id, file_path=file_path, file_size=size,
-        crc32=f"unm{_uuid.uuid4().hex[:8]}",
+        crc32=f"un{_uuid.uuid4().hex[:6]}",
         status="failed", failed_stage=reason, error_message=reason,
     ))
     b = db.query(BatchImport).get(batch_id)
@@ -186,21 +200,27 @@ def _record_dispatch_unmatched(db, batch_id, file_path, size,
     db.commit()
 
 
-def _stream_to_report(db, b, hospital_id, rel_path, fh, size, user_id: int):
-    """读流,算 crc32,落盘,建 report_task 并 publish parsing.bulk(幂等)。"""
+def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, user_id: int,
+                      batch_db=None):
+    """读流,算 crc32,落盘,建 report_task 并 publish parsing.bulk(幂等)。
+
+    target_db: 报告归属医院(文件名 _医院编码_) 的 DB 会话(ReportTask 写至此)
+    batch_db:   批次所在医院的 DB 会话(BatchImportFile 操作);默认同 target_db
+    """
+    if batch_db is None:
+        batch_db = target_db
     data = fh.read()
     crc = f"{zlib.crc32(data) & 0xffffffff:08x}"
-    fid = BatchService.handle_extracted_file(db, b.id, rel_path, crc, size)
-    f = db.query(BatchImportFile).get(fid)
+    fid = BatchService.handle_extracted_file(batch_db, b.id, rel_path, crc, size)
+    f = batch_db.query(BatchImportFile).get(fid)
     if f is None:
         return
     if f.report_task_id is not None:
         return  # 已发布(幂等命中,F18 补差),不再 publish
     _log.info(
-        "extract stage=queued batch=%s file=%s file_id=%s user=%d size=%d",
-        b.id, rel_path, fid, user_id, size,
+        "extract stage=queued batch=%s file=%s file_id=%s user=%d size=%d target_hospital=%s",
+        b.id, rel_path, fid, user_id, size, hospital_id,
     )
-    # 落盘至 FILE_STORAGE_ROOT/<h>/batch/extracted/<batch_id>/<fid>.<ext>
     ext = os.path.splitext(rel_path)[1].lstrip(".")
     extract_dir = os.path.join(os.path.dirname(b.archive_path), "extracted", b.id)
     os.makedirs(extract_dir, exist_ok=True)
@@ -211,14 +231,14 @@ def _stream_to_report(db, b, hospital_id, rel_path, fh, size, user_id: int):
                  "jpeg": "image", "png": "image"}.get(ext, "image")
     from app.modules.report.service import create_task
     task = create_task(
-        db=db, hospital_id=hospital_id,
-        user_id=user_id,   # ← 文件名解析出的目标终端用户
+        db=target_db, hospital_id=hospital_id,
+        user_id=user_id,
         file_path=disk_path, filename=os.path.basename(rel_path),
         file_type=file_type, file_size=size, priority="bulk",
         batch_id=b.id, file_id=fid,
     )
     f.report_task_id = task.id
-    db.commit()
+    batch_db.commit()
 
 
 def start_worker():
