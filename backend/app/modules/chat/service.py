@@ -12,11 +12,6 @@ MAX_HISTORY_ROUNDS = 20
 
 def create_session(db: Session, user_id: int, hospital_id: str,
                    report_id: Optional[int] = None) -> ChatSession:
-    # If no report specified, auto-associate the user's latest report
-    if report_id is None:
-        latest = _get_latest_report(db, user_id)
-        if latest:
-            report_id = latest["id"]
     session = ChatSession(user_id=user_id, hospital_id=hospital_id, report_id=report_id)
     db.add(session)
     db.commit()
@@ -47,19 +42,6 @@ def _get_report_date_note(db: Session, report_id: int) -> str:
     if hasattr(date_str, 'strftime'):
         date_str = date_str.strftime("%Y-%m-%d")
     return f"（当前引用的报告日期：{date_str}，请在你的回答中提及此日期以便用户知晓数据来源）"
-
-
-def _get_latest_report(db: Session, user_id: int) -> Optional[dict]:
-    row = db.execute(
-        text(
-            "SELECT id, report_date, created_at FROM report_info "
-            "WHERE user_id = :uid ORDER BY COALESCE(report_date, created_at) DESC LIMIT 1"
-        ),
-        {"uid": user_id},
-    ).fetchone()
-    if not row:
-        return None
-    return {"id": row[0], "report_date": row[1], "created_at": row[2]}
 
 
 def list_sessions(db: Session, user_id: int) -> List[ChatSession]:

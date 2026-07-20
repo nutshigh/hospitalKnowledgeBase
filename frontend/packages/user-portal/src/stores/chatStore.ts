@@ -1,11 +1,14 @@
 import { create } from 'zustand';
 
+import type { StructuredData } from '../hooks/useChatStream';
+
 interface Message {
   id?: number;
   role: 'user' | 'assistant';
   content: string;
   knowledge_refs?: Array<{ entry_id: number; title: string }>;
   streaming?: boolean;
+  structured?: StructuredData;
 }
 
 interface ChatSession {
@@ -29,6 +32,7 @@ interface ChatStore {
   setMessages: (messages: Message[]) => void;
   addMessage: (msg: Message) => void;
   appendToken: (token: string) => void;
+  setStructured: (data: StructuredData) => void;
   finishStreaming: () => void;
   setLoading: (loading: boolean) => void;
   setStreaming: (streaming: boolean) => void;
@@ -37,7 +41,7 @@ interface ChatStore {
   setSelectedReport: (sessionId: number, reportId: number | null) => void;
 }
 
-export const useChatStore = create<ChatStore>((set) => ({
+export const useChatStore = create<ChatStore>((set, get) => ({
   sessions: [],
   currentSessionId: null,
   messages: [],
@@ -49,7 +53,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   setSessions: (sessions) => set({ sessions }),
   setCurrentSession: (id) => set({ currentSessionId: id }),
   getSelectedReport: (sessionId) => {
-    return useChatStore.getState().selectedReports[sessionId] ?? null;
+    return get().selectedReports[sessionId] ?? null;
   },
   setSelectedReport: (sessionId, reportId) =>
     set((state) => ({
@@ -65,6 +69,25 @@ export const useChatStore = create<ChatStore>((set) => ({
       const last = msgs[idx];
       if (last && last.role === 'assistant' && last.streaming) {
         msgs[idx] = { ...last, content: last.content + token };
+      }
+      return { messages: msgs };
+    }),
+  setStructured: (data) =>
+    set((state) => {
+      const msgs = [...state.messages];
+      const idx = msgs.length - 1;
+      const last = msgs[idx];
+      if (last && last.role === 'assistant') {
+        msgs[idx] = {
+          ...last,
+          structured: data,
+          // 用带 [n] 标注的文本替换原始流式文本
+          content: data.annotated_text || last.content,
+          // 同步 knowledge_refs 以便 ChatBubble 渲染来源按钮
+          knowledge_refs: data.citations?.length
+            ? data.citations.map((c: any) => ({ entry_id: c.entry_id ?? 0, title: c.title }))
+            : last.knowledge_refs,
+        };
       }
       return { messages: msgs };
     }),

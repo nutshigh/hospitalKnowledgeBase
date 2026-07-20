@@ -7,6 +7,19 @@ VECTOR_DIM = 1024  # bge-m3 / text-embedding-v3 均为 1024
 _milvus_started = False
 
 
+def _disable_default_llm():
+    """禁用 LlamaIndex 默认 OpenAI LLM 自动初始化。
+
+    我们只用 LlamaIndex 做检索/embedding，LLM 生成走 LangChain ChatOpenAI。
+    不禁用的话 llama-index 会尝试用 OpenAI API key 创建默认 LLM，导致报错。
+    """
+    from llama_index.core import Settings
+    Settings.llm = None
+
+
+_disable_default_llm()
+
+
 def ensure_milvus_started():
     """连接独立部署的 Milvus 服务。
 

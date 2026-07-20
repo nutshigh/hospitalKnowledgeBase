@@ -47,16 +47,23 @@ def upload_report(
     os.makedirs(storage_dir, exist_ok=True)
     file_id = uuid.uuid4().hex
     file_path = os.path.join(storage_dir, f"{file_id}.{ext}")
-    content = file.file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise ValidationException(detail="File too large (max 20MB)")
-    with open(file_path, "wb") as f:
-        f.write(content)
+    size = 0
+    with open(file_path, "wb") as out:
+        while True:
+            buf = file.file.read(1024 * 1024)  # 1 MB block
+            if not buf:
+                break
+            size += len(buf)
+            if size > MAX_FILE_SIZE:
+                out.close()
+                os.remove(file_path)
+                raise ValidationException(detail="File too large (max 20MB)")
+            out.write(buf)
 
     task = service.create_task(
         db=db, hospital_id=current_user.hospital_id, user_id=current_user.user_id,
         file_path=file_path, filename=file.filename, file_type=file_type,
-        file_size=os.path.getsize(file_path),
+        file_size=size,
     )
     return schemas.TaskStatusResponse(
         task_id=task.id, status=task.status, error_message=None,

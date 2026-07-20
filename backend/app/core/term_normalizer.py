@@ -1,4 +1,7 @@
+import logging
 from typing import Optional, Dict
+
+logger = logging.getLogger(__name__)
 
 _STANDARD_MAP: Dict[str, str] = {
     "血糖": "空腹血糖（GLU）",
@@ -29,8 +32,34 @@ def normalize_item_name(raw_name: str) -> tuple:
 
 
 def normalize_indicators(indicators: list[dict]) -> list[dict]:
+    """名称标准化 + 去重。
+
+    体检 PDF 通常在多个章节（主检报告 / 医学科普 / 分项报告）逐一列出同一指标的同一
+    数值；LLM 抽取时按章节各返回一条，DB 入库后会出现同名同值的多行。run_rules →
+    filter_abnormal 会忠实于 DB 行数，导致 agent_search_knowledge 收到重复指标名、
+    发重复 search_knowledge 调用、judge 也对重复指标重复审核。在此按
+    (item_name_standard 或 item_name, result) 去重，保留首次出现，顺序不变。
+    """
     for ind in indicators:
         name, code = normalize_item_name(ind.get("item_name", ""))
         ind["item_name_standard"] = name
         ind["item_code"] = code
-    return indicators
+
+    seen: set = set()
+    deduped: list[dict] = []
+    for ind in indicators:
+        key = (
+            ind.get("item_name_standard") or ind.get("item_name", ""),
+            str(ind.get("result", "") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(ind)
+
+    if len(deduped) != len(indicators):
+        logger.info(
+            "normalize_indicators deduped %d -> %d (dropped %d duplicates)",
+            len(indicators), len(deduped), len(indicators) - len(deduped),
+        )
+    return deduped

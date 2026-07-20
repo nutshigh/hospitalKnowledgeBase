@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import os
 from datetime import datetime, timezone
@@ -14,11 +15,19 @@ from app.core.rabbitmq import rabbitmq, TaskMessage
 
 def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
                 filename: str, file_type: str, file_size: int,
-                thumbnail_path: Optional[str] = None, priority: int = 0) -> ReportTask:
+                thumbnail_path: Optional[str] = None,
+                priority: str = "normal",
+                batch_id: Optional[str] = None,
+                file_id: Optional[str] = None) -> ReportTask:
+    # 向后兼容: legacy int priority(0=normal, 1=urgent)
+    if isinstance(priority, int):
+        priority = "urgent" if priority else "normal"
+    # DB 列 priority 是 Integer(BIGINT),不能存字符串;按 str→int 映射落库
+    priority_for_db = {"normal": 0, "urgent": 1, "bulk": 100}[priority]
     task = ReportTask(
         user_id=user_id, original_file_path=file_path, original_filename=filename,
         file_type=file_type, file_size=file_size, thumbnail_path=thumbnail_path,
-        status="queued", priority=priority,
+        status="queued", priority=priority_for_db,
     )
     db.add(task)
     db.commit()
@@ -29,9 +38,14 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
     db.add(report)
     db.commit()
 
+    payload = {"task_id": task.id, "hospital_id": hospital_id, "file_path": file_path}
+    if batch_id is not None:
+        payload["batch_id"] = batch_id
+    if file_id is not None:
+        payload["file_id"] = file_id
     rabbitmq.publish(TaskMessage(
         task_type="parsing", hospital_id=hospital_id, priority=priority,
-        payload={"task_id": task.id, "hospital_id": hospital_id, "file_path": file_path},
+        payload=payload,
     ))
     return task
 
@@ -40,7 +54,9 @@ def get_task_status(db: Session, task_id: int) -> Optional[ReportTask]:
     return db.query(ReportTask).filter(ReportTask.id == task_id).first()
 
 
-def process_task(db: Session, task_id: int, hospital_id: str):
+def process_task(db: Session, task_id: int, hospital_id: str,
+                 batch_id: Optional[str] = None,
+                 file_id: Optional[str] = None):
     task = get_task_status(db, task_id)
     if not task:
         return
@@ -121,16 +137,29 @@ def process_task(db: Session, task_id: int, hospital_id: str):
         task.completed_at = datetime.now(timezone.utc)
         db.commit()
 
+        # task.priority 已是 DB int (0/1/100),TaskMessage 需要 str priority 路由
+        publish_priority = {0: "normal", 1: "urgent", 100: "bulk"}.get(task.priority or 0, "normal")
+        payload = {"report_id": report.id, "hospital_id": hospital_id}
+        if batch_id is not None:
+            payload["batch_id"] = batch_id
+        if file_id is not None:
+            payload["file_id"] = file_id
         rabbitmq.publish(TaskMessage(
-            task_type="interpretation", hospital_id=hospital_id, priority=task.priority,
-            payload={"report_id": report.id, "hospital_id": hospital_id},
+            task_type="interpretation", hospital_id=hospital_id, priority=publish_priority,
+            payload=payload,
         ))
 
     except Exception as e:
         task.retry_count += 1
-        task.status = "failed" if task.retry_count >= 3 else "queued"
         task.error_message = str(e)
+        if task.retry_count >= 3:
+            task.status = "failed"
+        else:
+            task.status = "queued"
+        task.updated_at = datetime.now(timezone.utc)
         db.commit()
+        # 重试决策交给 worker(走 publish_retry 延迟)
+        raise
 
 
 def _pdf_has_text(file_path: str) -> bool:
@@ -160,8 +189,24 @@ def _extract_pdf_text(file_path: str) -> str:
 
 def _parse_text_with_llm(text: str) -> dict:
     """Send extracted PDF text to LLM for indicator parsing."""
-    from app.ai.llm import get_chat_model
-    prompt = f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
+    return asyncio.run(_parse_text_with_llm_async(text))
+
+
+async def _parse_text_with_llm_async(text: str) -> dict:
+    """实际 async 解析，包裹在 medgo_sem 内。"""
+    from app.ai.llm import get_chat_model, _guarded
+    prompt = _build_parse_prompt(text)
+    model = get_chat_model()
+
+    async def _call():
+        return await model.ainvoke([("user", prompt)], max_tokens=16384)
+
+    resp = (await _guarded(_call())).content
+    return _parse_llm_json(resp)
+
+
+def _build_parse_prompt(text: str) -> str:
+    return f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
 
 {{
   "name": "姓名",
@@ -182,16 +227,20 @@ def _parse_text_with_llm(text: str) -> dict:
 6. 没有的字段填 null
 
 体检报告文本：
-{text[:12000]}
+{text[:24000]}
 """
-    model = get_chat_model()
-    resp = model.invoke([("user", prompt)], max_tokens=4096).content
+
+
+def _parse_llm_json(resp: str) -> dict:
     import json, re
+    from json_repair import repair_json
     match = re.search(r'\{[\s\S]*\}', resp)
     if not match:
         raise ValueError(f"LLM did not return valid JSON: {resp[:200]}")
-    data = json.loads(match.group())
-    # Ensure indicators have ref_low/ref_high
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError:
+        data = json.loads(repair_json(match.group()))
     for ind in data.get("indicators", []):
         ref = ind.pop("ref_range", None)
         if ref and "ref_low" not in ind:
@@ -235,9 +284,21 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
         tasks = {t.id: t for t in db.query(ReportTask).filter(ReportTask.id.in_(task_ids)).all()}
     else:
         tasks = {}
+    # Attach interpretation status (latest report_interpretation per report)
+    report_ids = [r.id for r in items]
+    if report_ids:
+        from app.modules.interpretation.models import ReportInterpretation
+        interps = {}
+        for ri in db.query(ReportInterpretation).filter(
+            ReportInterpretation.report_id.in_(report_ids)
+        ).order_by(ReportInterpretation.id.desc()).all():
+            interps.setdefault(ri.report_id, ri)
+    else:
+        interps = {}
     results = []
     for r in items:
         task = tasks.get(r.task_id)
+        interp = interps.get(r.id)
         results.append({
             "id": r.id,
             "task_id": r.task_id,
@@ -248,6 +309,8 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
             "check_type": r.check_type,
             "unit_name": r.unit_name,
             "task_status": task.status if task else None,
+            "interp_status": interp.status if interp else None,
+            "overall_level": interp.overall_level if interp else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return results, total

@@ -12,9 +12,16 @@ import CrossComparePage from './pages/CrossComparePage';
 import TrendPage from './pages/TrendPage';
 import ExportPage from './pages/ExportPage';
 import DispatchPage from './pages/DispatchPage';
+import BatchUploadPage from './pages/BatchUploadPage';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!useDoctorStore(s => s.token)) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+function RoleGuard({ allow, children }: { allow: string[]; children: React.ReactNode }) {
+  const role = useDoctorStore(s => s.role);
+  if (!allow.includes(role)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -32,6 +39,13 @@ export const AppRouter = () => (
     <Route path="/statistics/trend" element={<AuthGuard><TrendPage /></AuthGuard>} />
     <Route path="/statistics/export" element={<AuthGuard><ExportPage /></AuthGuard>} />
     <Route path="/dispatch" element={<AuthGuard><DispatchPage /></AuthGuard>} />
+    <Route path="/batch" element={
+      <AuthGuard>
+        <RoleGuard allow={['admin']}>
+          <BatchUploadPage />
+        </RoleGuard>
+      </AuthGuard>
+    } />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>
 );

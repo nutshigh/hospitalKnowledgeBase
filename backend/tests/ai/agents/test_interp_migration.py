@@ -7,6 +7,8 @@ def test_worker_calls_run_interpretation_agent():
          patch("app.modules.interpretation.worker.get_hospital_db") as mock_db_fn:
         mock_db = MagicMock()
         mock_db_fn.return_value = iter([mock_db])
+        # F15 running-skip 前置查询:返回 None(无 running/completed 行)→ 正常投递
+        mock_db.query.return_value.filter.return_value.first.return_value = None
 
         from app.modules.interpretation.worker import handle_interpretation_task
         handle_interpretation_task({

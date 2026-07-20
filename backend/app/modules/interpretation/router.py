@@ -2,22 +2,22 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_hospital_db
-from app.middleware.hospital_context import get_current_hospital_id
+from app.core.dependencies import get_current_user, CurrentUser
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.interpretation import schemas, service
+from app.modules.interpretation.schemas import (
+    IndicatorJudgmentSchema, CitationSchema, parse_summary_text,
+)
 
 router = APIRouter()
 
 
-def _get_hospital_id() -> str:
-    hid = get_current_hospital_id()
-    if not hid:
+def _get_db(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if not current_user.hospital_id:
         raise ValidationException(detail="Hospital context required")
-    return hid
-
-
-def _get_db(hospital_id: str = Depends(_get_hospital_id)):
-    gen = get_hospital_db(hospital_id)
+    gen = get_hospital_db(current_user.hospital_id)
     db = next(gen)
     try:
         yield db
@@ -30,9 +30,9 @@ def _get_db(hospital_id: str = Depends(_get_hospital_id)):
 @router.get("/high-risk/list", response_model=schemas.HighRiskResponse)
 def get_high_risk_list(
     db: Session = Depends(_get_db),
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    items = service.get_high_risk_list(db, hospital_id)
+    items = service.get_high_risk_list(db, current_user.hospital_id)
     return {"items": items, "total": len(items)}
 
 
@@ -68,20 +68,20 @@ def get_interpretation(report_id: int, db: Session = Depends(_get_db)):
     interp = service.get_interpretation(db, report_id)
     if not interp:
         raise NotFoundException(detail="Interpretation not found")
-    judgments = service.get_judgments(db, interp.id)
+    rows = service.get_judgments_with_indicator_detail(db, interp.id)
+    summaries = parse_summary_text(interp.summary_text)
+    references = [CitationSchema(**r).model_dump() for r in (interp.summary_refs or [])]
+    indicators = [IndicatorJudgmentSchema(**r) for r in rows]
     return {
         "id": interp.id, "report_id": interp.report_id,
         "overall_level": interp.overall_level,
         "red_count": interp.red_count, "yellow_count": interp.yellow_count,
-        "green_count": interp.green_count, "summary_text": interp.summary_text,
+        "green_count": interp.green_count,
         "status": interp.status,
-        "indicators": [
-            {"indicator_id": j.indicator_id, "item_name": j.item_name,
-             "result_value": j.result_value, "deviation": j.deviation,
-             "color_level": j.color_level, "explanation": j.explanation,
-             "suggestion": j.suggestion}
-            for j in judgments
-        ],
+        "summaries": summaries,
+        "references": references,
+        "quality_note": interp.quality_note,
+        "indicators": indicators,
         "created_at": interp.created_at, "completed_at": interp.completed_at,
     }
 

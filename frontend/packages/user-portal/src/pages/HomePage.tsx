@@ -14,8 +14,27 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    const fetchOnce = () => api.get('/reports').then(r => {
+      if (cancelled) return;
+      setReports(r.data.items || []);
+      // 只要还有未完成的报告（含 interp），每 10 秒轮询
+      const stillRunning = (r.data.items || []).some((it: any) => {
+        const ts = it.task_status, is = it.interp_status;
+        if (ts && ts !== 'completed' && ts !== 'failed') return true;
+        if (is && is !== 'completed' && is !== 'failed') return true;
+        if (ts === 'completed' && !is) return true;
+        return false;
+      });
+      if (stillRunning) timer = setTimeout(fetchOnce, 10000);
+    }).catch(() => {});
+
     setLoading(true);
-    api.get('/reports').then(r => setReports(r.data.items || [])).catch(() => {}).finally(() => setLoading(false));
+    fetchOnce().finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [loc.key]);
 
   return (
@@ -44,6 +63,8 @@ export default function HomePage() {
                 name={r.name || `体检报告 ${dateStr}`}
                 report_date={dateStr}
                 task_status={r.task_status}
+                interp_status={r.interp_status}
+                overall_level={r.overall_level}
               />
             );
           })}

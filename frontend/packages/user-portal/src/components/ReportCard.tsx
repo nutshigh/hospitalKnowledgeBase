@@ -9,11 +9,21 @@ interface ReportCardProps {
   overall_level?: string;
   status?: string;
   task_status?: string;
+  interp_status?: string;
 }
 
-export default function ReportCard({ id, name, report_date, overall_level, status, task_status }: ReportCardProps) {
+function effectiveStatus(task_status?: string, interp_status?: string): string {
+  if (task_status === 'failed' || interp_status === 'failed') return 'failed';
+  if (task_status && task_status !== 'completed') return task_status;  // queued / parsing
+  if (!interp_status) return 'processing';  // task 完了, interp 还没起
+  if (interp_status === 'completed') return 'completed';
+  return 'processing';  // processing / pending
+}
+
+export default function ReportCard({ id, name, report_date, overall_level, status, task_status, interp_status }: ReportCardProps) {
   const nav = useNavigate();
-  const displayStatus = status || task_status;
+  const displayStatus = status || effectiveStatus(task_status, interp_status);
+  const showLevel = overall_level && displayStatus === 'completed';
   return (
     <div
       onClick={() => nav(`/report/${id}`)}
@@ -36,7 +46,7 @@ export default function ReportCard({ id, name, report_date, overall_level, statu
         <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{report_date}</div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-        {overall_level ? <ColorBadge level={overall_level} /> : null}
+        {showLevel ? <ColorBadge level={overall_level!} /> : null}
         {displayStatus ? <StatusTag status={displayStatus} /> : null}
         <span style={{ color: 'var(--color-text-secondary)', fontSize: 18 }}>›</span>
       </div>

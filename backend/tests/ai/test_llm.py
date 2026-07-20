@@ -2,11 +2,12 @@ from unittest.mock import patch
 
 
 def test_get_chat_model_local():
-    """local provider 返回 ChatOpenAI 指向 vLLM"""
+    """local provider 返回 ChatOpenAI 指向本地 MedGo via vLLM"""
     with patch("app.config.settings.LLM_PROVIDER", "local"):
         from app.ai.llm import get_chat_model
         model = get_chat_model()
-        assert model.model_name == "qwen2.5" or model.model == "qwen2.5"
+        name = model.model_name if hasattr(model, "model_name") else model.model
+        assert "MedGo" in name
 
 
 def test_get_chat_model_remote():

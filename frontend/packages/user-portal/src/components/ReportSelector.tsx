@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Select } from 'antd';
+import { Select, message } from 'antd';
 import { useUserStore } from '../stores/userStore';
 import { useChatStore } from '../stores/chatStore';
 
@@ -27,13 +27,33 @@ export default function ReportSelector({ sessionId }: ReportSelectorProps) {
       .catch(() => {});
   }, []);
 
+  // 同步当前会话的 report_id 到下拉框
+  useEffect(() => {
+    if (sessionId) {
+      api.get(`/chat/sessions/${sessionId}`)
+        .then(r => store.setSelectedReport(sessionId, r.data?.report_id ?? null))
+        .catch(() => {});
+    }
+  }, [sessionId]);
+
+  const handleChange = (val: number | null) => {
+    const prev = selectedReportId;
+    store.setSelectedReport(sessionId, val ?? null);
+    api.patch(`/chat/sessions/${sessionId}`, { report_id: val ?? null })
+      .catch(() => {
+        // 回滚
+        store.setSelectedReport(sessionId, prev);
+        message.error('切换报告失败');
+      });
+  };
+
   return (
     <Select
       allowClear
       placeholder="选择体检报告"
       style={{ minWidth: 200 }}
       value={selectedReportId}
-      onChange={(val) => store.setSelectedReport(sessionId, val ?? null)}
+      onChange={handleChange}
       options={reports.map(r => ({
         value: r.id,
         label: `${r.name || '未命名'} (${r.report_date || '-'})`,

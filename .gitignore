@@ -12,6 +12,9 @@ build/
 node_modules/
 dist/
 
+# data
+infra/
+
 # Environment
 .env
 !.env.example

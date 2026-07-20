@@ -12,6 +12,10 @@ class ReportInterpretation(Base):
     yellow_count = Column(Integer, nullable=False, default=0)
     green_count = Column(Integer, nullable=False, default=0)
     summary_text = Column(Text, nullable=True)
+    summary_refs = Column(JSON, nullable=True)
+    comparison_summary = Column(Text, nullable=True)
+    comparison_baseline_id = Column(BigInteger, nullable=True)
+    quality_note = Column(String(255), nullable=True)
     status = Column(String(20), nullable=False, default="pending")
     retry_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=func.now(), nullable=False)
@@ -32,6 +36,8 @@ class IndicatorJudgment(Base):
     explanation = Column(Text, nullable=True)
     suggestion = Column(Text, nullable=True)
     knowledge_refs = Column(JSON, nullable=True)
+    certainty = Column(String(10), nullable=True)
+    certainty_reason = Column(Text, nullable=True)
 
 
 class TriageRule(Base):

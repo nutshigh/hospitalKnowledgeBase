@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import List, Optional
 
 import httpx
@@ -11,6 +13,8 @@ from app.ai.config import get_embedding_model
 from app.ai.rag.store import rag_store
 from app.ai.rag.types import SearchResult
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # 共享 httpx.Client，避免每次 RAGRetriever 构造时泄漏连接池
 _shared_http_client: httpx.Client | None = None
@@ -71,7 +75,7 @@ class HttpReranker(BaseNodePostprocessor):
 
 
 class RAGRetriever:
-    """向量 + BM25 融合检索 → reranker 重排 → 返回结构化结果"""
+    """文档通道（向量+BM25融合→reranker）+ KG通道，分通道检索。"""
 
     def __init__(self, hospital_id: str):
         self.hospital_id = hospital_id
@@ -100,13 +104,13 @@ class RAGRetriever:
         )
         self._reranker = HttpReranker(top_n=settings.RAG_FINAL_TOP_K)
 
-    def retrieve(
+    def _retrieve_documents(
         self,
         query: str,
         category_ids: Optional[List[int]] = None,
         top_k: Optional[int] = None,
     ) -> List[SearchResult]:
-        """检索并返回 SearchResult 列表"""
+        """文档通道：向量+BM25融合 → reranker 重排。"""
         from llama_index.core.vector_stores import MetadataFilters, MetadataFilter
 
         filters = None
@@ -115,14 +119,22 @@ class RAGRetriever:
                 MetadataFilter(key="category_id", value=category_ids, operator="IN")
             ])
 
+        t_fusion = time.time()
         try:
             nodes = self._fusion.retrieve(query, filters=filters)
         except Exception:
             try:
                 nodes = self._vector_retriever.retrieve(query, filters=filters)
             except Exception:
+                logger.warning(
+                    "rag doc retrieve failed query=%s hospital=%s latency_ms=%d",
+                    (query or "")[:200], self.hospital_id,
+                    int((time.time() - t_fusion) * 1000),
+                )
                 return []
 
+        fusion_n = len(nodes)
+        t_rerank = time.time()
         try:
             nodes = self._reranker.postprocess_nodes(nodes, query_str=query)
         except Exception:
@@ -130,6 +142,14 @@ class RAGRetriever:
 
         if top_k:
             nodes = nodes[:top_k]
+
+        logger.debug(
+            "rag doc retrieve hospital=%s query=%s fusion_hits=%d rerank_hits=%d "
+            "fusion_ms=%d rerank_ms=%d",
+            self.hospital_id, (query or "")[:200], fusion_n, len(nodes),
+            int((time.time() - t_fusion) * 1000),
+            int((time.time() - t_rerank) * 1000),
+        )
 
         out = []
         for n in nodes:
@@ -139,5 +159,36 @@ class RAGRetriever:
                 content=n.node.text,
                 category_id=n.metadata.get("category_id"),
                 score=float(n.score or 0),
+                source="document",
             ))
         return out
+
+    def retrieve(
+        self,
+        query: str,
+        category_ids: Optional[List[int]] = None,
+        top_k: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """分通道检索：文档通道 + KG通道，结果分区组装。"""
+        # 文档通道
+        doc_results = self._retrieve_documents(query, category_ids, top_k)
+
+        # KG 通道（独立检索，失败不影响文档结果）
+        t_kg = time.time()
+        try:
+            from app.ai.rag.kg_retriever import KGRetriever
+            kg_retriever = KGRetriever(self.hospital_id)
+            kg_results = kg_retriever.retrieve(query)
+            logger.debug(
+                "rag kg retrieve hospital=%s query=%s hits=%d latency_ms=%d",
+                self.hospital_id, (query or "")[:200], len(kg_results),
+                int((time.time() - t_kg) * 1000),
+            )
+        except Exception as e:
+            logger.warning(
+                "KG channel disabled (import/runtime error): %s latency_ms=%d",
+                e, int((time.time() - t_kg) * 1000),
+            )
+            kg_results = []
+
+        return doc_results + kg_results
