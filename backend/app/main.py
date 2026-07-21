@@ -21,6 +21,8 @@ from app.modules.user_profile.router import router as user_profile_router
 from app.modules.tenant.router import router as tenant_router
 
 
+
+
 def create_app() -> FastAPI:
     setup_logging()
     app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
