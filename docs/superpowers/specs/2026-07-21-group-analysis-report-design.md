@@ -11,7 +11,7 @@
 经与用户澄清:
 
 - **"单位"在本项目语义里即指"医院",每个 tenant 就是一家医院**(`hospital_{id}`)。因此按单位维度 = 跨院维度,本设计为**平台级跨院分析**而非单院内分析。
-- "后台管理人员" = 平台 admin,鉴权走 `X-Admin-Token`(与 `tenant/router.py:9-12` 同模式),而非医院级 `role=admin` + JWT。
+- "后台管理人员" = 平台 admin,鉴权走 **JWT + `require_role("admin")`**(复用 `app/core/dependencies.py:39-43` 的 `require_role` 工厂),与 admin-portal 现有 `/auth/login` 流程(`api/auth.py:34-54`)一致。平台 admin 的 `platform_user` 行 `role='admin'` 且 `hospital_id` 可空;`get_current_user`(`dependencies.py:19-36`)注入 `CurrentUser(role='admin', hospital_id=None)` 后,本设计的跨院聚合 service 显式调 `get_all_hospital_ids()` 跨库,不读 ContextVar 单院上下文。**不**使用 `X-Admin-Token`(那是 `tenant/router.py` 专属的 bootstrap 共享密钥模式,不适合 admin-portal 已实现的 JWT 登录流)。
 - 已有 `statistics` 模块(`backend/app/modules/statistics/`,5 个 endpoint + doctor-portal 现有 5 页但无图表)有部分重合,本设计**扩展该模块**而非新建模块或废弃现有功能。
 - 现有 `statistic_cache` 表预留但未使用 —— 本设计**不接缓存(YAGNI)**,按需计算;数据量真上去再启。
 - **不动解析链**:`report_info.unit_name` 在跨院语义里由 `hospital_id` 取代,无需重启用 `report/service.py:117-118` 被注释的单位写入。
@@ -27,8 +27,8 @@
   - `indicator_judgment`(`interpretation/models.py:25-40`):`item_name` / `color_level`(red/yellow/green)
   - `batch_import`(per-tenant 库,`report/batch_models.py:5-37`):`id` / `filename` / `created_at`
   - 链路:`report_info.task_id` → `report_task.id` ⇄ `batch_import_file.report_task_id` → `batch_import.id`(`report_task` 上无 `batch_id` 列,需多跳 JOIN)
-- 平台 admin 鉴权模式:`tenant/router.py:9-12` `_require_admin` 校验 `settings.ADMIN_TOKEN`,空字符串放行。
-- 前端 `frontend/packages/admin-portal`(端口 3003)目前仅 Login + PlatformDashboard 两页,鉴权 `adminStore.token`(Admin-Token 字符串,非 JWT)。**无任何图表库**(`package.json` grep `echarts/recharts/chart` 0 命中)。
+- 平台 admin 鉴权模式:JWT + `require_role("admin")`(复用 `app/core/dependencies.py:39-43`);`platform_user.role='admin'` 且 `hospital_id` 可空表示平台级(非绑某院)。`tenant/router.py` 的 `X-Admin-Token` 共享密钥模式仅用于 tenant 创建 bootstrap,不复用。
+- 前端 `frontend/packages/admin-portal`(端口 3003)目前仅 Login + PlatformDashboard 两页,鉴权 `adminStore.token` 即 `/auth/login` 返回的 JWT 字符串(`stores/adminStore.ts:9-13`啜 `setAuth`),shared `apiClient`(`frontend/packages/shared/src/api/client.ts:6-15`)的请求拦截器把它放进 `Authorization: Bearer ...`。**无任何图表库**(`package.json` grep `echarts/recharts/chart` 0 命中)。
 - AGENTS.md 多 tenant 表初始化提示:新设计若不动 DDL 本身,新增 tenant 走 `start.sh` 原 DDL 块即可,无新负担。
 
 ## 3. 决策
@@ -36,7 +36,7 @@
 | 维度 | 决策 | 理由 |
 |---|---|---|
 | 模块归属 | 扩展 `backend/app/modules/statistics/` 新增 `group` 子命名空间 | 复用现有聚合 SQL 思路、`cross_hospital_summary` 模式、statistic_cache 表(备用);减少跨包散落 |
-| 鉴权 | `X-Admin-Token` 对 `settings.ADMIN_TOKEN`,空则放行(同 tenant router) | 平台 admin 而非医院 admin,与 tenant 创建接口一致 |
+| 鉴权 | JWT + `require_role("admin")`(复用 `app/core/dependencies.py:39-43`),admin-portal 现有 `/auth/login` 直接喂 JWT | 与 admin-portal 现有 JWT 登录流一致,前端复用 shared `apiClient` 不需新增 header 通道;`X-Admin-Token` 留给 tenant router 不混用 |
 | 跨库聚合 | 后端遍历 `get_all_hospital_ids()`,每库开 `Session` 跑聚合 SQL,Python 层 merge | 无跨库 JOIN 能力;`cross_hospital_summary` 已走此路 |
 | 并发 | `ThreadPoolExecutor(max_workers=8)`,单库 SQL 超时 5s | 控制总响应时延 < 10s;慢库不阻塞其它 |
 | 单库失败 | catch 异常 → 该 tenant 进 `rows` 标 `error:"db_unavailable"` 并继续,HTTP 200 | 部分库故障不应整体失败,前端能在卡片上标记 |
@@ -58,7 +58,7 @@ admin-portal (/group-analysis 页, ECharts)
    │  GET /api/v1/statistics/group/high-risk?...&page=1&page_size=20
    │  GET /api/v1/statistics/group/high-risk?...&format=csv
    ▼
-statistics/group_router.py   (新;X-Admin-Token dependency)
+statistics/group_router.py   (新;get_current_user + require_role('admin') dependency)
    ▼
 statistics/group_service.py  (新;纯函数,不持久化)
    │  1. get_all_hospital_ids() → 活跃 tenant 列表 + batch_ids 反查所属 tenant
@@ -83,7 +83,7 @@ statistics/group_sql.py  (新;按 group_by 与 filters 生成 per-tenant text() 
 
 Header:
 ```
-X-Admin-Token: <settings.ADMIN_TOKEN>(ADMIN_TOKEN 非空时必填)
+Authorization: Bearer <JWT>   (admin-portal /auth/login 返回的 access_token; role 必须 == "admin")
 ```
 
 Query:
@@ -199,7 +199,8 @@ Response (`format=csv`,200):
 
 | 状态 | 触发 |
 |---|---|
-| 403 | `X-Admin-Token` 缺失或不匹配(`settings.ADMIN_TOKEN` 非空时) |
+| 401 | JWT 缺失 / 过期 / 解码失败(`UnauthorizedException`,见 `dependencies.py:24-29`) |
+| 403 | JWT 有效但 `role != "admin"`(`ForbiddenException`,见 `dependencies.py:39-43` 的 `require_role("admin")`) |
 | 422 | `group_by` 不在枚举 / `page<1` / `page_size>200` / ISO 日期格式错 |
 | 400 | `date_from > date_to` |
 | 413 | CSV 导出行数 > 50000 |
@@ -227,20 +228,23 @@ from app.modules.statistics.group_router import router as statistics_group_route
 app.include_router(statistics_group_router, prefix="/api/v1/statistics", tags=["statistics"])
 ```
 
-### 6.2 公共 admin-token 依赖
+### 6.2 鉴权依赖
 
-新建 `backend/app/core/admin_token.py`:
+不新建依赖文件。`group_router.py` 直接复用 `app/core/dependencies.py:39-43` 的 `require_role("admin")`:
+
 ```python
-from fastapi import Header
-from app.config import settings
-from app.utils.exceptions import UnauthorizedException
+from app.core.dependencies import require_role
 
-def require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
-    if settings.ADMIN_TOKEN and x_admin_token != settings.ADMIN_TOKEN:
-        raise UnauthorizedException(detail="Invalid admin token")
+@router.get("/group/overview")
+def group_overview(
+    _admin: None = Depends(require_role("admin")),
+    group_by: GroupBy = Query(...),
+    ...
+):
+    ...
 ```
 
-`tenant/router.py:184-191` 的 `_require_admin` 一并迁移到此处,改用该函数 —— 一处实现供 tenant 与 group_router 共用(小重构,可接受)。
+`get_current_user`(`dependencies.py:19-36`)注入 `CurrentUser(role, hospital_id)`,平台 admin 行 `role='admin'` 且 `hospital_id=None`;本设计的 service 显式调 `get_all_hospital_ids()` 跨库,不读 ContextVar `current_hospital_id`(平台 admin 也不应该 ContextVar 单院上下文)。tenant router 仍保留其独立的 X-Admin-Token 模式,不重构(避免影响 tenant 创建接口现状)。
 
 ### 6.3 关键 SQL 组合(在 `group_sql.py` 内)
 
@@ -350,8 +354,9 @@ frontend/packages/admin-portal/
 ├── src/
 │   ├── router.tsx                   新增 /group-analysis 路由(AuthGuard 已存在)
 │   ├── api/
-│   │   ├── client.ts                (新;独立 axios 实例,X-Admin-Token 由 adminStore.token 注入;可供后续 PlatformDashboard 也用)
-│   │   └── groupAnalysis.ts         调 /group/overview 与 /group/high-risk 两个接口
+│   │   └── groupAnalysis.ts         调 /statistics/group/overview 与 /statistics/group/high-risk 两个接口
+│   │                                  (复用 useAdminStore.getState().api 即 shared apiClient,
+│   │                                   它已注入 Authorization: Bearer <JWT>;不带 X-Admin-Token)
 │   └── pages/
 │       └── group-analysis/
 │           ├── GroupAnalysisPage.tsx   主页:FilterBar + ECharts + HighRiskTable 切换 tab
@@ -365,6 +370,8 @@ frontend/packages/admin-portal/
 │               │                          time_month → 异常率趋势折线
 │               └── HighRiskTable.tsx     AntD Table;Sorter;分页;导出 CSV(发 /high-risk?format=csv 触发下载)
 ```
+
+vite.config.ts 需新增 `server.proxy` 把 `/api` 转发到 `http://localhost:8000`(与 doctor-portal 同),否则 dev 环境跨域请求失败。
 
 ### 7.2 ECharts 引入
 
@@ -382,20 +389,44 @@ import ReactECharts from "echarts-for-react";
 
 ### 7.3 鉴权 / client 适配
 
+无需新建独立 axios 实例。`adminStore.api`(`stores/adminStore.ts:11-13`)即 `createApiClient(getToken)` 返回的 shared `apiClient`,其请求拦截器(`shared/src/api/client.ts:6-15`)把 `adminStore.token`(JWT 字符串)放进 `Authorization: Bearer ...` —— 与本设计后端 `get_current_user` 解码 JWT 一致。
+
 ```ts
-// admin-portal/src/api/client.ts
-import axios from "axios";
+// admin-portal/src/api/groupAnalysis.ts
 import { useAdminStore } from "@/stores/adminStore";
 
-export const adminClient = axios.create({ baseURL: "/api/v1" });
-adminClient.interceptors.request.use((cfg) => {
-  const token = useAdminStore.getState().token;
-  if (token) cfg.headers["X-Admin-Token"] = token;
-  return cfg;
-});
+const api = () => useAdminStore.getState().api;
+
+export interface OverviewRow { key: string; label: string; total_people: number;
+  red_count: number; yellow_count: number; green_count: number;
+  abnormal_rate: number;
+  by_gender?: { key: string; count: number }[];
+  by_age_group?: { key: string; count: number }[];
+  top_abnormal_items?: { item: string; red_count: number }[];
+  error?: string;
+}
+export interface OverviewResponse { group_by: string; filters: any; rows: OverviewRow[]; totals: any; }
+
+export async function getOverview(params: Record<string, any>): Promise<OverviewResponse> {
+  const r = await api().get("/statistics/group/overview", { params });
+  return r.data;
+}
+export async function getHighRisk(params: Record<string, any>): Promise<any> {
+  const r = await api().get("/statistics/group/high-risk", { params });
+  return r.data;
+}
+/** CSV 导出:浏览器跳转 url,带 Authorization 由同源 fetch 触发? 否 —— 用 blob 下载 */
+export async function downloadHighRiskCsv(params: Record<string, any>) {
+  const r = await api().get("/statistics/group/high-risk",
+    { params: { ...params, format: "csv" }, responseType: "blob" });
+  const url = URL.createObjectURL(r.data);
+  const a = document.createElement("a");
+  a.href = url; a.download = "high-risk.csv"; a.click();
+  URL.revokeObjectURL(url);
+}
 ```
 
-`adminStore.token` 已经存 Admin-Token 字符串(平台 admin 不发 JWT);若现有 PlatformDashboard 实际用别的字段(待实现期核实),按事实对齐。Vite dev server 走代理到 backend:8000(与 doctor-portal 同)。
+vite dev server 走 `server.proxy` 代理到 backend:8000(与 doctor-portal 同),见 §7.1 末尾。
 
 ### 7.4 体验细节
 
@@ -410,7 +441,7 @@ adminClient.interceptors.request.use((cfg) => {
 - filter 参数非法:`group_by` 非枚举 / `page<1` / `page_size>200` / ISO 日期错 → Pydantic 422;`date_from>date_to` → 400;`hospital_ids` 含未知 id → 忽略未知,不报 404。
 - CSV 上限 50000 行 → 413(`code:"PAYLOAD_TOO_LARGE"`)。
 - 单库 SQL 超时 5s:catch,同 db_unavailable 处理。
-- 鉴权失败:`X-Admin-Token` 不匹配 → 403,不暴露 token 期望值。
+- 鉴权失败:JWT 缺失/过期 → 401;JWT 有效但 `role != "admin"` → 403(`require_role("admin")`);不暴露内部状态。
 - 总体异常:global handler 兜底返回 `INTERNAL_ERROR`(已存在 `main.py:52-61`)。
 - 日志:`app.statistics` logger 写 `app.log`;异常 `logger.exception` 单库失败 + 概览请求成功 INFO 各一条。
 
@@ -425,7 +456,7 @@ adminClient.interceptors.request.use((cfg) => {
 - 高风险 list:fixture 含 `overall_level='red'` 与 `red_count>=3`(但 overall_level='yellow')两条都入结果;`overall_level='green'` 且 `red_count<3` 不入。
 - 高风险分页:`page_size=20` 总数 233 → 第 1 页 20 条,第 12 页 13 条。
 - CSV:`format=csv` Content-Type/Content-Disposition 含 BOM;超 50000 行 → 413。
-- 鉴权:无 `X-Admin-Token` 且 `settings.ADMIN_TOKEN="x"` → 403;正确 token → 200。
+- 鉴权:JWT 缺失/无效 → 401;JWT 有效但 `role != "admin"` → 403(`require_role("admin")`);正确 admin JWT → 200。
 
 router 层不另单测,由上述包含 FastAPI dependency 注入 fixture 覆盖;手工 curl 仍提供于 spec(§11)。
 
@@ -443,14 +474,19 @@ router 层不另单测,由上述包含 FastAPI dependency 注入 fixture 覆盖;
 ## 11. 部署 / 验收
 
 - 后端:
-  1. 拉新代码 + 新 admin_token 依赖;tenant router 同步切到公共依赖。
+  1. 拉新代码;无新依赖(`require_role`、`get_current_user`、`get_all_hospital_ids`、`ThreadPoolExecutor` 全是 stdlib/已用模块)。
   2. 重启 FastAPI(`supervisorctl restart backend` 或 `bash start.sh --no-models`);不需要重启 vLLM / OCR / reranker。
   3. **不动 DDL**,新 tenant 走 `start.sh` 原 DDL 块即可,本设计无新表新列。
-  4. 健康验证:
+  4. 健康验证(需先通过 `/auth/login` 拿 role=admin 的 JWT):
      ```bash
-     curl -s -H "X-Admin-Token: $T" 'http://localhost:8000/api/v1/statistics/group/overview?group_by=hospital' | head
+     JWT=$(curl -sX POST http://localhost:8000/api/v1/auth/login \
+       -H 'Content-Type: application/json' \
+       -d '{"username":"admin","password":"..."}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+     curl -s -H "Authorization: Bearer $JWT" \
+       'http://localhost:8000/api/v1/statistics/group/overview?group_by=hospital' | head
      # 期望:{"group_by":"hospital","rows":[...],"totals":{...}}
-     curl -s -H "X-Admin-Token: $T" 'http://localhost:8000/api/v1/statistics/group/high-risk?page=1&page_size=5' | head
+     curl -s -H "Authorization: Bearer $JWT" \
+       'http://localhost:8000/api/v1/statistics/group/high-risk?page=1&page_size=5' | head
      ```
 - 前端:
   1. `pnpm -F admin-portal add echarts echarts-for-react`
@@ -462,7 +498,7 @@ router 层不另单测,由上述包含 FastAPI dependency 注入 fixture 覆盖;
 - 不改任何现有表 schema;`hospital_H001` 业务不需要迁移。
 - `start.sh` 启动逻辑不变。
 - `statistics/router.py` 现有 5 个 endpoint 不动,doctor-portal 现有页面不受影响。
-- tenant router 抽公共 admin-token 依赖,行为与原来等价(同 settings.ADMIN_TOKEN 校验语义);若用户对此重构有疑虑,接受保持两处副本(实现期再决断,见 §3 决策表已注明"小重构可接受")。
+- tenant router 不动,X-Admin-Token 模式保留;本设计的 group router 用 JWT + `require_role("admin")`,两套鉴权并存。
 
 ## 13. 风险
 
@@ -472,7 +508,7 @@ router 层不另单测,由上述包含 FastAPI dependency 注入 fixture 覆盖;
 | 跨库聚合 SQL 在大量 report_info 上扫描慢 | 单库 SQL 5s 超时 + logger 警告;真出现慢查询再启用 `statistic_cache` |
 | `batch_import_file.report_task_id` 与 `report_info.task_id` 间真实链路在 models 与 DDL 间有偏差 | 实现期按 `report/models.py:24-37` 与 `report/batch_models.py:5-37` 列名落实;若 JOIN 出现漏行,退化为 `report_task` 中转表两跳 |
 | ECharts 包大小影响 admin-portal 首屏 | 按需 import(§7.2);预期 < 200KB gzipped |
-| `X-Admin-Token` 模式下若 settings.ADMIN_TOKEN 为空则接口完全开放 | 与 tenant router 一致,生产部署必须填 ADMIN_TOKEN(已在 AGENTS.md / 部署文档说明) |
+| 平台 admin 用户(`role='admin'` 且 `hospital_id=NULL`)若不在 platform_user 维护,会导致 admin-portal 无法登录使用本功能 | 部署时由运维通过现有 register 接口或直接 SQL 插入 `platform_user` 行;不进入本设计交付范围 |
 | CSV 超大行数导致内存压力 | 50000 行硬上限 + StreamingResponse 写流 |
-| 现有 statistics router 没鉴权,与本设计 admin-only 鉴权风格不一致 | 不强行收紧现有 router(向后兼容);新 group router 独立鉴权 |
+| 现有 statistics router 没 admin 鉴权(沿用 ContextVar 单院上下文),与本设计 admin JWT 鉴权风格不一致 | 不强行收紧现有 router(向后兼容);新 group router 独立鉴权 |
 | 单库失败标 `error` 让 row 总计指标偏差(失败库不计入 totals) | 用户接受:失败的库无法提供指标,merge 时该库数据自然缺失,前端在 `db_unavailable` row 上提示 |
