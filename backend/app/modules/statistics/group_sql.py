@@ -79,3 +79,88 @@ def build_overview_sql(group_by: GroupBy, filters: GroupFilters, dialect: str) -
     where, params = _where(filters)
     sql = base + select_dim + " WHERE " + where + group_dim
     return sql, params
+
+
+def build_top_abnormal_sql(filters: GroupFilters, topn: int) -> tuple[str, dict]:
+    needs_batch = bool(filters.batch_ids)
+    sql = (
+        "SELECT ij.item_name AS item, "
+        "  SUM(CASE WHEN ij.color_level='red' THEN 1 ELSE 0 END) AS red_cnt "
+        "FROM indicator_judgment ij "
+        "JOIN report_interpretation interp ON interp.id = ij.interpretation_id "
+        "JOIN report_info ri ON ri.id = interp.report_id "
+    )
+    if needs_batch:
+        sql += BATCH_JOIN
+    where, params = _where(filters)
+    sql += " WHERE ij.color_level = 'red' AND " + where + \
+           " GROUP BY ij.item_name ORDER BY red_cnt DESC LIMIT :topn"
+    params["topn"] = topn
+    return sql, params
+
+
+def build_sub_gender_sql(filters: GroupFilters) -> tuple[str, dict]:
+    needs_batch = bool(filters.batch_ids)
+    sql = (
+        "SELECT ri.gender AS gender, COUNT(*) AS cnt "
+        "FROM report_info ri "
+        "JOIN report_interpretation interp ON interp.report_id = ri.id "
+    )
+    if needs_batch:
+        sql += BATCH_JOIN
+    where, params = _where(filters)
+    sql += " WHERE " + where + " GROUP BY ri.gender"
+    return sql, params
+
+
+def build_sub_age_group_sql(filters: GroupFilters) -> tuple[str, dict]:
+    needs_batch = bool(filters.batch_ids)
+    sql = (
+        f"SELECT {AGE_GROUP_CASE} AS age_group, COUNT(*) AS cnt "
+        "FROM report_info ri "
+        "JOIN report_interpretation interp ON interp.report_id = ri.id "
+    )
+    if needs_batch:
+        sql += BATCH_JOIN
+    where, params = _where(filters)
+    sql += " WHERE " + where + " GROUP BY age_group"
+    return sql, params
+
+
+_SORT_COL = {
+    "red_count": "interp.red_count",
+    "age": "ri.age",
+    "report_date": "ri.report_date",
+}
+
+
+def build_high_risk_list_sql(filters: GroupFilters, sort: str,
+                              limit: int, offset: int,
+                              count_only: bool = False) -> tuple[str, dict]:
+    needs_batch = bool(filters.batch_ids)
+    where, params = _where(filters)
+    where = where + " AND (interp.overall_level = 'red' OR interp.red_count >= 3)"
+    if count_only:
+        sql = "SELECT COUNT(*) FROM report_info ri " \
+              "JOIN report_interpretation interp ON interp.report_id = ri.id "
+        if needs_batch:
+            sql += BATCH_JOIN
+        sql += " WHERE " + where
+        return sql, params
+    sort_col = _SORT_COL.get(sort, "interp.red_count")
+    sql = (
+        "SELECT ri.id AS report_id, ri.user_id AS user_id, ri.name AS name, "
+        "ri.gender AS gender, ri.age AS age, ri.report_date AS report_date, "
+        "b.id AS batch_id, b.filename AS batch_name, "
+        "interp.overall_level AS overall_level, "
+        "interp.red_count AS red_count, interp.yellow_count AS yellow_count, "
+        "interp.summary_text AS summary_text "
+        "FROM report_info ri "
+        "JOIN report_interpretation interp ON interp.report_id = ri.id "
+    )
+    if needs_batch:
+        sql += BATCH_JOIN
+    sql += " WHERE " + where + f" ORDER BY {sort_col} DESC LIMIT :limit OFFSET :offset"
+    params["limit"] = limit
+    params["offset"] = offset
+    return sql, params

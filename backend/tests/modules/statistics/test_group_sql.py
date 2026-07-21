@@ -1,6 +1,10 @@
 from datetime import date
 from app.modules.statistics.group_schemas import GroupFilters
-from app.modules.statistics.group_sql import build_overview_sql
+from app.modules.statistics.group_sql import (
+    build_overview_sql,
+    build_top_abnormal_sql, build_sub_gender_sql,
+    build_sub_age_group_sql, build_high_risk_list_sql,
+)
 
 
 def test_overview_hospital_minimal_mysql():
@@ -83,3 +87,56 @@ def test_overview_batch_ids_filter_when_batch_ids_provided():
     sql, p = build_overview_sql("hospital", f, dialect="mysql")
     assert "b.id IN (:batch_0, :batch_1)" in sql
     assert p["batch_0"] == "uuid1"
+
+
+def test_top_abnormal_sql_basic():
+    sql, p = build_top_abnormal_sql(GroupFilters(), topn=5)
+    assert "ij.item_name" in sql and "ij.color_level = 'red'" in sql
+    assert "ORDER BY red_cnt DESC" in sql
+    assert "LIMIT :topn" in sql
+    assert p["topn"] == 5
+
+
+def test_sub_gender_sql():
+    sql, _ = build_sub_gender_sql(GroupFilters())
+    assert "ri.gender AS gender" in sql and "GROUP BY ri.gender" in sql
+    assert "COUNT(*) AS cnt" in sql
+
+
+def test_sub_age_group_sql():
+    sql, _ = build_sub_age_group_sql(GroupFilters())
+    assert "CASE WHEN ri.age < 20" in sql
+    assert "GROUP BY age_group" in sql
+
+
+def test_high_risk_list_basic():
+    sql, p = build_high_risk_list_sql(GroupFilters(), sort="red_count",
+                                      limit=20, offset=0)
+    assert "interp.overall_level = 'red' OR interp.red_count >= 3" in sql
+    assert "ri.id AS report_id" in sql
+    assert "ri.name" in sql
+    assert "ORDER BY interp.red_count DESC" in sql
+    assert "LIMIT :limit OFFSET :offset" in sql
+    assert "JOIN hospital_user" not in sql
+    assert p["limit"] == 20 and p["offset"] == 0
+
+
+def test_high_risk_list_sort_report_date():
+    sql, _ = build_high_risk_list_sql(GroupFilters(), sort="report_date",
+                                      limit=10, offset=0)
+    assert "ORDER BY ri.report_date DESC" in sql
+
+
+def test_high_risk_count_only():
+    sql, p = build_high_risk_list_sql(GroupFilters(), sort="red_count",
+                                      limit=20, offset=0, count_only=True)
+    assert sql.strip().startswith("SELECT COUNT(*)")
+    assert "LIMIT :limit" not in sql and "OFFSET" not in sql
+    assert "limit" not in p and "offset" not in p
+
+
+def test_high_risk_list_batch_filter_join():
+    f = GroupFilters(batch_ids=["x1"])
+    sql, _ = build_high_risk_list_sql(f, sort="red_count", limit=10, offset=0)
+    assert "LEFT JOIN batch_import_file bf" in sql
+    assert "LEFT JOIN batch_import b" in sql
