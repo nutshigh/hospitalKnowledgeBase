@@ -18,15 +18,37 @@ interface Props {
 export default function OverviewCharts({ data, loading, groupBy }: Props) {
   if (loading || !data) return <Spin />;
   const labels = data.rows.map(r => r.label);
-  const reds = data.rows.map(r => r.red_count);
-  const yellows = data.rows.map(r => r.yellow_count);
-  const greens = data.rows.map(r => r.green_count);
+  const makeBarData = (field: 'red_count' | 'yellow_count' | 'green_count') =>
+    data.rows.map(r => ({
+      value: r[field],
+      itemStyle: r.error ? { color: "#fa8c16" } : undefined,
+    }));
+  const redBarData = makeBarData('red_count');
+  const yellowBarData = makeBarData('yellow_count');
+  const greenBarData = makeBarData('green_count');
   const rates = data.rows.map(r => Number((r.abnormal_rate * 100).toFixed(1)));
+
+  const axisTooltip: any = {
+    trigger: "axis",
+    formatter: (params: any[]) => {
+      if (!params?.length) return "";
+      const idx = params[0].dataIndex;
+      const row = data.rows[idx];
+      if (row.error === "db_unavailable") {
+        return `${row.label}<br/>数据库不可用`;
+      }
+      let result = `${row.label}<br/>`;
+      for (const p of params) {
+        result += `${p.marker} ${p.seriesName}: ${p.value}<br/>`;
+      }
+      return result;
+    },
+  };
 
   let option: any;
   if (groupBy === "hospital" || groupBy === "batch") {
     option = {
-      tooltip: { trigger: "axis" },
+      tooltip: axisTooltip,
       legend: { data: ["红", "黄", "绿", "异常率%"] },
       xAxis: { type: "category", data: labels },
       yAxis: [
@@ -34,16 +56,16 @@ export default function OverviewCharts({ data, loading, groupBy }: Props) {
         { type: "value", name: "异常率%", max: 100 },
       ],
       series: [
-        { name: "红", type: "bar", stack: "t", data: reds, itemStyle: { color: "#ff4d4f" } },
-        { name: "黄", type: "bar", stack: "t", data: yellows, itemStyle: { color: "#faad14" } },
-        { name: "绿", type: "bar", stack: "t", data: greens, itemStyle: { color: "#52c41a" } },
+        { name: "红", type: "bar", stack: "t", data: redBarData, itemStyle: { color: "#ff4d4f" } },
+        { name: "黄", type: "bar", stack: "t", data: yellowBarData, itemStyle: { color: "#faad14" } },
+        { name: "绿", type: "bar", stack: "t", data: greenBarData, itemStyle: { color: "#52c41a" } },
         { name: "异常率%", type: "line", yAxisIndex: 1, data: rates,
           itemStyle: { color: "#1890ff" } },
       ],
     };
   } else if (groupBy === "age_group" || groupBy === "time_month") {
     option = {
-      tooltip: { trigger: "axis" },
+      tooltip: axisTooltip,
       xAxis: { type: "category", data: labels },
       yAxis: { type: "value", name: "异常率%", max: 100 },
       series: [{ type: "line", data: rates, smooth: true,
@@ -51,14 +73,14 @@ export default function OverviewCharts({ data, loading, groupBy }: Props) {
     };
   } else if (groupBy === "gender") {
     option = {
-      tooltip: { trigger: "axis" },
+      tooltip: axisTooltip,
       legend: { data: ["红", "黄", "绿"] },
       xAxis: { type: "category", data: labels },
       yAxis: { type: "value" },
       series: [
-        { name: "红", type: "bar", stack: "t", data: reds, itemStyle: { color: "#ff4d4f" } },
-        { name: "黄", type: "bar", stack: "t", data: yellows, itemStyle: { color: "#faad14" } },
-        { name: "绿", type: "bar", stack: "t", data: greens, itemStyle: { color: "#52c41a" } },
+        { name: "红", type: "bar", stack: "t", data: redBarData, itemStyle: { color: "#ff4d4f" } },
+        { name: "黄", type: "bar", stack: "t", data: yellowBarData, itemStyle: { color: "#faad14" } },
+        { name: "绿", type: "bar", stack: "t", data: greenBarData, itemStyle: { color: "#52c41a" } },
       ],
     };
   } else {
