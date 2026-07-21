@@ -1,4 +1,3 @@
-from datetime import date
 from typing import Any
 
 from app.modules.statistics.group_schemas import GroupBy, GroupFilters

@@ -1,6 +1,5 @@
 from datetime import date
 from unittest.mock import MagicMock, patch
-from sqlalchemy import text
 
 from app.modules.statistics.group_schemas import GroupFilters
 from app.modules.statistics.group_service import _per_tenant_overview, _row_key_label
@@ -180,6 +179,71 @@ def test_get_overview_empty_tenants(monkeypatch):
     r = get_overview("hospital", GroupFilters())
     assert r["rows"] == []
     assert r["totals"]["total_people"] == 0
+
+
+def test_per_tenant_overview_get_session_failure_is_isolated():
+    """C1 regression: get_session raising must NOT escape _per_tenant_overview;
+    must return error row, not propagate to get_overview."""
+    with patch("app.modules.statistics.group_service.get_session",
+               side_effect=RuntimeError("engine build failed")):
+        res = _per_tenant_overview("H001", "H", "hospital", GroupFilters())
+    assert res == {"key": "H001", "label": "H", "error": "db_unavailable"}
+
+
+def test_get_overview_handles_get_session_failure_per_tenant(monkeypatch):
+    """C1 e2e: if get_session fails for one tenant only, others should still work."""
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: ["H001", "H002"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "A", "H002": "B"})
+
+    def fake_per(hid, hname, gb, f):
+        if hid == "H001":
+            # simulate that get_session raises; _per_tenant_overview should catch
+            with patch("app.modules.statistics.group_service.get_session",
+                       side_effect=RuntimeError("boom")):
+                return _per_tenant_overview(hid, hname, gb, f)
+        return {"key": hid, "label": hname,
+                "total_people": 100, "red_count": 1, "yellow_count": 0,
+                "green_count": 99, "abnormal_rate": 0.01}
+
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_overview",
+                         fake_per)
+    r = get_overview("hospital", GroupFilters())
+    assert any(row["key"] == "H001" and row.get("error") == "db_unavailable"
+               for row in r["rows"])
+    assert r["totals"]["total_people"] == 100  # only H002
+
+
+def test_get_high_risk_sort_report_date_handles_mixed_nulls(monkeypatch):
+    """I1 regression: sort=report_date with mixed None/non-None should not TypeError."""
+    monkeypatch.setattr("app.modules.statistics.group_service._resolve_tenants",
+                         lambda f: ["H001"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "A"})
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_count",
+                         lambda hid, f: 3)
+    rows = [
+        {"hospital_id": "H001", "hospital_name": "A", "report_id": 1, "user_id": 1,
+         "name": "u1", "gender": "M", "age": 40, "report_date": None,
+         "batch_id": None, "batch_name": None, "overall_level": "red",
+         "red_count": 1, "yellow_count": 0, "summary_text": ""},
+        {"hospital_id": "H001", "hospital_name": "A", "report_id": 2, "user_id": 2,
+         "name": "u2", "gender": "F", "age": 35, "report_date": date(2026, 1, 1),
+         "batch_id": None, "batch_name": None, "overall_level": "red",
+         "red_count": 1, "yellow_count": 0, "summary_text": ""},
+        {"hospital_id": "H001", "hospital_name": "A", "report_id": 3, "user_id": 3,
+         "name": "u3", "gender": "M", "age": 50, "report_date": date(2026, 2, 1),
+         "batch_id": None, "batch_name": None, "overall_level": "yellow",
+         "red_count": 3, "yellow_count": 1, "summary_text": ""},
+    ]
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_rows",
+                         lambda *a, **k: rows)
+    from app.modules.statistics.group_service import get_high_risk
+    r = get_high_risk(GroupFilters(), sort="report_date", page=1, page_size=10)
+    assert len(r["items"]) == 3  # no TypeError raised
+    # Null reports should sort last when reverse=True
+    assert r["items"][-1]["report_date"] is None
 
 
 def test_get_high_risk_basic_total_and_pagination(monkeypatch):

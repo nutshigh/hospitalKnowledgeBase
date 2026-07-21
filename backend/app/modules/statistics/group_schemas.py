@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 GroupBy = Literal["hospital", "batch", "age_group", "gender", "time_month"]
 Gender = Literal["M", "F"]
-AgeGroup = Literal["<20", "20-29", "30-39", "40-49", "50-59", "60+"]
 SortKey = Literal["red_count", "age", "report_date"]
 ExportFormat = Literal["json", "csv"]
 

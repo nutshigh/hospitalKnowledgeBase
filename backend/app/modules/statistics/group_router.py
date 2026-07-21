@@ -6,12 +6,13 @@ from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import require_role
 from app.modules.statistics.group_schemas import (
-    GroupBy, GroupFilters, GroupBy as _Gb, ExportFormat, SortKey,
+    GroupBy, GroupFilters, ExportFormat, SortKey,
     parse_csv_query,
 )
 from app.modules.statistics.group_service import (
     get_overview, get_high_risk, stream_high_risk_csv,
 )
+from app.utils.exceptions import ValidationException
 
 router = APIRouter()
 
@@ -43,7 +44,6 @@ def group_overview(
     filters: GroupFilters = Depends(_filters),
 ):
     if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
-        from app.utils.exceptions import ValidationException
         raise ValidationException(detail="date_from must be <= date_to")
     return get_overview(group_by, filters)
 
@@ -58,7 +58,6 @@ def group_high_risk(
     format: ExportFormat = Query("json"),
 ):
     if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
-        from app.utils.exceptions import ValidationException
         raise ValidationException(detail="date_from must be <= date_to")
     if format == "csv":
         return StreamingResponse(

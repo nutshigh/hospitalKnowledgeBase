@@ -2,11 +2,11 @@ import csv
 import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from typing import Iterable
 
 from fastapi import HTTPException
 from sqlalchemy import text, bindparam
-from sqlalchemy.orm import Session
 
 from app.modules.statistics.group_schemas import GroupBy, GroupFilters
 from app.modules.statistics.group_sql import (
@@ -18,7 +18,6 @@ from app.core.database import get_session, get_all_hospital_ids
 
 logger = logging.getLogger("app.statistics")
 
-_HOSPITAL_DIMS = {"hospital"}
 _MULTIROW_DIMS = {"batch", "age_group", "gender", "time_month"}
 
 
@@ -44,8 +43,8 @@ def _abnormal_rate(red: int, yellow: int, total: int) -> float:
 
 def _per_tenant_overview(hid: str, hname: str, group_by: GroupBy,
                           filters: GroupFilters) -> dict | list[dict] | None:
-    db = get_session(f"hospital_{hid}")
     try:
+        db = get_session(f"hospital_{hid}")
         dialect = db.bind.dialect.name
         sql, params = build_overview_sql(group_by, filters, dialect)
         if group_by in _MULTIROW_DIMS:
@@ -98,7 +97,8 @@ def _per_tenant_overview(hid: str, hname: str, group_by: GroupBy,
         logger.exception("group_overview hid=%s failed", hid)
         return {"key": hid, "label": hname, "error": "db_unavailable"}
     finally:
-        db.close()
+        if "db" in locals():
+            db.close()
 
 
 MAX_WORKERS = 8
@@ -224,8 +224,8 @@ def stream_high_risk_csv(filters: GroupFilters, sort: str) -> Iterable[bytes]:
 
 def _per_tenant_high_risk_rows(hid: str, hname: str, filters: GroupFilters,
                                  sort: str, limit: int, offset: int) -> list[dict]:
-    db = get_session(f"hospital_{hid}")
     try:
+        db = get_session(f"hospital_{hid}")
         sql, params = build_high_risk_list_sql(filters, sort, limit, offset)
         rows = db.execute(text(sql), params).fetchall()
         out: list[dict] = []
@@ -245,12 +245,13 @@ def _per_tenant_high_risk_rows(hid: str, hname: str, filters: GroupFilters,
         logger.exception("group_high_risk_rows hid=%s failed", hid)
         return []
     finally:
-        db.close()
+        if "db" in locals():
+            db.close()
 
 
 def _per_tenant_high_risk_count(hid: str, filters: GroupFilters) -> int:
-    db = get_session(f"hospital_{hid}")
     try:
+        db = get_session(f"hospital_{hid}")
         sql, params = build_high_risk_list_sql(filters, "red_count",
                                                 limit=0, offset=0, count_only=True)
         row = db.execute(text(sql), params).fetchone()
@@ -259,7 +260,8 @@ def _per_tenant_high_risk_count(hid: str, filters: GroupFilters) -> int:
         logger.exception("group_high_risk_count hid=%s failed", hid)
         return 0
     finally:
-        db.close()
+        if "db" in locals():
+            db.close()
 
 
 def get_high_risk(filters: GroupFilters, sort: str,
@@ -280,7 +282,17 @@ def get_high_risk(filters: GroupFilters, sort: str,
     total = sum(totals_per_h.values())
     sort_key = {"red_count": "red_count", "age": "age",
                 "report_date": "report_date"}.get(sort, "red_count")
-    candidate_rows.sort(key=lambda x: (x.get(sort_key) or 0), reverse=True)
+
+    def _sort_key(row):
+        v = row.get(sort_key)
+        if v is None:
+            # null sorts last under reverse=True → use the smaller sentinel (0)
+            return (0, date.min) if sort_key == "report_date" else (0, 0)
+        if sort_key == "report_date":
+            return (1, v)
+        return (1, v or 0)
+
+    candidate_rows.sort(key=_sort_key, reverse=True)
     start = (page - 1) * page_size
     end = start + page_size
     items = candidate_rows[start:end]
