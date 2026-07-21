@@ -76,3 +76,107 @@ def test_row_key_label_age_group():
 
 def test_row_key_label_batch():
     assert _row_key_label("batch", _row(batch_id="u1", batch_name="f.zip"), "H", "H") == ("u1", "f.zip")
+
+
+from app.modules.statistics.group_service import get_overview
+
+
+def test_get_overview_merges_multi_tenant(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: ["H001", "H002"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "杭州第一医院", "H002": "示例医院"})
+    calls = []
+
+    def fake_per(hid, hname, group_by, filters):
+        calls.append(hid)
+        return {"key": hid, "label": hname,
+                "total_people": 100 if hid == "H001" else 50,
+                "red_count": 10 if hid == "H001" else 5,
+                "yellow_count": 20 if hid == "H001" else 10,
+                "green_count": 70 if hid == "H001" else 35,
+                "abnormal_rate": 0.3,
+                "by_gender": [], "by_age_group": [], "top_abnormal_items": []}
+
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_overview",
+                         fake_per)
+    r = get_overview("hospital", GroupFilters())
+    assert r["group_by"] == "hospital"
+    assert len(r["rows"]) == 2
+    assert r["rows"][0]["key"] in {"H001", "H002"}
+    assert r["totals"]["total_people"] == 150
+    assert r["totals"]["red_count"] == 15
+    assert r["totals"]["yellow_count"] == 30
+    assert r["totals"]["green_count"] == 105
+    assert "abnormal_rate" in r["totals"]
+
+
+def test_get_overview_filters_hospital_ids(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: ["H001", "H002", "H003"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {h: h for h in hids})
+    calls = []
+
+    def fake_per(hid, hname, group_by, filters):
+        calls.append(hid)
+        return {"key": hid, "label": hname,
+                "total_people": 1, "red_count": 1, "yellow_count": 0,
+                "green_count": 0, "abnormal_rate": 1.0}
+
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_overview",
+                         fake_per)
+    get_overview("hospital", GroupFilters(hospital_ids=["H002"]))
+    assert calls == ["H002"]
+
+
+def test_get_overview_age_group_flatten_multirow_rows(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: ["H001"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "H"})
+
+    def fake_per(hid, hname, gb, f):
+        return [
+            {"key": "30-39", "label": "30-39", "total_people": 10,
+             "red_count": 1, "yellow_count": 2, "green_count": 7,
+             "abnormal_rate": 0.3},
+            {"key": "40-49", "label": "40-49", "total_people": 20,
+             "red_count": 2, "yellow_count": 4, "green_count": 14,
+             "abnormal_rate": 0.3},
+        ]
+
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_overview",
+                         fake_per)
+    r = get_overview("age_group", GroupFilters())
+    assert len(r["rows"]) == 2
+    assert r["rows"][0]["key"] in {"30-39", "40-49"}
+    assert r["totals"]["total_people"] == 30
+
+
+def test_get_overview_db_unavailable_skipped_in_totals(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: ["H001", "H002"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "A", "H002": "B"})
+
+    def fake_per(hid, hname, gb, f):
+        if hid == "H002":
+            return {"key": hid, "label": hname, "error": "db_unavailable"}
+        return {"key": hid, "label": hname,
+                "total_people": 100, "red_count": 10, "yellow_count": 20,
+                "green_count": 70, "abnormal_rate": 0.3}
+
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_overview",
+                         fake_per)
+    r = get_overview("hospital", GroupFilters())
+    assert any(row.get("error") == "db_unavailable" for row in r["rows"])
+    assert r["totals"]["total_people"] == 100
+
+
+def test_get_overview_empty_tenants(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: [])
+    r = get_overview("hospital", GroupFilters())
+    assert r["rows"] == []
+    assert r["totals"]["total_people"] == 0
