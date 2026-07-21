@@ -226,6 +226,60 @@ def test_get_high_risk_filter_unknown_hospital_id_dropped(monkeypatch):
     assert counts == {}
 
 
+import csv
+import io
+from fastapi import HTTPException
+from app.modules.statistics.group_service import stream_high_risk_csv
+
+
+def test_stream_high_risk_csv_basic(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service._resolve_tenants",
+                         lambda f: ["H001"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "医院"})
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_count",
+                         lambda hid, f: 2)
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_rows",
+                         lambda hid, name, f, s, lim, off:
+                         [{"hospital_id": hid, "hospital_name": name,
+                           "report_id": 1, "user_id": 10, "name": "张三",
+                           "gender": "M", "age": 40,
+                           "report_date": __import__("datetime").date(2026,1,1),
+                           "batch_id": None, "batch_name": None,
+                           "overall_level": "red", "red_count": 5,
+                           "yellow_count": 0, "summary_text": "s"},
+                          {"hospital_id": hid, "hospital_name": name,
+                           "report_id": 2, "user_id": 20, "name": "李四",
+                           "gender": "F", "age": 30,
+                           "report_date": __import__("datetime").date(2026,2,1),
+                           "batch_id": None, "batch_name": None,
+                           "overall_level": "yellow", "red_count": 3,
+                           "yellow_count": 1, "summary_text": "s2"}])
+    chunks = list(stream_high_risk_csv(GroupFilters(), sort="red_count"))
+    full = b"".join(chunks)
+    assert full.startswith("\ufeff".encode("utf-8"))
+    text_dec = full.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text_dec))
+    rows = list(reader)
+    assert len(rows) == 2
+    assert rows[0]["hospital_id"] == "H001"
+    assert "report_id" in rows[0] and "red_count" in rows[0]
+
+
+def test_stream_high_risk_csv_over_limit_raises_413(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service._resolve_tenants",
+                         lambda f: ["H001", "H002"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "A", "H002": "B"})
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_count",
+                         lambda hid, f: 30_000)
+    try:
+        list(stream_high_risk_csv(GroupFilters(), sort="red_count"))
+        assert False, "expected HTTPException 413"
+    except HTTPException as e:
+        assert e.status_code == 413
+
+
 def test_get_high_risk_pagination_slices_correctly(monkeypatch):
     monkeypatch.setattr("app.modules.statistics.group_service._resolve_tenants",
                          lambda f: ["H001"])

@@ -1,7 +1,10 @@
+import csv
+import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
+from fastapi import HTTPException
 from sqlalchemy import text, bindparam
 from sqlalchemy.orm import Session
 
@@ -182,6 +185,41 @@ def get_overview(group_by: GroupBy, filters: GroupFilters) -> dict:
 
 
 HIGH_RISK_CSV_MAX = 50_000
+
+CSV_COLUMNS = [
+    "hospital_id", "hospital_name", "report_id", "user_id", "name",
+    "gender", "age", "report_date", "batch_id", "batch_name",
+    "overall_level", "red_count", "yellow_count", "summary_text",
+]
+
+
+def stream_high_risk_csv(filters: GroupFilters, sort: str) -> Iterable[bytes]:
+    hids = _resolve_tenants(filters)
+    names = _get_tenant_names(hids)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as tp:
+        cnt_futs = [tp.submit(_per_tenant_high_risk_count, h, filters) for h in hids]
+        total = sum(f.result() for f in cnt_futs)
+    if total > HIGH_RISK_CSV_MAX:
+        raise HTTPException(status_code=413, detail="high-risk export exceeds 50000 rows, please narrow filters")
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    yield buf.getvalue().encode("utf-8")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as tp:
+        row_futs = [tp.submit(_per_tenant_high_risk_rows, h, names.get(h, h),
+                                filters, sort, HIGH_RISK_CSV_MAX, 0) for h in hids]
+        for f in row_futs:
+            rows = f.result()
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+            for row in rows:
+                rd = row.get("report_date")
+                if hasattr(rd, "isoformat"):
+                    row = {**row, "report_date": rd.isoformat()}
+                writer.writerow(row)
+            yield buf.getvalue().encode("utf-8")
+    logger.info("group_high_risk_csv rows=%d", total)
 
 
 def _per_tenant_high_risk_rows(hid: str, hname: str, filters: GroupFilters,
