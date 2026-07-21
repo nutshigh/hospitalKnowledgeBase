@@ -179,3 +179,75 @@ def get_overview(group_by: GroupBy, filters: GroupFilters) -> dict:
     logger.info("group_overview group_by=%s took=%.2fs rows=%d errors=%d",
                 group_by, time.time() - t0, len(out["rows"]), err_n)
     return out
+
+
+HIGH_RISK_CSV_MAX = 50_000
+
+
+def _per_tenant_high_risk_rows(hid: str, hname: str, filters: GroupFilters,
+                                 sort: str, limit: int, offset: int) -> list[dict]:
+    db = get_session(f"hospital_{hid}")
+    try:
+        sql, params = build_high_risk_list_sql(filters, sort, limit, offset)
+        rows = db.execute(text(sql), params).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            out.append({
+                "hospital_id": hid, "hospital_name": hname,
+                "report_id": r.report_id, "user_id": r.user_id,
+                "name": r.name, "gender": r.gender, "age": r.age,
+                "report_date": r.report_date,
+                "batch_id": r.batch_id, "batch_name": r.batch_name,
+                "overall_level": r.overall_level,
+                "red_count": r.red_count, "yellow_count": r.yellow_count,
+                "summary_text": r.summary_text,
+            })
+        return out
+    except Exception:
+        logger.exception("group_high_risk_rows hid=%s failed", hid)
+        return []
+    finally:
+        db.close()
+
+
+def _per_tenant_high_risk_count(hid: str, filters: GroupFilters) -> int:
+    db = get_session(f"hospital_{hid}")
+    try:
+        sql, params = build_high_risk_list_sql(filters, "red_count",
+                                                limit=0, offset=0, count_only=True)
+        row = db.execute(text(sql), params).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        logger.exception("group_high_risk_count hid=%s failed", hid)
+        return 0
+    finally:
+        db.close()
+
+
+def get_high_risk(filters: GroupFilters, sort: str,
+                   page: int, page_size: int) -> dict:
+    hids = _resolve_tenants(filters)
+    names = _get_tenant_names(hids)
+    candidate_rows: list[dict] = []
+    totals_per_h: dict[str, int] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as tp:
+        cnt_futs = {tp.submit(_per_tenant_high_risk_count, h, filters): h for h in hids}
+        for f in cnt_futs:
+            h = cnt_futs[f]
+            totals_per_h[h] = f.result()
+        row_futs = {tp.submit(_per_tenant_high_risk_rows, h, names.get(h, h),
+                                filters, sort, HIGH_RISK_CSV_MAX, 0): h for h in hids}
+        for f in row_futs:
+            candidate_rows.extend(f.result())
+    total = sum(totals_per_h.values())
+    sort_key = {"red_count": "red_count", "age": "age",
+                "report_date": "report_date"}.get(sort, "red_count")
+    candidate_rows.sort(key=lambda x: (x.get(sort_key) or 0), reverse=True)
+    start = (page - 1) * page_size
+    end = start + page_size
+    items = candidate_rows[start:end]
+    return {
+        "items": items, "total": total,
+        "page": page, "page_size": page_size,
+        "filters": filters.model_dump(mode="json"),
+    }

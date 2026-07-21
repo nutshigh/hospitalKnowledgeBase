@@ -180,3 +180,69 @@ def test_get_overview_empty_tenants(monkeypatch):
     r = get_overview("hospital", GroupFilters())
     assert r["rows"] == []
     assert r["totals"]["total_people"] == 0
+
+
+def test_get_high_risk_basic_total_and_pagination(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service._resolve_tenants",
+                         lambda f: ["H001"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "医院A"})
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_count",
+                         lambda hid, f: 233)
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_rows",
+                         lambda hid, name, f, s, lim, off:
+                         [{"hospital_id": hid, "hospital_name": name,
+                           "report_id": i, "user_id": i * 10, "name": f"u{i}",
+                           "gender": "M", "age": 40,
+                           "report_date": date(2026, 1, 1),
+                           "batch_id": None, "batch_name": None,
+                           "overall_level": "red", "red_count": 1, "yellow_count": 0,
+                           "summary_text": "s"} for i in range(20)])
+    from app.modules.statistics.group_service import get_high_risk
+    r = get_high_risk(GroupFilters(), sort="red_count", page=1, page_size=20)
+    assert r["total"] == 233
+    assert r["page"] == 1 and r["page_size"] == 20
+    assert len(r["items"]) == 20
+    assert r["items"][0]["hospital_id"] == "H001"
+    assert r["items"][0]["hospital_name"] == "医院A"
+    assert r["items"][0]["red_count"] == 1
+
+
+def test_get_high_risk_filter_unknown_hospital_id_dropped(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service.get_all_hospital_ids",
+                         lambda: ["H002"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {})
+    counts = {}
+    def fake_count(hid, f): counts[hid] = counts.get(hid, 0) + 1; return 0
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_count",
+                         fake_count)
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_rows",
+                         lambda *a, **k: [])
+    from app.modules.statistics.group_service import get_high_risk
+    r = get_high_risk(GroupFilters(hospital_ids=["H001", "H999"]),
+                       sort="red_count", page=1, page_size=20)
+    assert r["total"] == 0 and r["items"] == []
+    assert counts == {}
+
+
+def test_get_high_risk_pagination_slices_correctly(monkeypatch):
+    monkeypatch.setattr("app.modules.statistics.group_service._resolve_tenants",
+                         lambda f: ["H001"])
+    monkeypatch.setattr("app.modules.statistics.group_service._get_tenant_names",
+                         lambda hids: {"H001": "A"})
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_count",
+                         lambda hid, f: 50)
+    monkeypatch.setattr("app.modules.statistics.group_service._per_tenant_high_risk_rows",
+                         lambda hid, name, f, s, lim, off:
+                         [{"hospital_id": hid, "hospital_name": name,
+                           "report_id": i, "user_id": i, "name": f"u{i}",
+                           "gender": "M", "age": 40, "report_date": None,
+                           "batch_id": None, "batch_name": None,
+                           "overall_level": "red", "red_count": 5, "yellow_count": 0,
+                           "summary_text": ""} for i in range(50)])
+    from app.modules.statistics.group_service import get_high_risk
+    p1 = get_high_risk(GroupFilters(), sort="red_count", page=1, page_size=20)
+    p3 = get_high_risk(GroupFilters(), sort="red_count", page=3, page_size=20)
+    assert len(p1["items"]) == 20
+    assert len(p3["items"]) == 10
