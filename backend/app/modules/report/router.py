@@ -107,7 +107,7 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
         "id": report.id, "task_id": report.task_id,
         "name": report.name, "gender": report.gender, "age": report.age,
         "report_date": report.report_date, "check_type": report.check_type,
-        "unit_name": report.unit_name,
+        "unit_name": report.unit_name, "conclusion_text": report.conclusion_text,
         "indicators": [
             {"item_name": i.item_name, "item_name_standard": i.item_name_standard,
              "item_code": i.item_code, "result_value": i.result_value,

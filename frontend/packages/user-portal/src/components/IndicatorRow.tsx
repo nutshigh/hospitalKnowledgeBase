@@ -7,12 +7,14 @@ interface IndicatorRowProps {
   ref_range_low?: string;
   ref_range_high?: string;
   color_level?: string;
+  is_conclusion?: boolean;
 }
 
 export default function IndicatorRow({
-  item_name, result_value, unit, ref_range_low, ref_range_high, color_level,
+  item_name, result_value, unit, ref_range_low, ref_range_high, color_level, is_conclusion,
 }: IndicatorRowProps) {
   const refRange = ref_range_low && ref_range_high ? `${ref_range_low}-${ref_range_high}` : '';
+  const displayValue = is_conclusion ? '存在建议' : (result_value || '-');
   return (
     <div style={{ borderBottom: '1px solid var(--color-border-light)' }}>
       <div style={{
@@ -20,11 +22,18 @@ export default function IndicatorRow({
         padding: '14px 0',
       }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 500 }}>{item_name}</div>
+          <div style={{
+            fontSize: 14, fontWeight: 500,
+            ...(is_conclusion ? { color: 'var(--color-text-secondary)' } : {}),
+          }}>
+            {is_conclusion ? '📋 ' : ''}{item_name}
+          </div>
           {refRange && <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>参考: {refRange} {unit || ''}</div>}
         </div>
         <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 16, fontWeight: 700 }}>{result_value || '-'}</span>
+          <span style={{ fontSize: 16, fontWeight: 700, color: is_conclusion ? 'var(--color-text-secondary)' : undefined }}>
+            {displayValue}
+          </span>
           {unit && <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{unit}</span>}
           {color_level ? <ColorBadge level={color_level} size="sm" /> : null}
         </div>

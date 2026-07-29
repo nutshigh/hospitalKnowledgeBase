@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -11,6 +12,8 @@ from app.core.vlm_client import vlm_client
 from app.core.term_normalizer import normalize_indicators
 from app.core.image_preprocess import preprocess
 from app.core.rabbitmq import rabbitmq, TaskMessage
+
+_log = logging.getLogger("app.parse")
 
 
 def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
@@ -54,6 +57,224 @@ def get_task_status(db: Session, task_id: int) -> Optional[ReportTask]:
     return db.query(ReportTask).filter(ReportTask.id == task_id).first()
 
 
+_CONCLUSION_PROMPT = """以下是一份体检报告的完整文本。请提取其中"总检建议与结论"段落的全部内容。
+
+提示：该段落通常以"总检建议与结论""总检结论""医师建议""综合建议""健康指导"等标题开头，以"主检医师""主检医生""总检医师""总检医生""一般项目""一般检查""检查项目"等标识结束。
+
+请只输出提取到的内容原文（包含章节标题），不要加任何说明。如果确实找不到，输出NONE。
+
+报告文本：
+{text}"""
+
+
+def _clean_conclusion(content: str) -> Optional[str]:
+    """清理 LLM 返回的结论文本，去除 think 标签、截断主检医生部分、空响应。"""
+    import re
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    content = content.replace('</think>', '').replace('<think>', '')
+    # 截断主检医生/总检医生之后的内容
+    content = re.split(r'(?:主检医生|总检医生|主检医师|总检医师)\s*[：:]', content)[0]
+    # 移除开头的章节标题重复
+    content = re.sub(r'^(总检建议与结论|总检结论|医师建议|综合建议|健康指导)\s*\n+', '', content)
+    content = content.strip()
+    if not content or content.upper() in ("NONE", "(无)", "无", "NULL"):
+        return None
+    if len(content) < 10:
+        return None
+    return content
+
+
+async def _extract_conclusion_async(text: str) -> Optional[str]:
+    """调用 MedGo LLM 提取报告结论段落。"""
+    from app.ai.llm import get_chat_model, _guarded
+
+    prompt = _CONCLUSION_PROMPT.format(text=text[:16000])
+    model = get_chat_model()
+
+    async def _call():
+        return await model.ainvoke([("user", prompt)], max_tokens=2048)
+
+    try:
+        resp = await _guarded(_call())
+        conclusion = _clean_conclusion(resp.content)
+        if conclusion:
+            return conclusion
+    except Exception as e:
+        _log.warning("Failed to extract conclusion: %s", e)
+    return None
+
+
+_ABNORMALITY_PROMPT = """请从以下体检报告的"总检建议与结论"文本中，逐条提取所有异常项。
+
+每条异常对应一个 JSON 对象，包含以下字段：
+- item_name: 结论中该条问题的完整原文描述（如"血肌酸激酶偏高，同型半胱氨酸偏高"）
+- item_normalized: 将该项问题标准化为一个标准医学名称，**必须**保留解剖部位前缀：
+  * "甲状腺双叶多发囊性结节，TI-RADS 2级" → 标准化为 "甲状腺囊性结节"（不能只输出"囊性结节"）
+  * "肝内钙化灶0.5cm" → 标准化为 "肝内钙化灶"（不能只输出"钙化灶"）
+  * "右肺尖间隔旁型肺气肿" → 标准化为 "肺气肿"（双肺通用可省位置）
+  * 规则：结论文本中异常名称前提到了哪个器官/部位，标准化名就必须带上
+  * 注意区分程度：体重指数超出正常范围但未达肥胖 → "超重"（不是"肥胖"），BMI≥28 可判为"肥胖"
+  * 避免过度泛化，尊重原文具体描述
+
+- suggestion: 对应的建议原文，保留完整措辞
+- deviation: 偏离方向，取值为"偏高""偏低""偏大""偏小""偏重""偏轻""异常"，解析不到则为null
+- is_urgent: 如果建议中含"立即就医""尽快就诊""急诊""马上"等紧急关键词则为true，否则false
+
+注意事项：
+- 每一条编号对应的内容视为一个异常项，不要把多条合并
+- 保留原文措辞，不要缩写或改写
+- 只输出 JSON 数组，不要加任何说明或 Markdown 代码块
+- 如果没有任何异常项，输出空数组[]
+
+结论文本：
+{text}"""
+
+
+async def _extract_abnormalities_async(conclusion_text: str) -> list[dict]:
+    """调用 MedGo LLM 从结论文本提取异常项列表。"""
+    from app.ai.llm import get_chat_model, _guarded
+    import json as _json, re as _re
+
+    prompt = _ABNORMALITY_PROMPT.format(text=conclusion_text[:8000])
+    model = get_chat_model()
+
+    async def _call():
+        return await model.ainvoke([("user", prompt)], max_tokens=2048)
+
+    try:
+        resp = await _guarded(_call())
+        content = resp.content.strip()
+        # 去掉可能的 <think> 标签和 Markdown 代码块
+        content = _re.sub(r'<think>.*?</think>', '', content, flags=_re.DOTALL)
+        content = content.replace('</think>', '').replace('<think>', '')
+        content = _re.sub(r'```json\s*', '', content)
+        content = _re.sub(r'```\s*', '', content)
+        items = _json.loads(content)
+        if isinstance(items, list):
+            return items
+    except Exception as e:
+        _log.warning("Failed to extract abnormalities: %s", e)
+    return []
+
+
+def _store_abnormalities(db, report_id: int, interpretation_id: int,
+                         abnormalities: list[dict]) -> None:
+    """将结论提取的异常项写入 report_indicator + indicator_judgment。
+
+    每次解析时检查 interpretation_id 是否已有结论型异常，有则跳过（增量追加，不重复）。
+    """
+    from app.modules.report.models import ReportIndicator
+    from app.modules.interpretation.models import IndicatorJudgment
+    from sqlalchemy import text
+
+    if not abnormalities:
+        return
+
+    # 检查是否已存在该 interpretation 的结论型异常（通过 report_indicator.raw_text 非空来识别）
+    existing = db.execute(
+        text("""SELECT COUNT(*) FROM indicator_judgment ij
+                JOIN report_indicator ri ON ij.indicator_id = ri.id
+                WHERE ij.interpretation_id = :iid AND ri.raw_text IS NOT NULL"""),
+        {"iid": interpretation_id},
+    ).scalar()
+    if existing:
+        _log.debug("abnormalities already stored for interp=%d, skip", interpretation_id)
+        return
+
+    for item in abnormalities:
+        item_name = (item.get("item_name") or "").strip()
+        suggestion = (item.get("suggestion") or "").strip()
+        deviation = item.get("deviation")
+        is_urgent = item.get("is_urgent", False)
+
+        if not item_name and not suggestion:
+            continue
+
+        # 标准化名仅用于 disease_mapping 链接，不覆盖 item_name
+        llm_normalized = (item.get("item_normalized") or "").strip()
+        db_normalized = _normalize_abnormality(db, item_name)
+        normalized = db_normalized or llm_normalized or item_name
+
+        # 同一 interpretation 内去重（按归一化名）
+        dup = db.execute(
+            text("""SELECT COUNT(*) FROM indicator_judgment ij
+                    JOIN report_indicator ri ON ij.indicator_id = ri.id
+                    WHERE ij.interpretation_id = :iid AND ij.item_name = :nm AND ri.raw_text IS NOT NULL"""),
+            {"iid": interpretation_id, "nm": item_name},
+        ).scalar()
+        if dup:
+            _log.debug("abnormality dup skip interp=%d item=%s", interpretation_id, normalized)
+            continue
+
+        # 创建 report_indicator 占位行：原文名存储，标准化名存 item_name_standard
+        ri = ReportIndicator(
+            report_id=report_id,
+            item_name=item_name,
+            item_name_standard=normalized,
+            raw_text=item_name,
+        )
+        db.add(ri)
+        db.flush()  # 拿到 ri.id
+
+        # 创建 indicator_judgment
+        ij = IndicatorJudgment(
+            interpretation_id=interpretation_id,
+            indicator_id=ri.id,
+            item_name=normalized or item_name,
+            result_value=None,
+            deviation=deviation if deviation else None,
+            color_level="red" if is_urgent else "yellow",
+            explanation=item_name,
+            suggestion=suggestion,
+        )
+        db.add(ij)
+
+    db.commit()
+    _log.info("abnormalities stored report=%d interp=%d count=%d",
+              report_id, interpretation_id, len(abnormalities))
+
+
+def _normalize_abnormality(db, item_name: str) -> Optional[str]:
+    """查 disease_mapping 表，返回标准化 disease_name。
+    
+    找不到映射时返回 None，由调用方使用 LLM 的 item_normalized。
+    不再自动创建新映射，避免 LLM 每次的措辞差异产生噪音条目。
+    """
+    from sqlalchemy import text
+    import re
+
+    core = re.sub(r'(偏高|偏低|偏大|偏小|偏重|偏轻|异常|检查|显示|可见)+$', '', item_name).strip()
+    if not core:
+        return None
+
+    try:
+        # 精确匹配
+        row = db.execute(text(
+            "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND item_name_standard=:exact LIMIT 1"
+        ), {"exact": core}).scalar()
+        if row:
+            return row
+
+        # 模糊匹配：core 包含 item_name_standard 或反之
+        row = db.execute(text(
+            "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND (item_name_standard LIKE CONCAT('%', :core, '%') OR :core LIKE CONCAT('%', item_name_standard, '%')) ORDER BY CHAR_LENGTH(item_name_standard) LIMIT 1"
+        ), {"core": core}).scalar()
+        if row:
+            return row
+
+        # 去前缀后重试
+        core_stripped = re.sub(r'^(血|血清|血浆|全血)', '', core).strip()
+        if core_stripped != core:
+            row = db.execute(text(
+                "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND item_name_standard=:cs LIMIT 1"
+            ), {"cs": core_stripped}).scalar()
+            if row:
+                return row
+    except Exception:
+        pass
+    return None
+
+
 def process_task(db: Session, task_id: int, hospital_id: str,
                  batch_id: Optional[str] = None,
                  file_id: Optional[str] = None):
@@ -77,9 +298,13 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         else:
             processed_path = task.original_file_path
 
+        report_raw_text = None
+        images_b64 = None  # for VLM conclusion extraction on image-based reports
+
         # For text-based PDFs, use direct text extraction + LLM parsing
         if task.file_type == "pdf" and _pdf_has_text(processed_path):
             text = _extract_pdf_text(processed_path)
+            report_raw_text = text
             parsed = _parse_text_with_llm(text)
             personal_info = {
                 "name": parsed.get("name"),
@@ -104,6 +329,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
             result = vlm_client.extract_from_images(images_b64)
             indicators = normalize_indicators(result.get("indicators", []))
             personal_info = result.get("personal_info", {})
+            report_raw_text = result.get("raw_text", "")
 
         # Update existing report_info (created in create_task), or create if missing
         report = db.query(ReportInfo).filter(ReportInfo.task_id == task.id).first()
@@ -118,6 +344,28 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         # report.unit_name = personal_info.get("unit_name")
         db.commit()
         db.refresh(report)
+
+        # Extract conclusion text from report raw content
+        if images_b64 is not None:
+            # Image-based: use VLM to extract conclusion directly from images
+            try:
+                conclusion = vlm_client.extract_conclusion_from_images(images_b64)
+                if conclusion:
+                    report.conclusion_text = conclusion
+                    db.commit()
+                    _log.info("conclusion extracted via VLM report=%d len=%d", report.id, len(conclusion))
+            except Exception as e:
+                _log.warning("VLM conclusion extraction failed report=%d: %s", report.id, e)
+        elif report_raw_text and len(report_raw_text) > 100:
+            # Text-based PDF: use LLM on extracted full text
+            try:
+                conclusion = asyncio.run(_extract_conclusion_async(report_raw_text))
+                if conclusion:
+                    report.conclusion_text = conclusion
+                    db.commit()
+                    _log.info("conclusion extracted via LLM report=%d len=%d", report.id, len(conclusion))
+            except Exception as e:
+                _log.warning("LLM conclusion extraction failed report=%d: %s", report.id, e)
 
         for ind in indicators:
             db.add(ReportIndicator(

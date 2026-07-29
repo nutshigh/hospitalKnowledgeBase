@@ -42,6 +42,25 @@ def handle_interpretation_task(message: dict):
             .first()
         )
         if existing:
+            # 解读已完成但结论异常还未提取 → 补跑异常提取
+            if existing.status == "completed":
+                try:
+                    from app.modules.report.service import _extract_abnormalities_async, _store_abnormalities
+                    from app.modules.report.models import ReportInfo
+                    from sqlalchemy import text
+                    report_info = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
+                    if report_info and report_info.conclusion_text:
+                        has_ab = db.execute(text(
+                            "SELECT COUNT(*) FROM indicator_judgment ij JOIN report_indicator ri ON ij.indicator_id = ri.id WHERE ij.interpretation_id = :iid AND ri.raw_text IS NOT NULL"
+                        ), {"iid": existing.id}).scalar()
+                        if not has_ab:
+                            import asyncio
+                            items = asyncio.run(_extract_abnormalities_async(report_info.conclusion_text))
+                            if items:
+                                _store_abnormalities(db, report_id, existing.id, items)
+                                _log.info("backfill abnormalities report=%d count=%d", report_id, len(items))
+                except Exception as e:
+                    _log.warning("backfill abnormalities failed report=%d: %s", report_id, e)
             _log.debug("interp skip (already running/completed) report=%s hospital=%s", report_id, hospital_id)
             return  # ack and skip — another worker is/has handled this report
         t_start = time.time()
@@ -63,6 +82,23 @@ def handle_interpretation_task(message: dict):
                     f"Comparison summary failed for report {report_id}: {e}",
                     flush=True,
                 )
+            # 从结论文本提取异常项 → 写入 indicator_judgment
+            try:
+                from app.modules.report.service import _extract_abnormalities_async, _store_abnormalities
+                from app.modules.report.models import ReportInfo
+                report_info = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
+                if report_info and report_info.conclusion_text:
+                    interp = db.query(ReportInterpretation).filter(
+                        ReportInterpretation.report_id == report_id,
+                        ReportInterpretation.status == "completed",
+                    ).order_by(ReportInterpretation.id.desc()).first()
+                    if interp:
+                        import asyncio
+                        items = asyncio.run(_extract_abnormalities_async(report_info.conclusion_text))
+                        if items:
+                            _store_abnormalities(db, report_id, interp.id, items)
+            except Exception as e:
+                _log.warning("abnormality extraction failed report=%d: %s", report_id, e)
             # 成功 → 计 batch file 进度(interp_ok)
             if batch_id and file_id:
                 BatchService.increment_progress(db, batch_id, file_id, "interp_ok")

@@ -33,6 +33,7 @@ class ReportInfo(Base):
     report_date = Column(Date, nullable=True)
     check_type = Column(String(20), nullable=True)
     unit_name = Column(String(100), nullable=True)
+    conclusion_text = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
 

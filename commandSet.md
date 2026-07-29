@@ -1,5 +1,5 @@
 创建用户：
-curl -X POST http://localhost:8000/api/v1/auth/register  -H "Content-Type: application/json" -d '{"username":"user2","password":"123456","role":"user","hospital_id":"H002"}'
+curl -X POST http://localhost:8000/api/v1/auth/register  -H "Content-Type: application/json" -d '{"username":"user4","password":"123456","role":"user","hospital_id":"H001"}'
 role:user,doctor,admin
 
 创建医院表：

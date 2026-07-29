@@ -48,5 +48,6 @@ class ReportDetailResponse(BaseModel):
     report_date: Optional[date] = None
     check_type: Optional[str] = None
     unit_name: Optional[str] = None
+    conclusion_text: Optional[str] = None
     indicators: List[ReportIndicatorSchema] = []
     created_at: datetime

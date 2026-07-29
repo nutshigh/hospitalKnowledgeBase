@@ -1,4 +1,5 @@
 import re
+from typing import Optional
 from httpx import Client, Timeout
 from app.config import settings
 
@@ -228,7 +229,7 @@ class VLMClient:
         self.client = Client(timeout=Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0))
 
     def extract_from_image(self, image_base64: str) -> dict:
-        """调用 PaddleOCR-VL 服务（/ocr），返回 {personal_info, indicators}。
+        """调用 PaddleOCR-VL 服务（/ocr），返回 {personal_info, indicators, raw_text}。
 
         PaddleOCR-VL 输出页面级 markdown（含表格），复用现有
         _parse_markdown_table / _parse_personal_info 解析。
@@ -247,11 +248,12 @@ class VLMClient:
             personal_info = _parse_personal_info_cn(content)
         indicators = _parse_markdown_table(content)
 
-        return {"personal_info": personal_info, "indicators": indicators}
+        return {"personal_info": personal_info, "indicators": indicators, "raw_text": content}
 
     def extract_from_images(self, images_base64: list[str]) -> dict:
         all_indicators = []
         personal_info = {}
+        raw_texts = []
         for img in images_base64:
             result = self.extract_from_image(img)
             if result.get("personal_info"):
@@ -260,7 +262,37 @@ class VLMClient:
                         personal_info[k] = v
             if result.get("indicators"):
                 all_indicators.extend(result["indicators"])
-        return {"personal_info": personal_info, "indicators": all_indicators}
+            if result.get("raw_text"):
+                raw_texts.append(result["raw_text"])
+        return {"personal_info": personal_info, "indicators": all_indicators,
+                "raw_text": "\n\n".join(raw_texts)}
+
+    def extract_conclusion(self, image_base64: str) -> str:
+        """调用 PaddleOCR-VL 提取报告最后的结论/建议段落。"""
+        CONCLUSION_PROMPT = """请提取这份体检报告最后的"总检建议与结论"或"医师建议""健康指导"等结论性段落的内容。
+
+只输出该段落原文，不要表格、不要指标列表。如果没有找到，输出"NONE"。"""
+        response = self.client.post(
+            f"{self.base_url}/ocr",
+            json={"image_base64": image_base64, "prompt": CONCLUSION_PROMPT},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return (data.get("markdown") or "").strip()
+
+    def extract_conclusion_from_images(self, images_base64: list[str]) -> Optional[str]:
+        """从多页图像提取结论，取最后一页/最后几页的结果。"""
+        # 结论通常在报告最后几页
+        candidate_pages = images_base64[-3:] if len(images_base64) > 3 else images_base64
+        texts = []
+        for img in candidate_pages:
+            try:
+                t = self.extract_conclusion(img)
+                if t and t.upper() != "NONE" and len(t) > 10:
+                    texts.append(t)
+            except Exception:
+                pass
+        return "\n\n".join(texts) if texts else None
 
 
 vlm_client = VLMClient()

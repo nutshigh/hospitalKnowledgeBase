@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     RABBITMQ_PORT: int = 5672
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"
 
     # Redis (embedding 向量缓存等)
     REDIS_HOST: str = "localhost"
@@ -124,6 +125,10 @@ class Settings(BaseSettings):
 
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"
+
+    # [新增] 服务间调用共享密钥（sz-mana Java 后端转发统计接口时校验 X-Api-Key）
+    # 为空时服务间端点拒绝服务；生产环境必须配置强随机值
+    STAT_SERVICE_API_KEY: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -64,6 +64,14 @@ export default function ReportDetailPage() {
         {report.unit_name && <p>单位: {report.unit_name}</p>}
       </Card>
 
+      <Card title="总检建议与结论" style={{ marginBottom: 16 }}>
+        {report.conclusion_text ? (
+          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{report.conclusion_text}</div>
+        ) : (
+          <div style={{ color: '#999', fontStyle: 'italic' }}>未提取到结论</div>
+        )}
+      </Card>
+
       {interp && (
         <div style={{ marginBottom: 12 }}>
           <Tag color="red">红区 {interp.red_count}</Tag>
