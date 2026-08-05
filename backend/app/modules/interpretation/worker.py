@@ -97,6 +97,9 @@ def handle_interpretation_task(message: dict):
                         items = asyncio.run(_extract_abnormalities_async(report_info.conclusion_text))
                         if items:
                             _store_abnormalities(db, report_id, interp.id, items)
+                        # 刷新解释统计（含结论异常）
+                        from app.modules.interpretation.service import refresh_interpretation_counts
+                        refresh_interpretation_counts(db, interp.id)
             except Exception as e:
                 _log.warning("abnormality extraction failed report=%d: %s", report_id, e)
             # 成功 → 计 batch file 进度(interp_ok)

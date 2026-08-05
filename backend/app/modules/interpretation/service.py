@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment, TriageRule
 from app.modules.interpretation.rules_engine import rules_engine
@@ -61,6 +62,25 @@ def process_interpretation(db: Session, report_id: int, hospital_id: str):
     run_interpretation_agent(hospital_id, db, report_id)
 
 
+def refresh_interpretation_counts(db: Session, interpretation_id: int) -> None:
+    """用去重后的实际数据刷新 report_interpretation 的红/黄/绿区统计。"""
+    items = get_judgments_with_indicator_detail(db, interpretation_id)
+    red_count = sum(1 for it in items if it.get("color_level") == "red")
+    yellow_count = sum(1 for it in items if it.get("color_level") == "yellow")
+    green_count = sum(1 for it in items if it.get("color_level") == "green")
+    if red_count > 0:
+        overall = "red"
+    elif yellow_count > 0:
+        overall = "yellow"
+    else:
+        overall = "green"
+    db.execute(
+        text("UPDATE report_interpretation SET red_count=:r, yellow_count=:y, green_count=:g, overall_level=:o WHERE id=:iid"),
+        {"r": red_count, "y": yellow_count, "g": green_count, "o": overall, "iid": interpretation_id},
+    )
+    db.commit()
+
+
 def get_interpretation(db: Session, report_id: int) -> Optional[ReportInterpretation]:
     return db.query(ReportInterpretation).filter(ReportInterpretation.report_id == report_id).first()
 
@@ -90,10 +110,10 @@ def _fuzzy_overlap(a: str, b: str) -> bool:
     longer = nb if shorter == na else na
     if len(shorter) >= 3 and shorter in longer:
         return True
-    # 字符重叠率 ≥ 80% 且长度差 ≤ 2
+    # 字符重叠率 ≥ 80% 且长度差 ≤ 2，且双方均 ≥ 4 字符（防短词误匹配如"甲胎蛋白"vs"白蛋白"）
     sa, sb = set(na), set(nb)
     overlap = len(sa & sb) / min(len(sa), len(sb))
-    if overlap >= 0.8 and abs(len(na) - len(nb)) <= 2:
+    if overlap >= 0.8 and abs(len(na) - len(nb)) <= 2 and len(na) >= 4 and len(nb) >= 4:
         return True
     return False
 
@@ -102,7 +122,7 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
     from sqlalchemy import text
     rows = db.execute(text(
         "SELECT j.indicator_id, j.item_name, j.result_value, j.deviation, j.color_level, "
-        "i.unit, i.ref_range_low, i.ref_range_high, i.raw_text "
+        "i.unit, i.ref_range_low, i.ref_range_high, i.raw_text, j.source "
         "FROM indicator_judgment j "
         "LEFT JOIN report_indicator i ON i.id = j.indicator_id "
         "WHERE j.interpretation_id = :iid ORDER BY j.id"
@@ -111,12 +131,13 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
     all_items = [
         {"indicator_id": r[0], "item_name": r[1], "result_value": r[2],
          "deviation": r[3], "color_level": r[4], "unit": r[5],
-         "ref_range_low": r[6], "ref_range_high": r[7], "raw_text": r[8]}
+         "ref_range_low": r[6], "ref_range_high": r[7], "raw_text": r[8],
+         "source": r[9]}
         for r in rows
     ]
 
-    regular_items = [it for it in all_items if not it["raw_text"]]
-    conclusion_items = [it for it in all_items if it["raw_text"]]
+    regular_items = [it for it in all_items if it.get("source") != "conclusion"]
+    conclusion_items = [it for it in all_items if it.get("source") == "conclusion"]
 
     if not conclusion_items:
         return all_items
@@ -158,36 +179,38 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
 
         kept.append(citem)
 
+    # Rule 2: 结论异常 vs 绿色指标同名 → 以结论为准，剔除绿色指标项
+    kept_names = {it["item_name"] for it in kept}
+    regular_items = [it for it in regular_items
+                     if not (it["item_name"] in kept_names and it.get("color_level") == "green")]
+
     return regular_items + kept
 
 
-def _link_disease_mapping(db, name_a: str, name_b: str) -> None:
-    """确保 name_a 和 name_b 指向同一条 disease_mapping 记录。"""
+def _link_disease_mapping(db, conclusion_name: str, regular_name: str) -> None:
+    """统一 disease_mapping：以指标型名称（regular_name）的 disease_name 为准，
+    将结论型名称（conclusion_name）的条目删除，避免重复。"""
     from sqlalchemy import text
-    row_a = db.execute(text(
-        "SELECT id, item_name_standard FROM disease_mapping WHERE disease_name = :dn OR item_name_standard = :nm LIMIT 1"
-    ), {"dn": name_a, "nm": name_a}).fetchone()
-    row_b = db.execute(text(
-        "SELECT id, item_name_standard FROM disease_mapping WHERE disease_name = :dn OR item_name_standard = :nm LIMIT 1"
-    ), {"dn": name_b, "nm": name_b}).fetchone()
+    row_c = db.execute(text(
+        "SELECT id, disease_name FROM disease_mapping WHERE disease_name = :dn OR item_name_standard = :nm LIMIT 1"
+    ), {"dn": conclusion_name, "nm": conclusion_name}).fetchone()
+    row_r = db.execute(text(
+        "SELECT id, disease_name FROM disease_mapping WHERE disease_name = :dn OR item_name_standard = :nm LIMIT 1"
+    ), {"dn": regular_name, "nm": regular_name}).fetchone()
 
-    std_a = row_a[1] if row_a else name_a
-    std_b = row_b[1] if row_b else name_b
-    if std_a == std_b:
+    if not row_c or not row_r:
+        return
+    if row_c[1] == row_r[1]:
+        return
+    if row_c[0] == row_r[0]:
         return
 
-    target = std_a if len(std_a) <= len(std_b) else std_b
-    if row_b:
-        db.execute(text(
-            "UPDATE disease_mapping SET item_name_standard = :target WHERE id = :id"
-        ), {"target": target, "id": row_b[0]})
-    elif not row_a:
-        db.execute(text(
-            "INSERT INTO disease_mapping (item_name_standard, item_name, disease_name, disease_category, sort_code) "
-            "VALUES (:std, :orig, :dn, 'OTHER', 200)"
-            "ON DUPLICATE KEY UPDATE disease_name=VALUES(disease_name)"
-        ), {"std": target, "orig": name_b, "dn": name_b})
-    db.commit()
+    # 删除结论型条目（指标型条目已覆盖同名 disease）
+    try:
+        db.execute(text("DELETE FROM disease_mapping WHERE id = :id"), {"id": row_c[0]})
+        db.commit()
+    except Exception:
+        pass
 
 
 def get_high_risk_list(db: Session, hospital_id: str) -> List[dict]:

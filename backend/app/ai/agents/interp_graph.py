@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Annotated, List, Optional, TypedDict
@@ -23,6 +24,19 @@ from app.ai.agents.citation_matcher import inject_citations
 from app.ai.agents.judge_graph import run_judge
 from app.ai.llm import get_chat_model, _guarded
 from app.config import settings
+
+_RANGE_RE = re.compile(r"([\d.]+)\s*[-~—到至]\s*([\d.]+)")
+
+
+def _fix_ref_range(ind: dict) -> None:
+    """防御性修复：当 ref_range_low 包含完整范围且 ref_range_high 为空时拆分。"""
+    low = ind.get("ref_range_low")
+    high = ind.get("ref_range_high")
+    if low and not high:
+        m = _RANGE_RE.match(str(low).strip())
+        if m:
+            ind["ref_range_low"] = m.group(1)
+            ind["ref_range_high"] = m.group(2)
 
 logger = logging.getLogger("app.interp")
 
@@ -331,6 +345,8 @@ def build_interp_graph(hospital_id: str, db: Session):
              "ref_range_low": r[5], "ref_range_high": r[6]}
             for r in rows
         ]
+        for ind in indicators:
+            _fix_ref_range(ind)
         return {"indicators": indicators, "user_id": user_id}
 
     def run_rules(state: InterpState) -> dict:
@@ -484,6 +500,7 @@ def build_interp_graph(hospital_id: str, db: Session):
                 result_value=j["result_value"],
                 deviation=j["deviation"],
                 color_level=j["color_level"],
+                source="indicator",
                 matched_rule_id=j["matched_rule_id"],
                 explanation=None, suggestion=None, knowledge_refs=None,
                 certainty=None, certainty_reason=None,

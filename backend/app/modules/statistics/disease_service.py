@@ -26,10 +26,22 @@ _DIM_EXPR = {
     "unit": "COALESCE(NULLIF(ri.unit_name, ''), '未知')",
 }
 
-# 疾病模式下：指标名 -> 疾病名（未命中归"其他"）
+# 排除演示数据的 WHERE 片段（所有统计查询统一过滤）
+_DEMO_FILTER = "AND (ri.check_type IS NULL OR ri.check_type != 'DEMO')"
+
+# 按指标模式只统计指标来源异常（排除总检建议来源）
+_SRC_INDICATOR_FILTER = "AND ij.source = 'indicator'"
+
+# 按疾病模式：排除已有 indicator 源的指标（"只在按指标中显示"，不留 conclusion 副本亦不留 indicator 副本）
+_EXCLUDE_INDICATOR_ITEMS_FILTER = (
+    "AND NOT EXISTS ("
+    "SELECT 1 FROM indicator_judgment ij2"
+    " WHERE ij2.interpretation_id = ij.interpretation_id"
+    " AND ij2.item_name = ij.item_name AND ij2.source = 'indicator')"
+)
 _DISEASE_JOIN = (
     "LEFT JOIN disease_mapping dm "
-    "ON dm.item_name_standard = ij.item_name AND dm.enabled = 1"
+    "ON dm.item_name_standard COLLATE utf8mb4_unicode_ci = ij.item_name AND dm.enabled = 1"
 )
 
 
@@ -59,9 +71,10 @@ def indicator_cross(
 
     # 1) 各维度值样本量（日期区间内有报告的去重人数口径为报告数）
     sample_sql = f"""
-        SELECT {dim} AS label, COUNT(DISTINCT ri.id) AS sample_size
+        SELECT {dim} AS label, COUNT(DISTINCT ri.user_id, ri.report_date) AS sample_size
         FROM report_info ri
         WHERE ri.report_date BETWEEN :start AND :end
+        {_DEMO_FILTER}
         GROUP BY label
         ORDER BY sample_size DESC
     """
@@ -78,13 +91,20 @@ def indicator_cross(
         indicator_filter = f"AND ij.item_name IN ({names})"
         for i, name in enumerate(indicators):
             params[f"ind{i}"] = name
+    # 按指标模式只统计指标类异常（排除总检建议类）
+    src_filter = _SRC_INDICATOR_FILTER if stat_mode == "indicator" else ""
+    # 按疾病模式去重（同报告同指标已有 indicator 则排除 conclusion）
+    dedup_filter = _EXCLUDE_INDICATOR_ITEMS_FILTER if stat_mode == "disease" else ""
     count_sql = f"""
-        SELECT {dim} AS label, {item_col} AS item_name, COUNT(DISTINCT ri.id) AS cnt
+        SELECT {dim} AS label, {item_col} AS item_name, COUNT(DISTINCT ri.user_id, ri.report_date) AS cnt
         FROM indicator_judgment ij
         JOIN report_interpretation interp ON ij.interpretation_id = interp.id
         JOIN report_info ri ON interp.report_id = ri.id
         {join}
         WHERE ri.report_date BETWEEN :start AND :end
+          {_DEMO_FILTER}
+          {src_filter}
+          {dedup_filter}
           AND ij.color_level IN ('red', 'yellow')
           {indicator_filter}
         GROUP BY label, item_name
@@ -117,22 +137,23 @@ def disease_trend(
     diseases: Optional[List[str]],
     years: int,
 ) -> dict:
-    """变化趋势：近 N 年各病种/指标 检出率趋势"""
-    # 1) 确定年份序列：取数据中最新的 N 个年份，升序返回
-    year_sql = """
-        SELECT DISTINCT YEAR(report_date) AS y FROM report_info
-        ORDER BY y DESC LIMIT :n
+    """变化趋势：近 N 年各病种/指标 检出率趋势（年份序列连续，缺数据年份补零）"""
+    # 1) 确定年份序列：以数据中最大年份为锚点，向前生成连续的 N 年序列
+    max_year_sql = """
+        SELECT MAX(YEAR(report_date)) AS y FROM report_info
+        WHERE check_type IS NULL OR check_type != 'DEMO'
     """
-    year_list = sorted(
-        [r.y for r in db.execute(text(year_sql), {"n": years}) if r.y is not None]
-    )
-    if not year_list:
+    max_year = db.execute(text(max_year_sql)).scalar()
+    if not max_year:
         return {"stat_mode": stat_mode, "category": category, "years": [], "series": []}
+    year_list = list(range(max_year - years + 1, max_year + 1))
 
     # 2) 每年样本量
     sample_sql = """
-        SELECT YEAR(report_date) AS y, COUNT(DISTINCT id) AS sample_size
-        FROM report_info GROUP BY y
+        SELECT YEAR(report_date) AS y, COUNT(DISTINCT user_id, report_date) AS sample_size
+        FROM report_info
+        WHERE check_type IS NULL OR check_type != 'DEMO'
+        GROUP BY y
     """
     samples = {
         r.y: r.sample_size for r in db.execute(text(sample_sql))
@@ -153,13 +174,19 @@ def disease_trend(
         for i, name in enumerate(diseases):
             params[f"d{i}"] = name
 
+    # 按指标模式只统计指标类异常
+    src_filter = _SRC_INDICATOR_FILTER if stat_mode == "indicator" else ""
+    dedup_filter = _EXCLUDE_INDICATOR_ITEMS_FILTER if stat_mode == "disease" else ""
     count_sql = f"""
-        SELECT YEAR(ri.report_date) AS y, {item_col} AS item_name, COUNT(DISTINCT ri.id) AS cnt
+        SELECT YEAR(ri.report_date) AS y, {item_col} AS item_name, COUNT(DISTINCT ri.user_id, ri.report_date) AS cnt
         FROM indicator_judgment ij
         JOIN report_interpretation interp ON ij.interpretation_id = interp.id
         JOIN report_info ri ON interp.report_id = ri.id
         {join}
         WHERE YEAR(ri.report_date) BETWEEN :y0 AND :y1
+          {_DEMO_FILTER}
+          {src_filter}
+          {dedup_filter}
           AND ij.color_level IN ('red', 'yellow')
           {filters}
         GROUP BY y, item_name
@@ -203,20 +230,25 @@ def unit_disease_spectrum(
         params["unit_name"] = unit_name
 
     total_sql = f"""
-        SELECT COUNT(DISTINCT ri.id) AS total FROM report_info ri
-        WHERE ri.report_date BETWEEN :start AND :end {unit_filter}
+        SELECT COUNT(DISTINCT ri.user_id, ri.report_date) AS total FROM report_info ri
+        WHERE ri.report_date BETWEEN :start AND :end {_DEMO_FILTER} {unit_filter}
     """
     total = db.execute(text(total_sql), params).fetchone().total or 0
 
     join = _DISEASE_JOIN if stat_mode == "disease" else ""
     item_col = _item_expr(stat_mode)
+    src_filter = _SRC_INDICATOR_FILTER if stat_mode == "indicator" else ""
+    dedup_filter = _EXCLUDE_INDICATOR_ITEMS_FILTER if stat_mode == "disease" else ""
     top_sql = f"""
-        SELECT {item_col} AS item_name, COUNT(DISTINCT ri.id) AS cnt
+        SELECT {item_col} AS item_name, COUNT(DISTINCT ri.user_id, ri.report_date) AS cnt
         FROM indicator_judgment ij
         JOIN report_interpretation interp ON ij.interpretation_id = interp.id
         JOIN report_info ri ON interp.report_id = ri.id
         {join}
         WHERE ri.report_date BETWEEN :start AND :end
+          {_DEMO_FILTER}
+          {src_filter}
+          {dedup_filter}
           AND ij.color_level IN ('red', 'yellow')
           {unit_filter}
         GROUP BY item_name
@@ -243,12 +275,15 @@ def unit_disease_spectrum(
         class_col = "COALESCE(NULLIF(rind.category, ''), '未分类')"
         class_join = "LEFT JOIN report_indicator rind ON ij.indicator_id = rind.id"
     class_sql = f"""
-        SELECT {class_col} AS class_name, COUNT(DISTINCT ri.id) AS cnt
+        SELECT {class_col} AS class_name, COUNT(DISTINCT ri.user_id, ri.report_date) AS cnt
         FROM indicator_judgment ij
         JOIN report_interpretation interp ON ij.interpretation_id = interp.id
         JOIN report_info ri ON interp.report_id = ri.id
         {class_join}
         WHERE ri.report_date BETWEEN :start AND :end
+          {_DEMO_FILTER}
+          {src_filter}
+          {dedup_filter}
           AND ij.color_level IN ('red', 'yellow')
           {unit_filter}
         GROUP BY class_name

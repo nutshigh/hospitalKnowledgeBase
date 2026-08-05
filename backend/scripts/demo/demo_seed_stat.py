@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """演示数据灌入脚本（**仅本地/演示环境使用，严禁在生产执行**）。
 
+⚠️⚠️ 警告：本脚本会向数据库写入模拟数据（check_type='DEMO'），
+⚠️⚠️ 请仅在本地演示库（hospital_H001 等）上运行，严禁在生产库执行！
+
 向 hospital_H001 写入 2021-2025 年、5 个单位、男女两性的模拟体检报告数据，
 用于验证统计分析端点（多维对比/趋势/疾病谱）。数据量约 2500 份报告。
 
-执行：backend/.venv-stat/bin/python scripts/demo_seed_stat.py
+执行：cd ~/hospitalKnowledgeBase/backend && .venv-stat/bin/python scripts/demo/demo_seed_stat.py
 回滚：DELETE FROM indicator_judgment WHERE interpretation_id IN (SELECT id FROM report_interpretation WHERE report_id IN (SELECT id FROM report_info WHERE check_type='DEMO'));
       DELETE FROM report_interpretation WHERE report_id IN (SELECT id FROM report_info WHERE check_type='DEMO');
       DELETE FROM report_info WHERE check_type='DEMO';

@@ -1,7 +1,10 @@
 import logging
+import re
 from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
+
+_RANGE_PATTERN = re.compile(r"([\d.]+)\s*[-~—到至]\s*([\d.]+)")
 
 _STANDARD_MAP: Dict[str, str] = {
     "血糖": "空腹血糖（GLU）",
@@ -20,19 +23,27 @@ _STANDARD_MAP: Dict[str, str] = {
     "红细胞": "红细胞计数（RBC）",
     "血红蛋白": "血红蛋白（Hb）",
     "血小板": "血小板计数（PLT）",
+    # === STRATEGY:v2026-08-04-alias 别名归一 ===
+    # 报告原文带"血清"前缀，统一为标准名"血清同型半胱氨酸"
+    "同型半胱氨酸": "血清同型半胱氨酸",
+    # === END STRATEGY ===
 }
 
 
 def normalize_item_name(raw_name: str) -> tuple:
+    # === STRATEGY:v2026-08-04-nospace 去空格 ===
+    # 统计中 "腹部B超" 与 "腹部B 超" 被当成两个实体。
+    # 标准化名统一去空格（全角/半角），如 "腹部B 超" → "腹部B超"。
+    # 回退: 将 return 改回 raw_name.strip(), None 即可
     cleaned = raw_name.strip().replace(" ", "").replace("　", "")
     for alias, standard in _STANDARD_MAP.items():
         if alias in cleaned:
             return standard, None
-    return raw_name.strip(), None
+    return cleaned, None
 
 
 def normalize_indicators(indicators: list[dict]) -> list[dict]:
-    """名称标准化 + 去重。
+    """名称标准化 + 参考范围拆分 + 去重。
 
     体检 PDF 通常在多个章节（主检报告 / 医学科普 / 分项报告）逐一列出同一指标的同一
     数值；LLM 抽取时按章节各返回一条，DB 入库后会出现同名同值的多行。run_rules →
@@ -44,6 +55,7 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
         name, code = normalize_item_name(ind.get("item_name", ""))
         ind["item_name_standard"] = name
         ind["item_code"] = code
+        _split_ref_range(ind)
 
     seen: set = set()
     deduped: list[dict] = []
@@ -63,3 +75,14 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
             len(indicators), len(deduped), len(indicators) - len(deduped),
         )
     return deduped
+
+
+def _split_ref_range(ind: dict) -> None:
+    """当 ref_low 包含完整范围字符串（如 0.18-0.22）且 ref_high 为空时拆分。"""
+    low = ind.get("ref_low")
+    high = ind.get("ref_high")
+    if low and not high:
+        m = _RANGE_PATTERN.match(str(low).strip())
+        if m:
+            ind["ref_low"] = m.group(1)
+            ind["ref_high"] = m.group(2)

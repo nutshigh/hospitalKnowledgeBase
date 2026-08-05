@@ -68,6 +68,7 @@ BEGIN
         'id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id BIGINT DEFAULT NULL, '
         'user_id BIGINT NOT NULL, name VARCHAR(50), gender VARCHAR(5), age INT, '
         'report_date DATE, check_type VARCHAR(20), unit_name VARCHAR(100), '
+        'conclusion_text TEXT DEFAULT NULL, '
         'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP'
         ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -99,7 +100,8 @@ BEGIN
         'id BIGINT AUTO_INCREMENT PRIMARY KEY, interpretation_id BIGINT NOT NULL, '
         'indicator_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, '
         'result_value VARCHAR(50) DEFAULT NULL, deviation VARCHAR(10) DEFAULT NULL, '
-        'color_level VARCHAR(10) DEFAULT NULL, matched_rule_id BIGINT DEFAULT NULL, '
+        'color_level VARCHAR(10) DEFAULT NULL, source VARCHAR(20) DEFAULT NULL, '
+        'matched_rule_id BIGINT DEFAULT NULL, '
         'explanation TEXT DEFAULT NULL, suggestion TEXT DEFAULT NULL, '
         'knowledge_refs JSON DEFAULT NULL, certainty VARCHAR(10) DEFAULT NULL, '
         'certainty_reason TEXT DEFAULT NULL'
@@ -187,6 +189,21 @@ BEGIN
         'UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), '
         'CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) '
         'REFERENCES `', @db_name, '`.batch_import(id)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.disease_mapping ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, '
+        'item_name_standard VARCHAR(200) NOT NULL, '
+        'item_name VARCHAR(200) DEFAULT NULL, '
+        'disease_name VARCHAR(200) NOT NULL, '
+        'disease_category VARCHAR(20) DEFAULT ''OTHER'', '
+        'disease_class VARCHAR(100) DEFAULT NULL, '
+        'sort_code INT DEFAULT 200, '
+        'enabled TINYINT DEFAULT 1, '
+        'create_time DATETIME DEFAULT CURRENT_TIMESTAMP, '
+        'update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, '
+        'UNIQUE KEY uk_item_name_std (item_name_standard)'
         ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 END//

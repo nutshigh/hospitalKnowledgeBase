@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -107,14 +108,18 @@ async def _extract_conclusion_async(text: str) -> Optional[str]:
 _ABNORMALITY_PROMPT = """请从以下体检报告的"总检建议与结论"文本中，逐条提取所有异常项。
 
 每条异常对应一个 JSON 对象，包含以下字段：
-- item_name: 结论中该条问题的完整原文描述（如"血肌酸激酶偏高，同型半胱氨酸偏高"）
-- item_normalized: 将该项问题标准化为一个标准医学名称，**必须**保留解剖部位前缀：
-  * "甲状腺双叶多发囊性结节，TI-RADS 2级" → 标准化为 "甲状腺囊性结节"（不能只输出"囊性结节"）
-  * "肝内钙化灶0.5cm" → 标准化为 "肝内钙化灶"（不能只输出"钙化灶"）
-  * "右肺尖间隔旁型肺气肿" → 标准化为 "肺气肿"（双肺通用可省位置）
-  * 规则：结论文本中异常名称前提到了哪个器官/部位，标准化名就必须带上
+- item_name: 该条问题的**异常发现**名称，直接取自文本，**必须**包含解剖部位：
+  * "甲状腺双叶多发囊性结节" → "甲状腺双叶多发囊性结节"
+  * "肝内钙化灶0.5cm" → "肝内钙化灶"
+  * "右肺尖间隔旁型肺气肿" → "右肺尖间隔旁型肺气肿"
+  * "室上性早搏" → "室上性早搏"
+  * 去掉测量细节（如"大者0.3cm×0.2cm""TI-RADS 2 级""0.5cm"）和检查方法名
+- item_normalized: 将异常发现标准化为一个标准医学名称，**必须**保留解剖部位前缀：
+  * "甲状腺双叶多发囊性结节" → "甲状腺囊性结节"（不能只输出"囊性结节"）
+  * "肝内钙化灶" → "肝内钙化灶"（不能只输出"钙化灶"）
+  * "右肺尖间隔旁型肺气肿" → "右肺尖间隔旁型肺气肿"（不能只输出"肺气肿"）
+  * 规则：原文提到哪个器官/部位，标准化名就必须带上该部位
   * 注意区分程度：体重指数超出正常范围但未达肥胖 → "超重"（不是"肥胖"），BMI≥28 可判为"肥胖"
-  * 避免过度泛化，尊重原文具体描述
 
 - suggestion: 对应的建议原文，保留完整措辞
 - deviation: 偏离方向，取值为"偏高""偏低""偏大""偏小""偏重""偏轻""异常"，解析不到则为null
@@ -122,7 +127,7 @@ _ABNORMALITY_PROMPT = """请从以下体检报告的"总检建议与结论"文�
 
 注意事项：
 - 每一条编号对应的内容视为一个异常项，不要把多条合并
-- 保留原文措辞，不要缩写或改写
+- **逐条核对，不允许遗漏**：输出前必须逐条对照输入文本的每一条编号，确保每条编号都对应一个输出项，缺少任何一条都必须补上，绝不能漏掉任意一条
 - 只输出 JSON 数组，不要加任何说明或 Markdown 代码块
 - 如果没有任何异常项，输出空数组[]
 
@@ -135,7 +140,12 @@ async def _extract_abnormalities_async(conclusion_text: str) -> list[dict]:
     from app.ai.llm import get_chat_model, _guarded
     import json as _json, re as _re
 
-    prompt = _ABNORMALITY_PROMPT.format(text=conclusion_text[:8000])
+    # 预处理1：合并 PDF 导致的折行，同一编号下的行拼成一段
+    text = _merge_wrapped_lines(conclusion_text)
+    # 预处理2：冒号拆分——只保留冒号后的正文（检查项前缀不发给 LLM）
+    text = _keep_body_after_colon(text)
+
+    prompt = _ABNORMALITY_PROMPT.format(text=text[:8000])
     model = get_chat_model()
 
     async def _call():
@@ -144,17 +154,153 @@ async def _extract_abnormalities_async(conclusion_text: str) -> list[dict]:
     try:
         resp = await _guarded(_call())
         content = resp.content.strip()
-        # 去掉可能的 <think> 标签和 Markdown 代码块
         content = _re.sub(r'<think>.*?</think>', '', content, flags=_re.DOTALL)
         content = content.replace('</think>', '').replace('<think>', '')
         content = _re.sub(r'```json\s*', '', content)
         content = _re.sub(r'```\s*', '', content)
         items = _json.loads(content)
         if isinstance(items, list):
+            for item in items:
+                item["item_name"] = _strip_check_prefix(item.get("item_name", ""))
+            # === STRATEGY:v2026-08-03-prefix-recover 部位补全 ===
+            # LLM 对 item_normalized 的扩展不稳定（同一条"钙化灶"有时扩展成"肝内钙化灶"）。
+            # 补救：从冒号正文中查找包含 item_name 的更长片段（含解剖部位前缀），
+            # 当 LLM 未主动扩展时用它补全 item_name（纯确定性，无词表）。
+            # 回退: 删除此 for 循环即可
+            for item in items:
+                item_name = item.get("item_name", "")
+                llm_norm = item.get("item_normalized") or ""
+                if not (llm_norm and len(llm_norm) > len(item_name)):
+                    enriched = _recover_anatomical_prefix(text, item_name)
+                    if enriched and enriched != item_name:
+                        item["item_name"] = enriched
+                        _log.info("prefix-recover: %s -> %s", item_name, enriched)
+            # === END STRATEGY ===
             return items
     except Exception as e:
         _log.warning("Failed to extract abnormalities: %s", e)
     return []
+
+
+def _recover_anatomical_prefix(text: str, item_name: str) -> Optional[str]:
+    """从冒号正文中查找包含 item_name 的更长片段。
+
+    若正文中存在"部位词 + item_name"的连续片段（如正文"肝内钙化灶0.5cm"、
+    item_name"钙化灶" → 返回"肝内钙化灶"），返回该片段；否则返回原 item_name。
+
+    注意：不补"血/血清/血浆/全血"等化验前缀（如"血肌酸激酶" → 保持"肌酸激酶"）。
+    """
+    if not item_name:
+        return item_name
+    for line in text.split('\n'):
+        # 去掉编号前缀（如"3、"）
+        line = re.sub(r'^\d+[\u3001,.\uff09)]?\s*', '', line.strip())
+        if not line or item_name not in line:
+            continue
+        # 尝试每个出现位置，取"部位词+item_name"的最长扩展
+        for m in re.finditer(re.escape(item_name), line):
+            start = m.start()
+            # 向前扩展到最近的汉字边界（停止在全角逗号/句号/数字/括号/空格等）
+            prefix_start = start
+            while prefix_start > 0 and '\u4e00' <= line[prefix_start - 1] <= '\u9fa5':
+                prefix_start -= 1
+            prefix = line[prefix_start:start]
+            # 只补器官/部位前缀（如"肝内"、"甲状腺双叶多发"），跳过化验前缀
+            if prefix and len(prefix) >= 1:
+                if re.fullmatch(r'[血血清浆全]+', prefix):
+                    continue
+                return line[prefix_start:m.end()]
+    return item_name
+
+
+def _keep_body_after_colon(text: str) -> str:
+    """冒号拆分策略：检查项前缀（冒号前）是检查方法名，正文（冒号后）才是异常发现。
+    只保留正文，避免 LLM 把检查项名（如"甲状腺B 超"）当作异常或干扰部位提取。
+
+    规则（按句号切分，冒号为第二边界）：
+    1. 只处理有编号前缀的行（如"2、肺结节"），无编号行（解释/数据/建议行）丢弃
+    2. 去掉以"建议"开头的句子（那是建议，不是发现）
+    3. 去掉以"未检"开头的句子（如"未检项目：便潜血"，是未检说明，不是发现）
+    4. 句子含冒号 → 只保留冒号后的内容（正文）
+    5. 句子无冒号 → 整句保留（如"外耳道耵聍"）
+    """
+    out = []
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = re.match(r'^(\d+[\u3001,.\uff09)]?\s*)(.*)$', stripped)
+        if not m:
+            # 无编号前缀 → 解释/数据/建议行，丢弃
+            continue
+        num_prefix = m.group(1)
+        rest = m.group(2)
+        # 按句号/分号切成句子
+        sentences = [s.strip() for s in re.split(r'[。；;]', rest) if s.strip()]
+        kept = []
+        for sent in sentences:
+            # 建议句丢弃
+            if sent.startswith('建议'):
+                continue
+            # 未检说明丢弃（如"未检项目：便潜血"）
+            if sent.startswith('未检') or sent.startswith('未查') or sent.startswith('未做'):
+                continue
+            # 有冒号 → 只留冒号后正文；无冒号 → 整句
+            if '：' in sent or ':' in sent:
+                after = re.split(r'[：:]', sent, maxsplit=1)[1].strip()
+                if after:
+                    kept.append(after)
+            else:
+                kept.append(sent)
+        if kept:
+            out.append(num_prefix + ' '.join(kept))
+    return '\n'.join(out)
+
+
+def _merge_wrapped_lines(text: str) -> str:
+    """合并 PDF 折行：同一编号下的连续行拼成一段，避免 LLM 把一条结论拆成多条。
+
+    编号行含冒号（如"3、甲状腺B 超：..."）→ 后续行是折行/建议，合并到该行。
+    编号行无冒号（如"2、肺结节"）→ 该行是发现名，后续行是解释段落，不合并。
+    """
+    lines = text.split('\n')
+    out = []
+    buf = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if buf:
+                out.append(' '.join(buf))
+                buf = []
+            continue
+        if re.match(r'^\d+[\u3001,.\uff09)]?\s*', stripped):
+            if buf:
+                out.append(' '.join(buf))
+            if '：' in stripped or ':' in stripped:
+                buf = [stripped]
+            else:
+                out.append(stripped)
+                buf = []
+        else:
+            buf.append(stripped)
+    if buf:
+        out.append(' '.join(buf))
+    return '\n'.join(out)
+
+
+_CHECK_PREFIX_RE = re.compile(
+    r'^[^：:，,。]*?(?:B\s*超|CT\s*平扫|CT\s*检查|X\s*光|X\s*线|MRI|超声|心电图|'
+    r'人体代谢率|人体成分|骨密度|动脉硬化|经颅多普勒|'
+    r'检查|检测|测定)\s*[：:]\s*'
+)
+
+
+def _strip_check_prefix(item_name: str) -> str:
+    """剥离 LLM 可能误保留的检查项前缀，如 '甲状腺B 超：甲状腺双叶多发囊性结节' → '甲状腺双叶多发囊性结节'。"""
+    m = _CHECK_PREFIX_RE.match(item_name)
+    if m:
+        return item_name[m.end():]
+    return item_name
 
 
 def _store_abnormalities(db, report_id: int, interpretation_id: int,
@@ -192,8 +338,18 @@ def _store_abnormalities(db, report_id: int, interpretation_id: int,
 
         # 标准化名仅用于 disease_mapping 链接，不覆盖 item_name
         llm_normalized = (item.get("item_normalized") or "").strip()
-        db_normalized = _normalize_abnormality(db, item_name)
+        # === STRATEGY:v2026-07-30-colon 冒号策略配套 ===
+        # 把 LLM 的 item_normalized 传给 _normalize_abnormality：
+        # 自动插入新条目时，若 LLM 扩展了名称（更长），用 LLM 的长名建条目。
+        # 回退: 传 None 即可（即 db_normalized = _normalize_abnormality(db, item_name)）
+        db_normalized = _normalize_abnormality(db, item_name, llm_normalized)
+        # === END STRATEGY ===
+
+        # === STRATEGY:v2026-07-30-REVERTED 已回退到旧策略 ===
+        # 旧策略: db_normalized or llm_normalized or item_name
+        # (曾尝试"LLM 扩展名优先"策略 v2026-07-30, 因 LLM 输出不稳定已回退)
         normalized = db_normalized or llm_normalized or item_name
+        # === END STRATEGY ===
 
         # 同一 interpretation 内去重（按归一化名）
         dup = db.execute(
@@ -224,55 +380,115 @@ def _store_abnormalities(db, report_id: int, interpretation_id: int,
             result_value=None,
             deviation=deviation if deviation else None,
             color_level="red" if is_urgent else "yellow",
+            source="conclusion",
             explanation=item_name,
             suggestion=suggestion,
         )
         db.add(ij)
+
+    # 结论型内部去重：同一 interpretation 内新存储的结论项互相比对，模糊匹配则统一 disease_mapping
+    if len(abnormalities) > 1:
+        from app.modules.interpretation.service import _fuzzy_overlap, _link_disease_mapping
+        for i in range(len(abnormalities)):
+            for j in range(i + 1, len(abnormalities)):
+                a_name = abnormalities[i].get("item_name", "")
+                b_name = abnormalities[j].get("item_name", "")
+                if a_name and b_name and _fuzzy_overlap(a_name, b_name):
+                    _link_disease_mapping(db, a_name, b_name)
 
     db.commit()
     _log.info("abnormalities stored report=%d interp=%d count=%d",
               report_id, interpretation_id, len(abnormalities))
 
 
-def _normalize_abnormality(db, item_name: str) -> Optional[str]:
+def _normalize_abnormality(db, item_name: str, llm_normalized: Optional[str] = None) -> Optional[str]:
     """查 disease_mapping 表，返回标准化 disease_name。
-    
-    找不到映射时返回 None，由调用方使用 LLM 的 item_normalized。
-    不再自动创建新映射，避免 LLM 每次的措辞差异产生噪音条目。
+    优先精确匹配，其次用 _fuzzy_overlap 模糊匹配已有条目（避免创建重复映射）。
+    找不到时自动创建新条目。
+
+    === STRATEGY:v2026-07-30-colon 冒号策略配套 ===
+    llm_normalized: LLM 的 item_normalized。自动插入新条目时，若 LLM 扩展了名称
+    （llm_normalized 比 item_name 长，如 "甲状腺囊性结节" > "囊性结节"），
+    用 LLM 的长名建条目，避免新库首次遇到该词时建成短名。
+    回退: 调用方传 None 即恢复旧行为。
+    === END STRATEGY ===
     """
     from sqlalchemy import text
-    import re
+    from app.modules.interpretation.service import _fuzzy_overlap
+    import re as _re
 
-    core = re.sub(r'(偏高|偏低|偏大|偏小|偏重|偏轻|异常|检查|显示|可见)+$', '', item_name).strip()
+    # === STRATEGY:v2026-08-04-nospace 去空格 ===
+    # 与 term_normalizer 保持一致：标准化名统一去空格（"腹部B 超"→"腹部B超"）
+    item_name = item_name.replace(" ", "").replace("　", "")
+    core = _re.sub(r'(偏高|偏低|偏大|偏小|偏重|偏轻|异常|检查|显示|可见)+$', '', item_name).strip()
     if not core:
         return None
 
     try:
-        # 精确匹配
+        # 1. 精确匹配
         row = db.execute(text(
-            "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND item_name_standard=:exact LIMIT 1"
-        ), {"exact": core}).scalar()
+            "SELECT id, item_name_standard, disease_name FROM disease_mapping WHERE enabled=1 AND (item_name_standard=:exact OR disease_name=:exact) LIMIT 1"
+        ), {"exact": core}).fetchone()
         if row:
-            return row
+            return row[2]
 
-        # 模糊匹配：core 包含 item_name_standard 或反之
-        row = db.execute(text(
-            "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND (item_name_standard LIKE CONCAT('%', :core, '%') OR :core LIKE CONCAT('%', item_name_standard, '%')) ORDER BY CHAR_LENGTH(item_name_standard) LIMIT 1"
-        ), {"core": core}).scalar()
-        if row:
-            return row
-
-        # 去前缀后重试
-        core_stripped = re.sub(r'^(血|血清|血浆|全血)', '', core).strip()
+        # 2. 前缀剥离后匹配
+        core_stripped = _re.sub(r'^(血|血清|血浆|全血)', '', core).strip()
         if core_stripped != core:
             row = db.execute(text(
-                "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND item_name_standard=:cs LIMIT 1"
-            ), {"cs": core_stripped}).scalar()
+                "SELECT disease_name FROM disease_mapping WHERE enabled=1 AND (item_name_standard=:cs OR disease_name=:cs) LIMIT 1"
+            ), {"cs": core_stripped}).fetchone()
             if row:
-                return row
+                return row[0]
+
+        # 3. _fuzzy_overlap 模糊匹配已有条目
+        candidates = db.execute(text(
+            "SELECT id, item_name_standard, disease_name FROM disease_mapping WHERE enabled=1 ORDER BY id"
+        )).fetchall()
+        best = None
+        best_len = 999
+        for cid, cstd, cdn in candidates:
+            if _fuzzy_overlap(core, cstd) or _fuzzy_overlap(core, cdn) or \
+               (core_stripped and (_fuzzy_overlap(core_stripped, cstd) or _fuzzy_overlap(core_stripped, cdn))):
+                if len(cstd) < best_len:
+                    best = cdn
+                    best_len = len(cstd)
+        if best:
+            return best
+
+        # 4. 未找到 → 创建新映射
+        # === STRATEGY:v2026-07-30-colon ===
+        # 自动插入用 LLM 扩展名（若更长），否则用剥前缀后的短名
+        if llm_normalized and len(llm_normalized) > len(item_name):
+            disease = llm_normalized
+        else:
+            disease = core_stripped if core_stripped else core
+        # === END STRATEGY ===
+        db.execute(text(
+            "INSERT INTO disease_mapping (item_name_standard, item_name, disease_name, disease_category, sort_code) "
+            "VALUES (:std, :orig, :dn, 'OTHER', 200) "
+            "ON DUPLICATE KEY UPDATE disease_name=VALUES(disease_name)"
+        ), {"std": disease, "orig": item_name, "dn": disease})
+        db.commit()
+        return disease
     except Exception:
         pass
     return None
+
+
+def _clean_unit_name(unit_name: Optional[str]) -> Optional[str]:
+    """剥离机构名后缀，只保留医院名。
+    规则：去掉"健康管理中心""体检中心""医疗中心"等后缀。
+    "北京医院健康管理中心" → "北京医院"；"北京友谊医院" 不变。
+    """
+    if not unit_name:
+        return None
+    import re
+    cleaned = re.sub(
+        r'(健康管理中心|健康管理部|健康管理|体检中心|体检部|医疗中心|医院集团|门诊部|有限公司)+$',
+        '', unit_name.strip(),
+    ).strip()
+    return cleaned or None
 
 
 def process_task(db: Session, task_id: int, hospital_id: str,
@@ -311,6 +527,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 "gender": parsed.get("gender"),
                 "age": parsed.get("age"),
                 "check_date": parsed.get("report_date"),
+                "unit_name": parsed.get("unit_name"),
             }
             # LLM already returns ref_low/ref_high — normalize names
             raw_indicators = parsed.get("indicators", [])
@@ -339,9 +556,13 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         report.name = personal_info.get("name")
         report.gender = personal_info.get("gender")
         report.age = personal_info.get("age")
-        report.report_date = personal_info.get("check_date")
+        # LLM 路径返回 report_date，VLM 路径返回 check_date
+        report.report_date = personal_info.get("check_date") or personal_info.get("report_date")
         # report.check_type = personal_info.get("check_type")
-        # report.unit_name = personal_info.get("unit_name")
+        # === STRATEGY:v2026-08-04-unitname 提取体检机构名 ===
+        # 从解析结果写入机构名（LLM/VLM 均已在 prompt/正则中支持提取）
+        report.unit_name = _clean_unit_name(personal_info.get("unit_name"))
+        # === END STRATEGY ===
         db.commit()
         db.refresh(report)
 
@@ -461,6 +682,7 @@ def _build_parse_prompt(text: str) -> str:
   "gender": "男或女",
   "age": 年龄数字或null,
   "report_date": "YYYY-MM-DD或null",
+  "unit_name": "体检机构名称（如XX医院、XX医院健康管理中心）或null",
   "indicators": [
     {{"item_name": "指标名称", "result": "检测结果", "unit": "单位", "ref_low": "参考下限", "ref_high": "参考上限"}}
   ]
@@ -472,7 +694,9 @@ def _build_parse_prompt(text: str) -> str:
 3. 年龄：从"XX岁"提取数字
 4. 参考范围如"3.5-9.5"→ref_low="3.5", ref_high="9.5"；如"<5.0"→ref_low="", ref_high="5.0"
 5. 只提取化验指标数据（血常规、生化、免疫等），不提取问卷、个人信息
-6. 没有的字段填 null
+6. **排除"总检建议与结论"段落**：不要提取"总检建议与结论""总检结论""医师建议""健康指导"等结论段落中的任何内容——那里的"XXX偏高/偏低"是结论文本，不是化验指标。真正的化验指标必须有检测数值（数字）和参考范围，或出现在化验数据表中
+7. unit_name 从"XX医院""XX医院健康管理中心""XX体检中心"等提取机构名，只要医院名（如"xxx医院"），不要"健康管理中心"后缀；找不到填 null
+8. 没有的字段填 null
 
 体检报告文本：
 {text[:24000]}

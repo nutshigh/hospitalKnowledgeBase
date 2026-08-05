@@ -75,7 +75,8 @@ def _parse_personal_info(text: str) -> dict:
 def _parse_personal_info_cn(text: str) -> dict:
     """从中文体检报告 markdown 文本提取个人信息。
 
-    匹配常见格式：姓名:XXX / 姓名 XXX、性别:男、年龄:30岁、体检日期:2024-01-01
+    匹配常见格式：姓名:XXX / 姓名 XXX、性别:男、年龄:30岁、体检日期:2024-01-01、
+    机构名:XX医院 / XX医院健康管理中心
     """
     info = {}
     patterns = {
@@ -83,6 +84,9 @@ def _parse_personal_info_cn(text: str) -> dict:
         "gender": r"性\s*别[:：\s]+(男|女)",
         "age": r"年\s*龄[:：\s]*(\d+)",
         "check_date": r"(?:体检日期|检查日期|日期|日\s*期)[:：\s]+(\d{4}[-/年]\d{1,2}[-/月]\d{1,2})",
+        # === STRATEGY:v2026-08-04-unitname 提取体检机构名 ===
+        # 匹配 "XX医院" / "XX医院健康管理中心" / "XX体检中心"，取医院名部分
+        "unit_name": r"([\u4e00-\u9fa5A-Za-z]{2,30}?(?:医院|体检中心|健康管理中心|中心医院))",
     }
     for key, pat in patterns.items():
         m = re.search(pat, text)
@@ -90,6 +94,13 @@ def _parse_personal_info_cn(text: str) -> dict:
             val = m.group(1).strip()
             if val:
                 info[key] = val
+    # 机构名规范化：去掉"健康管理中心"等后缀，只保留医院名
+    if info.get("unit_name"):
+        unit = info["unit_name"]
+        # "xxx医院健康管理中心" → "xxx医院"；"xxx体检中心" → "xxx体检中心"
+        m2 = re.search(r"(.+?(?:医院|体检中心|中心医院))", unit)
+        if m2:
+            info["unit_name"] = m2.group(1)
     return info
 
 

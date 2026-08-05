@@ -20,7 +20,7 @@ function cleanConclusionText(text: string): string {
 }
 
 function isConclusionIndicator(ind: any): boolean {
-  return !ind.result_value && !ind.ref_range_low && !ind.ref_range_high;
+  return ind.source === 'conclusion' || (!ind.result_value && !ind.ref_range_low && !ind.ref_range_high);
 }
 
 export default function ReportDetailPage() {
