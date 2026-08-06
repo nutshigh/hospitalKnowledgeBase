@@ -50,19 +50,53 @@ export interface HighRiskResponse {
 
 export type GroupBy = "hospital" | "batch" | "age_group" | "gender" | "time_month";
 
+export interface TenantItem {
+  hospital_id: string;
+  hospital_name: string;
+  is_active: number;
+}
+
+export interface TenantListResponse {
+  items: TenantItem[];
+  total: number;
+}
+
+export async function listTenants(activeOnly = true): Promise<TenantItem[]> {
+  const r = await api().get("/tenants", { params: { active_only: activeOnly } });
+  return r.data.items;
+}
+
+// Backend _filters uses Query(None): Optional[str] + parse_csv_query, which
+// expects a single comma-joined string per param. axios default serializes
+// arrays as repeated query keys (`?hospital_ids[]=H001&hospital_ids[]=H002`),
+// which FastAPI silently drops -> filter is ignored. Flatten arrays here so
+// the backend sees `?hospital_ids=H001,H002` and parse_csv_query can split.
+function _flattenFilters(params: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (Array.isArray(v)) {
+      const joined = v.filter(Boolean).join(",");
+      if (joined) out[k] = joined;
+    } else if (v !== undefined && v !== null && v !== "") {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 export async function getOverview(params: Record<string, any>): Promise<OverviewResponse> {
-  const r = await api().get("/statistics/group/overview", { params });
+  const r = await api().get("/statistics/group/overview", { params: _flattenFilters(params) });
   return r.data;
 }
 
 export async function getHighRisk(params: Record<string, any>): Promise<HighRiskResponse> {
-  const r = await api().get("/statistics/group/high-risk", { params });
+  const r = await api().get("/statistics/group/high-risk", { params: _flattenFilters(params) });
   return r.data;
 }
 
 export async function downloadHighRiskCsv(params: Record<string, any>): Promise<void> {
   const r = await api().get("/statistics/group/high-risk", {
-    params: { ...params, format: "csv" },
+    params: _flattenFilters({ ...params, format: "csv" }),
     responseType: "blob",
   });
   const url = URL.createObjectURL(r.data);

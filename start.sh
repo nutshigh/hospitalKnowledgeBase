@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS chat_message (id BIGINT AUTO_INCREMENT PRIMARY KEY, s
 CREATE TABLE IF NOT EXISTS batch_import (id VARCHAR(36) PRIMARY KEY, hospital_id VARCHAR(32) NOT NULL, user_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, archive_path VARCHAR(512) NOT NULL, total BIGINT NOT NULL DEFAULT 0, parsed_ok BIGINT NOT NULL DEFAULT 0, interp_ok BIGINT NOT NULL DEFAULT 0, failed BIGINT NOT NULL DEFAULT 0, status VARCHAR(24) NOT NULL DEFAULT 'uploading', error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, KEY idx_batch_status (status), KEY idx_batch_hospital (hospital_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'queued', failed_stage VARCHAR(24) DEFAULT NULL, report_task_id BIGINT, error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) REFERENCES batch_import(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 SQL
-  docker exec -i hospital-mysql mysql -uroot -proot hospital_template <<'SQL' 2>/dev/null || true
+  docker exec -i hospital-mysql mysql -uroot -proot --default-character-set=utf8mb4 hospital_template <<'SQL' 2>/dev/null || true
 INSERT INTO hospital_tenant (hospital_id, hospital_name, db_name, is_active)
 VALUES ('H001', '演示医院', 'hospital_H001', 1)
 ON DUPLICATE KEY UPDATE hospital_name=VALUES(hospital_name);

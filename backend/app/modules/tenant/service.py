@@ -3,9 +3,29 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.modules.tenant.schemas import TenantCreateRequest, TenantCreateResponse
+from app.modules.tenant.schemas import (
+    TenantCreateRequest, TenantCreateResponse,
+    TenantListItem, TenantListResponse,
+)
 
 logger = logging.getLogger("tenant")
+
+
+def list_tenants(template_db: Session, active_only: bool = True) -> TenantListResponse:
+    sql = "SELECT hospital_id, hospital_name, is_active FROM hospital_tenant"
+    if active_only:
+        sql += " WHERE is_active = 1"
+    sql += " ORDER BY hospital_id"
+    rows = template_db.execute(text(sql)).fetchall()
+    items = [
+        TenantListItem(
+            hospital_id=r.hospital_id,
+            hospital_name=r.hospital_name or r.hospital_id,
+            is_active=int(r.is_active),
+        )
+        for r in rows
+    ]
+    return TenantListResponse(items=items, total=len(items))
 
 
 def create_tenant(req: TenantCreateRequest, template_db: Session) -> TenantCreateResponse:

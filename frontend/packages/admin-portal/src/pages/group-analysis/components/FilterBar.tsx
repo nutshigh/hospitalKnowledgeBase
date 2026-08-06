@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Form, Select, DatePicker, Radio, Input, Button } from "antd";
 import type { GroupBy } from "../../../api/groupAnalysis";
+import { listTenants, TenantItem } from "../../../api/groupAnalysis";
 import dayjs from "dayjs";
 
 const { RangePicker } = DatePicker;
@@ -34,6 +36,19 @@ interface Props {
 }
 
 export default function FilterBar({ value, onChange, onSubmit, groupBy, onGroupByChange }: Props) {
+  const [tenants, setTenants] = useState<TenantItem[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setTenantsLoading(true);
+    listTenants(true)
+      .then(items => { if (alive) setTenants(items); })
+      .catch(() => { if (alive) setTenants([]); })
+      .finally(() => { if (alive) setTenantsLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
   return (
     <Form layout="inline" style={{ marginBottom: 16 }}>
       <Form.Item label="分组维度">
@@ -41,10 +56,20 @@ export default function FilterBar({ value, onChange, onSubmit, groupBy, onGroupB
           options={GROUP_BY_OPTIONS} style={{ width: 120 }} />
       </Form.Item>
       <Form.Item label="医院">
-        <Select mode="tags" placeholder="留空=全部"
+        <Select
+          mode="multiple"
+          placeholder="留空=全部"
+          showSearch
+          optionFilterProp="label"
+          loading={tenantsLoading}
           value={value.hospital_ids || []}
           onChange={v => onChange({ ...value, hospital_ids: v as string[] })}
-          style={{ minWidth: 200 }} />
+          options={tenants.map(t => ({
+            value: t.hospital_id,
+            label: `${t.hospital_name} (${t.hospital_id})`,
+          }))}
+          style={{ minWidth: 240 }}
+        />
       </Form.Item>
       <Form.Item label="批次UUID">
         <Input placeholder="逗号或回车分隔" style={{ width: 220 }}
@@ -69,8 +94,8 @@ export default function FilterBar({ value, onChange, onSubmit, groupBy, onGroupB
         <Radio.Group value={value.gender || ""}
           onChange={e => onChange({ ...value, gender: e.target.value || undefined })}>
           <Radio value="">全部</Radio>
-          <Radio value="M">男</Radio>
-          <Radio value="F">女</Radio>
+          <Radio value="男">男</Radio>
+          <Radio value="女">女</Radio>
         </Radio.Group>
       </Form.Item>
       <Form.Item label="年龄段">

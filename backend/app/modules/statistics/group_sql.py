@@ -138,7 +138,9 @@ def build_high_risk_list_sql(filters: GroupFilters, sort: str,
                               count_only: bool = False) -> tuple[str, dict]:
     needs_batch = bool(filters.batch_ids)
     where, params = _where(filters)
-    where = where + " AND (interp.overall_level = 'red' OR interp.red_count >= 3)"
+    where = where + (
+        " AND (interp.overall_level IN ('red','yellow') OR interp.red_count >= 3)"
+    )
     if count_only:
         sql = "SELECT COUNT(*) FROM report_info ri " \
               "JOIN report_interpretation interp ON interp.report_id = ri.id "
@@ -156,9 +158,8 @@ def build_high_risk_list_sql(filters: GroupFilters, sort: str,
         "interp.summary_text AS summary_text "
         "FROM report_info ri "
         "JOIN report_interpretation interp ON interp.report_id = ri.id "
+        + BATCH_JOIN
     )
-    if needs_batch:
-        sql += BATCH_JOIN
     sql += " WHERE " + where + f" ORDER BY {sort_col} DESC LIMIT :limit OFFSET :offset"
     params["limit"] = limit
     params["offset"] = offset

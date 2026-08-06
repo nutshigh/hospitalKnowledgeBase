@@ -33,3 +33,14 @@ class TenantCreateResponse(BaseModel):
     db_name: str
     hospital_name: str
     is_active: int
+
+
+class TenantListItem(BaseModel):
+    hospital_id: str
+    hospital_name: str
+    is_active: int
+
+
+class TenantListResponse(BaseModel):
+    items: list[TenantListItem]
+    total: int
