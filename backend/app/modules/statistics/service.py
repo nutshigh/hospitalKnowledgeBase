@@ -30,6 +30,9 @@ def dashboard_overview(db: Session, start_date: str, end_date: str) -> dict:
 def health_profile(db: Session, start_date: str, end_date: str,
                    unit_name: Optional[str] = None) -> dict:
     unit_filter = "AND ri.unit_name = :unit_name" if unit_name else ""
+    # 2026-08-19: 统计层剔除非疾病条目(屈光不正/外耳道耵聍/牙齿龋齿 等 LOCAL 自映射),
+    # 与 disease_service._STATS_EXCLUDED_DISEASES 保持一致。
+    from app.modules.statistics.disease_service import _excluded_item_sql
     sql = f"""
         SELECT ij.item_name, ij.color_level, COUNT(*) as cnt
         FROM indicator_judgment ij
@@ -37,6 +40,7 @@ def health_profile(db: Session, start_date: str, end_date: str,
         JOIN report_info ri ON ri2.report_id = ri.id
         WHERE ri.report_date BETWEEN :start AND :end
           AND ij.color_level IN ('red', 'yellow')
+          {_excluded_item_sql()}
           {unit_filter}
         GROUP BY ij.item_name, ij.color_level
         ORDER BY cnt DESC

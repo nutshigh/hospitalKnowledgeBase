@@ -128,6 +128,18 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 - `oversize`:单文件 > 50MB,无 `report_task_id`,**不可重试**(UI 禁用重试按钮)。
 - `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<医院编号>_<用户编号>.<ext>` 约定(三段下划线、末段纯数字),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
 - 后端 `retry_failed` 把这两类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
+
+| 病种规则新增表(2026-08-15 起) | 用途 |
+|------|------|
+| `disease_mapping`(增强) | 新增 `source`(CENTRAL/LOCAL)、`match_level`(YELLOW/RED)、`match_deviation`(偏高/偏低)三列;旧库需 ALTER(start.sh 已带) |
+| `disease_rule` | 异常指标→病种 严格AND组合规则(`rule_code` 唯一,`member_items` JSON 为 `[{name, min_level, deviation}]` 结构化成员) |
+| `disease_hit` | 报告粒度病种命中固化(uk: `report_id+disease_name`;冗余 user_id/unit_name/report_date 供统计直查) |
+
+**风险引擎链路**:解读 worker 完成后 publish `risk.normal`(经 QUEUES 特例绑定路由到 `risk.hit` 队列,见 `rabbitmq.py` 中 `"risk.normal": "risk.hit"`)→ risk worker 异步计算 → `disease_hit` 落库(先查后插幂等,失败走 retry 队列)。引擎为纯 DB 计算无 LLM、无 bulk 窗口。统计端点(`disease_service.py`)disease 模式已改直查 `disease_hit`(indicator 模式不变)。
+**归一化**:中央归一化表在 `term_normalizer.py`,`_store_abnormalities` 落库时归一化表命中优先(未命中回退 LLM 名);同名跨科目指标(葡萄糖/白细胞/红细胞)按 result/unit 消歧(血检 vs 尿检)。中央种子: `app/modules/risk/seed.py::sync_central()`(**87 映射 + 6 规则,2026-08-19 版**;审核清单在 `app/modules/risk/candidates/`)。**seed 不在启动链路,改 seed.py 后需手动跑一次 `sync_central` 到各 tenant 库**。
+**匹配口径(2026-08-19 决策)**:①肿瘤标志物/超敏肌钙蛋白类单指标 **RED 才命中**(降假阳性),组合命中可承载低可靠性线索;②贫血收敛为 **Hb 为核心指标**直接命中,MCV/MCH/MCHC/RDW 不再单独命中(旧 CENTRAL 条目由 sync_central 自动停用);③**结论型条目(source='conclusion')支持子串匹配兜底**(标准名 ≥3 字、双向包含,覆盖"脂肪肝(中度)"类 LLM 自由文本),生化/指标型仅精确匹配;④统计层白名单剔除非疾病条目(`disease_service.py::_STATS_EXCLUDED_DISEASES`:肥胖症/龋齿/牙周病/扁桃体肥大/屈光不正/外耳道耵聍/肝内钙化灶/胆囊壁胆固醇结晶/甲状腺囊性结节),映射表保留供解读链接。
+**CRUD**:`/api/risk/*`(服务间鉴权 `require_service_client`,供 sz-mana 填本院私有规则)。
+
 ---
 
 ## 日志收口(2026-07-18 起)

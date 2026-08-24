@@ -63,6 +63,7 @@ cleanup() {
   pkill -f "app.modules.report.worker" 2>/dev/null || true
   pkill -f "app.modules.interpretation.worker" 2>/dev/null || true
   pkill -f "app.modules.report.extract_worker" 2>/dev/null || true
+  pkill -f "app.modules.risk.worker" 2>/dev/null || true
   log "Done. Docker 中间件保持运行（如需停止：cd $INFRA_DIR && docker compose down）"
   exit 0
 }
@@ -128,8 +129,13 @@ CREATE TABLE IF NOT EXISTS chat_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, u
 CREATE TABLE IF NOT EXISTS chat_message (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_id BIGINT NOT NULL, role VARCHAR(10) NOT NULL, content TEXT NOT NULL, knowledge_refs JSON DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (session_id) REFERENCES chat_session(id)) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS batch_import (id VARCHAR(36) PRIMARY KEY, hospital_id VARCHAR(32) NOT NULL, user_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, archive_path VARCHAR(512) NOT NULL, total BIGINT NOT NULL DEFAULT 0, parsed_ok BIGINT NOT NULL DEFAULT 0, interp_ok BIGINT NOT NULL DEFAULT 0, failed BIGINT NOT NULL DEFAULT 0, status VARCHAR(24) NOT NULL DEFAULT 'uploading', error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, KEY idx_batch_status (status), KEY idx_batch_hospital (hospital_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'queued', failed_stage VARCHAR(24) DEFAULT NULL, report_task_id BIGINT, error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) REFERENCES batch_import(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS disease_mapping (id BIGINT AUTO_INCREMENT PRIMARY KEY, item_name_standard VARCHAR(200) NOT NULL, item_name VARCHAR(200) DEFAULT NULL, disease_name VARCHAR(200) NOT NULL, disease_category VARCHAR(20) DEFAULT 'OTHER', disease_class VARCHAR(100) DEFAULT NULL, sort_code INT DEFAULT 200, enabled TINYINT DEFAULT 1, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_item_name_std (item_name_standard)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-SQL
+ CREATE TABLE IF NOT EXISTS disease_mapping (id BIGINT AUTO_INCREMENT PRIMARY KEY, item_name_standard VARCHAR(200) NOT NULL, item_name VARCHAR(200) DEFAULT NULL, disease_name VARCHAR(200) NOT NULL, disease_category VARCHAR(20) DEFAULT 'OTHER', disease_class VARCHAR(100) DEFAULT NULL, sort_code INT DEFAULT 200, enabled TINYINT DEFAULT 1, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_item_name_std (item_name_standard)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ CREATE TABLE IF NOT EXISTS disease_rule (id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_code VARCHAR(50) NOT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, member_items JSON DEFAULT NULL, source VARCHAR(20) DEFAULT 'LOCAL', enabled TINYINT DEFAULT 1, sort_code INT DEFAULT 200, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_rule_code (rule_code)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ CREATE TABLE IF NOT EXISTS disease_hit (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, interpretation_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, unit_name VARCHAR(100) DEFAULT NULL, report_date DATE DEFAULT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, hit_type VARCHAR(20) DEFAULT 'single', mapping_id BIGINT DEFAULT NULL, rule_id BIGINT DEFAULT NULL, hit_items JSON DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_report_disease (report_id, disease_name), KEY idx_user_date (user_id, report_date), KEY idx_disease (disease_name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'LOCAL';
+ ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_level VARCHAR(10) DEFAULT 'YELLOW';
+ ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_deviation VARCHAR(10) DEFAULT NULL;
+ SQL
   docker exec -i hospital-mysql mysql -uroot -proot hospital_template <<'SQL' 2>/dev/null || true
 INSERT INTO hospital_tenant (hospital_id, hospital_name, db_name, is_active)
 VALUES ('H001', '演示医院', 'hospital_H001', 1)
@@ -149,6 +155,15 @@ else
   # 报告结论提取列
   docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
     "ALTER TABLE report_info ADD COLUMN IF NOT EXISTS conclusion_text TEXT DEFAULT NULL;" 2>/dev/null || true
+  # 疾病风险引擎: disease_rule/disease_hit 表 + mapping 增强列(兼容旧库)
+  for TBL in hospital_H001 hospital_H002 hospital_H003 hospital_H004; do
+    docker exec hospital-mysql mysql -uroot -proot ${TBL} -e \
+      "CREATE TABLE IF NOT EXISTS disease_rule (id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_code VARCHAR(50) NOT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, member_items JSON DEFAULT NULL, source VARCHAR(20) DEFAULT 'LOCAL', enabled TINYINT DEFAULT 1, sort_code INT DEFAULT 200, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_rule_code (rule_code)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      CREATE TABLE IF NOT EXISTS disease_hit (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, interpretation_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, unit_name VARCHAR(100) DEFAULT NULL, report_date DATE DEFAULT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, hit_type VARCHAR(20) DEFAULT 'single', mapping_id BIGINT DEFAULT NULL, rule_id BIGINT DEFAULT NULL, hit_items JSON DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_report_disease (report_id, disease_name), KEY idx_user_date (user_id, report_date), KEY idx_disease (disease_name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'LOCAL';
+      ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_level VARCHAR(10) DEFAULT 'YELLOW';
+      ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_deviation VARCHAR(10) DEFAULT NULL;" 2>/dev/null || true
+  done
 fi
 
 # ── 3. 确保 .env ────────────────────────────────────────────────
@@ -306,6 +321,17 @@ else
   echo $! > /tmp/start-sh-worker-extract.pid
   cd "$ROOT_DIR"
   log "  批量解压 Worker 已启动 (log: /data/logs/worker-extract.stdout.log)"
+fi
+
+if pgrep -f "app.modules.risk.worker" >/dev/null 2>&1; then
+  log "风险规则引擎 Worker 已运行"
+else
+  log "启动风险规则引擎 Worker..."
+  cd "$BACKEND_DIR"
+  nohup $VENV/python -u -c "from app.modules.risk.worker import start_worker; start_worker()" > /data/logs/worker-risk.stdout.log 2>&1 &
+  echo $! > /tmp/start-sh-worker-risk.pid
+  cd "$ROOT_DIR"
+  log "  风险规则引擎 Worker 已启动 (log: /data/logs/worker-risk.stdout.log)"
 fi
 
 # ── 8. 创建测试用户（如不存在）──────────────────────────────────

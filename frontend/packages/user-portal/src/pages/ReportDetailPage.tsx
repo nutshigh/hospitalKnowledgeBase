@@ -119,11 +119,19 @@ export default function ReportDetailPage() {
   const overallLevel = interpretation?.overall_level;
   const rawIndicators = interpretation?.indicators?.length ? interpretation.indicators : (report?.indicators || []);
 
+  // === STRATEGY:v2026-08-16-original-name-display 展示原始名 ===
+  // 结论条目的 item_name 可能被归一化名/疾病名覆盖(如"窦性心律不齐"→"心律失常"),
+  // explanation 列存的是报告原文名。展示与去重均以原始名(explanation||item_name)为准,
+  // 让用户能从展示名直接对应回报告。
+  // 回退: 删除 displayName 并恢复 ind.item_name / ind.explanation 的旧用法。
+  const displayName = (ind: any) => ind.explanation || ind.item_name;
+  // === END STRATEGY ===
+
   // 分离结论型指标和化验型指标，结论型优先剔除与化验型同名的
   const conclusionIndicators = rawIndicators.filter(isConclusionIndicator);
   const regularIndicators = rawIndicators.filter((ind: any) => !isConclusionIndicator(ind));
   const regularNames = new Set(regularIndicators.map((ind: any) => ind.item_name));
-  const filteredConclusion = conclusionIndicators.filter((ind: any) => !regularNames.has(ind.item_name));
+  const filteredConclusion = conclusionIndicators.filter((ind: any) => !regularNames.has(displayName(ind)));
   const displayIndicators = [...regularIndicators, ...filteredConclusion].sort((a, b) =>
     (COLOR_ORDER[a.color_level] ?? 3) - (COLOR_ORDER[b.color_level] ?? 3));
 
@@ -218,7 +226,7 @@ export default function ReportDetailPage() {
         {displayIndicators.map((ind: any, idx: number) => (
           <IndicatorRow
             key={idx}
-            item_name={ind.item_name}
+            item_name={displayName(ind)}
             result_value={ind.result_value}
             unit={ind.unit}
             ref_range_low={ind.ref_range_low}

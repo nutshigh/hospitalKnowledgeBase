@@ -122,7 +122,7 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
     from sqlalchemy import text
     rows = db.execute(text(
         "SELECT j.indicator_id, j.item_name, j.result_value, j.deviation, j.color_level, "
-        "i.unit, i.ref_range_low, i.ref_range_high, i.raw_text, j.source "
+        "i.unit, i.ref_range_low, i.ref_range_high, i.raw_text, j.source, j.explanation "
         "FROM indicator_judgment j "
         "LEFT JOIN report_indicator i ON i.id = j.indicator_id "
         "WHERE j.interpretation_id = :iid ORDER BY j.id"
@@ -132,7 +132,7 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
         {"indicator_id": r[0], "item_name": r[1], "result_value": r[2],
          "deviation": r[3], "color_level": r[4], "unit": r[5],
          "ref_range_low": r[6], "ref_range_high": r[7], "raw_text": r[8],
-         "source": r[9]}
+         "source": r[9], "explanation": r[10]}
         for r in rows
     ]
 

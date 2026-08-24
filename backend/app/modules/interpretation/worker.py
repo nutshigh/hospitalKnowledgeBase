@@ -4,7 +4,7 @@ import time
 
 from app.core.database import get_hospital_db
 from app.core.logging_config import setup_logging
-from app.core.rabbitmq import rabbitmq, _NackOnce
+from app.core.rabbitmq import rabbitmq, _NackOnce, TaskMessage
 from app.core.retry import backoff_for_retry, is_bulk_window_now
 from app.ai.agents import run_interpretation_agent
 from app.modules.report.batch_service import BatchService
@@ -105,6 +105,26 @@ def handle_interpretation_task(message: dict):
             # 成功 → 计 batch file 进度(interp_ok)
             if batch_id and file_id:
                 BatchService.increment_progress(db, batch_id, file_id, "interp_ok")
+            # === STRATEGY:v2026-08-15-risk-hit 解读完成 → 异步触发病种命中计算 ===
+            # 不阻塞本链路;失败仅记日志, 由 risk worker 侧 retry 兜底。
+            # 回退: 删除本段即可。
+            try:
+                interp_row = db.query(ReportInterpretation).filter(
+                    ReportInterpretation.report_id == report_id,
+                    ReportInterpretation.status == "completed",
+                ).order_by(ReportInterpretation.id.desc()).first()
+                rabbitmq.publish(TaskMessage(
+                    task_type="risk",
+                    hospital_id=hospital_id,
+                    priority="normal",
+                    payload={
+                        "report_id": report_id,
+                        "interpretation_id": interp_row.id if interp_row else None,
+                    },
+                ))
+            except Exception as e:
+                _log.warning("risk publish failed report=%s: %s", report_id, e)
+            # === END STRATEGY ===
         except Exception as e:
             latency_ms = int((time.time() - t_start) * 1000)
             _log.warning(

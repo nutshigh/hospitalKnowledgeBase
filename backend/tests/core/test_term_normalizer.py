@@ -3,16 +3,16 @@ from app.core.term_normalizer import normalize_indicators, normalize_item_name
 
 
 def test_normalize_item_name_alias_to_standard():
-    assert normalize_item_name("血糖")[0] == "空腹血糖（GLU）"
-    assert normalize_item_name("葡萄糖")[0] == "空腹血糖（GLU）"
-    assert normalize_item_name("谷丙转氨酶")[0] == "丙氨酸氨基转移酶（ALT）"
+    assert normalize_item_name("血糖")[0] == "空腹血糖"
+    assert normalize_item_name("葡萄糖")[0] == "空腹血糖"
+    assert normalize_item_name("谷丙转氨酶")[0] == "丙氨酸氨基转移酶(谷丙酶)"
     # 未知名称原样保留
     assert normalize_item_name("淋巴细胞百分数")[0] == "淋巴细胞百分数"
 
 
 def test_normalize_indicators_sets_standard_and_code():
     out = normalize_indicators([{"item_name": "血糖", "result": "6.8"}])
-    assert out[0]["item_name_standard"] == "空腹血糖（GLU）"
+    assert out[0]["item_name_standard"] == "空腹血糖"
     assert out[0]["item_code"] is None
 
 

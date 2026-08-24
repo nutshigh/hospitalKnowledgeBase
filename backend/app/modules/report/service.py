@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.modules.report.models import ReportTask, ReportInfo, ReportIndicator
 from app.core.vlm_client import vlm_client
-from app.core.term_normalizer import normalize_indicators
+from app.core.term_normalizer import normalize_indicators, normalize_item_name
 from app.core.image_preprocess import preprocess
 from app.core.rabbitmq import rabbitmq, TaskMessage
 
@@ -175,11 +175,79 @@ async def _extract_abnormalities_async(conclusion_text: str) -> list[dict]:
                     if enriched and enriched != item_name:
                         item["item_name"] = enriched
                         _log.info("prefix-recover: %s -> %s", item_name, enriched)
+                # === STRATEGY:v2026-08-16-prefix-recover-priority 部位补全优先 ===
+                # 老问题: LLM 给出更长 item_normalized(如"囊性结节" > "结节")时会跳过
+                # recover, 导致"甲状腺双叶多发囊性结节"退化成无部位的"囊性结节"。
+                # 修复: recover 无条件优先 —— 冒号正文(已剥离检查项前缀)能恢复出
+                # 带部位名就用它(实测对已带部位的好名如"肝内钙化灶"返回原样, 无回归)。
+                # 回退: 删除本 elif 即恢复旧行为(LLM 名更长时跳过 recover)。
+                else:
+                    enriched = _recover_anatomical_prefix(text, item_name)
+                    if enriched and enriched != item_name:
+                        item["item_name"] = enriched
+                        _log.info("prefix-recover-priority: %s -> %s", item_name, enriched)
+                # === END STRATEGY ===
+            # === STRATEGY:v2026-08-17-numbered-item-safety-net 编号条目兜底校验 ===
+            # LLM 逐条提取偶发漏条目(prompt 已要求"逐条核对", 实测仍会漏,
+            # 如陈美杉报告中漏"4、胆囊结节")。确定性兜底: 从结论文本解析
+            # 编号条目标题, 提取结果中无任何项与标题匹配(相等或互相包含)时
+            # 自动补一条, item_name 用标题原文(后续 prefix-recover/归一化照常走)。
+            # 回退: 删除本段即恢复旧行为。
+            existing_names = [it.get("item_name", "") for it in items]
+            for title in _parse_numbered_titles(text):
+                if not title:
+                    continue
+                # === STRATEGY:v2026-08-18-safety-net-junk-filter 非异常标题过滤 ===
+                # 兜底会把报告提示文本误当异常条目补上(如"您的目标体重64.3公斤.../
+                # 既往史/部分体检项目未完成")。标题命中以下模式则跳过。
+                # 回退: 删除本段即恢复旧行为。
+                if _SAFETY_NET_JUNK_RE.search(title):
+                    _log.info("safety-net skip junk title: %s", title)
+                    continue
+                # === END STRATEGY ===
+                covered = any(
+                    t and (t == title or t in title or title in t)
+                    for t in existing_names
+                )
+                if not covered:
+                    _log.info("safety-net fill: %s", title)
+                    items.append({
+                        "item_name": title,
+                        "item_normalized": title,
+                        "suggestion": "",
+                        "deviation": None,
+                        "is_urgent": False,
+                    })
             # === END STRATEGY ===
             return items
     except Exception as e:
         _log.warning("Failed to extract abnormalities: %s", e)
     return []
+
+
+def _parse_numbered_titles(text: str) -> list:
+    """从结论文本解析编号条目标题, 如 "4、胆囊结节" → "胆囊结节"。
+
+    只取编号行(如 "4、xxx"), 忽略无编号行; 标题取编号后、冒号/句号前的内容。
+    """
+    titles = []
+    for line in (text or "").split('\n'):
+        stripped = line.strip()
+        m = re.match(r'^\d+[\u3001,.\uff09)]?\s*(\S.*)$', stripped)
+        if not m:
+            continue
+        title = m.group(1).strip()
+        title = re.split(r'[：:]', title, 1)[0]
+        title = re.sub(r'[。；;,\s]+$', '', title).strip()
+        if title:
+            titles.append(title)
+    return titles
+
+
+# safety-net 兜底要跳过的非异常标题(报告提示文本/非疾病条目)
+_SAFETY_NET_JUNK_RE = re.compile(
+    r'目标体重|既往史|未完成|温馨提示|请您|建议您|注意|复查提示|检查提醒'
+)
 
 
 def _recover_anatomical_prefix(text: str, item_name: str) -> Optional[str]:
@@ -338,17 +406,26 @@ def _store_abnormalities(db, report_id: int, interpretation_id: int,
 
         # 标准化名仅用于 disease_mapping 链接，不覆盖 item_name
         llm_normalized = (item.get("item_normalized") or "").strip()
-        # === STRATEGY:v2026-07-30-colon 冒号策略配套 ===
-        # 把 LLM 的 item_normalized 传给 _normalize_abnormality：
-        # 自动插入新条目时，若 LLM 扩展了名称（更长），用 LLM 的长名建条目。
-        # 回退: 传 None 即可（即 db_normalized = _normalize_abnormality(db, item_name)）
-        db_normalized = _normalize_abnormality(db, item_name, llm_normalized)
-        # === END STRATEGY ===
+        # === STRATEGY:v2026-08-15-normalization-table 归一化表优先 ===
+        # 结论条目落库名: 归一化表命中→稳定标准名(展示+映射共用一套名字);
+        # 未命中→回退现有逻辑(映射表兜底 → LLM 名 → 原文)。
+        # 回退: 删除本分支即恢复旧行为。
+        tn_standard, _ = normalize_item_name(item_name)
+        if tn_standard and tn_standard != item_name.replace(" ", "").replace("　", ""):
+            normalized = tn_standard
+        else:
+            # === STRATEGY:v2026-07-30-colon 冒号策略配套 ===
+            # 把 LLM 的 item_normalized 传给 _normalize_abnormality：
+            # 自动插入新条目时，若 LLM 扩展了名称（更长），用 LLM 的长名建条目。
+            # 回退: 传 None 即可（即 db_normalized = _normalize_abnormality(db, item_name)）
+            db_normalized = _normalize_abnormality(db, item_name, llm_normalized)
+            # === END STRATEGY ===
 
-        # === STRATEGY:v2026-07-30-REVERTED 已回退到旧策略 ===
-        # 旧策略: db_normalized or llm_normalized or item_name
-        # (曾尝试"LLM 扩展名优先"策略 v2026-07-30, 因 LLM 输出不稳定已回退)
-        normalized = db_normalized or llm_normalized or item_name
+            # === STRATEGY:v2026-07-30-REVERTED 已回退到旧策略 ===
+            # 旧策略: db_normalized or llm_normalized or item_name
+            # (曾尝试"LLM 扩展名优先"策略 v2026-07-30, 因 LLM 输出不稳定已回退)
+            normalized = db_normalized or llm_normalized or item_name
+            # === END STRATEGY ===
         # === END STRATEGY ===
 
         # 同一 interpretation 内去重（按归一化名）
@@ -361,6 +438,23 @@ def _store_abnormalities(db, report_id: int, interpretation_id: int,
         if dup:
             _log.debug("abnormality dup skip interp=%d item=%s", interpretation_id, normalized)
             continue
+
+        # === STRATEGY:v2026-08-16-cross-line-dedup 跨线去重 ===
+        # 同一异常(如"体重指数>24")既出现在查体指标线(report_indicator)又出现在
+        # 总检建议结论线, 落库会重复。此处按**原始名**与指标线比对:
+        # 指标线 item_name 或 item_name_standard 命中即跳过结论落库。
+        # 回退: 删除本段即恢复旧行为。
+        cross_dup = db.execute(
+            text("""SELECT COUNT(*) FROM report_indicator
+                    WHERE report_id = :rid
+                      AND (item_name = :nm OR item_name_standard = :nm)
+                      AND id != :nid"""),
+            {"rid": report_id, "nm": item_name, "nid": 0},
+        ).scalar()
+        if cross_dup:
+            _log.info("abnormality cross-line dup skip report=%d item=%s", report_id, item_name)
+            continue
+        # === END STRATEGY ===
 
         # 创建 report_indicator 占位行：原文名存储，标准化名存 item_name_standard
         ri = ReportIndicator(

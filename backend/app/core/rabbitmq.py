@@ -34,6 +34,8 @@ class RabbitMQClient:
         "interpretation.normal": "interpretation.normal",
         "interpretation.bulk": "interpretation.bulk",
         "extract.bulk": "extract.bulk",
+        # risk 任务仅 normal 优先级: routing key "risk.normal" 绑定到 risk.hit 队列
+        "risk.normal": "risk.hit",
     }
     RETRY_QUEUES = {
         "parsing.urgent.retry": "parsing.urgent",
@@ -43,6 +45,7 @@ class RabbitMQClient:
         "interpretation.normal.retry": "interpretation.normal",
         "interpretation.bulk.retry": "interpretation.bulk",
         "extract.bulk.retry": "extract.bulk",
+        "risk.normal.retry": "risk.hit",
     }
     DEAD_LETTER_QUEUE = "dead.letter"
 
@@ -68,9 +71,10 @@ class RabbitMQClient:
         ch.exchange_declare(exchange=self.EXCHANGE, exchange_type="topic", durable=True)
         ch.exchange_declare(exchange=self.DLX, exchange_type="topic", durable=True)
         main_args = {"x-dead-letter-exchange": self.DLX, "x-dead-letter-routing-key": "dead"}
-        for q in self.QUEUES.values():
-            ch.queue_declare(queue=q, durable=True, arguments=main_args)
-            ch.queue_bind(exchange=self.EXCHANGE, queue=q, routing_key=q)
+        for name, queue in self.QUEUES.items():
+            ch.queue_declare(queue=queue, durable=True, arguments=main_args)
+            # routing key 用逻辑名(name); 一般 name==queue, risk.normal 特例路由到 risk.hit 队列
+            ch.queue_bind(exchange=self.EXCHANGE, queue=queue, routing_key=name)
         for rq, target in self.RETRY_QUEUES.items():
             args = {"x-dead-letter-exchange": self.EXCHANGE, "x-dead-letter-routing-key": target}
             ch.queue_declare(queue=rq, durable=True, arguments=args)

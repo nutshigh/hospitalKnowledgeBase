@@ -62,12 +62,12 @@ def test_interpretation_response_schema_fields():
     assert "summary_text" not in fields
 
 
-def test_indicator_judgment_schema_no_explanation():
-    """IndicatorJudgmentSchema 不再含 explanation/suggestion，含 unit/ref_range"""
+def test_indicator_judgment_schema_has_source_explanation():
+    """IndicatorJudgmentSchema 含 source/explanation(展示原始名用), 含 unit/ref_range"""
     from app.modules.interpretation.schemas import IndicatorJudgmentSchema
     fields = IndicatorJudgmentSchema.model_fields
-    assert "explanation" not in fields
-    assert "suggestion" not in fields
+    assert "source" in fields
+    assert "explanation" in fields
     assert "unit" in fields
     assert "ref_range_low" in fields
     assert "ref_range_high" in fields
@@ -311,5 +311,5 @@ def test_router_returns_summaries_and_references():
     assert resp["indicators"][0].unit == "U/L"
     assert resp["indicators"][0].ref_range_low == "0"
     assert resp["indicators"][0].ref_range_high == "40"
-    assert not hasattr(resp["indicators"][0], "explanation")
+    assert hasattr(resp["indicators"][0], "explanation")
 
