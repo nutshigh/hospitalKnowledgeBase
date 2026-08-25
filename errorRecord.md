@@ -707,3 +707,271 @@ abnormal = [{**j, ...} for j in state["judgments"]
 
 # 不调用知识参考
 原因：1、主依赖环境没有jieba，无法分词，导致关键词不合适；2、kg原本只对entity进行搜索，无法处理多跳搜索
+
+---
+
+# 2026-07-21 — 管理后台「团体分析」前端 3 连发(404 / 乱码 / 空白页)
+
+## 1. 现象
+
+用户访问管理后台「团体健康体检分析」页面,出现三个表象:
+
+1. **重点人群 tab 报 "Request failed with status code 404"**
+2. **概览图一直转圈**(切到 overview tab 也没数据)
+3. **概览图 X 轴第一医院名乱码**(`æ¼"ç¤ºåŒ»é™¢` 这种),且「医院」过滤下拉是空的
+
+初看像是 3 个独立 bug,排查后发现 3 个层级各自独立的问题,但都属于"新加路由没贯通 / 旧数据 seed 写崩 / Vite resolve 取错文件"的历史欠账,挤在同一次访问里同时爆出来。
+
+## 2. 链路梳理
+
+```
+后端末注册路由:
+  backend/app/main.py:48
+    app.include_router(statistics_group_router, prefix="/api/v1/statistics")
+  ← 这是 2026-07 新增,但运行中的 uvicorn 是 3 天前启动的旧二进制
+  ← /api/v1/statistics/group/overview 和 /group/high-risk 在 OpenAPI 里完全不存在
+
+医院下拉空 + 乱码:
+  start.sh:130
+    docker exec -i hospital-mysql mysql -uroot -proot hospital_template <<SQL
+    INSERT INTO hospital_tenant ... VALUES ('H001', '演示医院', ...) ...
+  ← mysql CLI 连接未声明 --default-character-set=utf8mb4
+  ← "演示医院" UTF-8 字节被服务端按 latin1 接收再以 utf8mb4 存储 → 双重编码乱码
+  DB 实际存: æ¼"ç¤ºåŒ»é™¢  hex: C3A6C2BCE2809DC3A7C2A4C2BA...
+
+  ↓ 於是 group_service._get_tenant_names() 读出来的 hospital_name 就是乱码
+  ↓ 概览图 X 轴显示乱码
+
+  FilterBar.tsx 原来做的是:
+    <Select mode="tags" placeholder="留空=全部"
+      value={value.hospital_ids || []}
+      onChange={v => onChange({ ...value, hospital_ids: v as string[] })}
+      style={{ minWidth: 200 }} />
+   ← 没有 options,本质是自由 tag 输入,用户得手敲 hospital_id 字符串才能加 tag
+   ← 后端没提供 GET /api/v1/tenants list 接口,前端也填不出下拉数据
+   ← 综合结果:下拉永远是空,用户完全不知道有哪些医院可选
+```
+
+## 3. 排查过程(systematic-debugging)
+
+### Step 1: 404 → openapi.json 是真理
+
+```bash
+curl http://localhost:8000/openapi.json | python3 -c "
+import sys,json; d=json.load(sys.stdin);
+print([p for p in d['paths'] if 'group' in p])
+"
+# 输出: [] ← group/overview、group/high-risk 都没有
+```
+
+`ps -eo pid,etime,cmd | grep uvicorn` 显示进程 etime=3 天前 → 进程是统计 group 路由合入 main.py 之前的版本。**衍生修复**:重启后端。
+
+### Step 2: 乱码 → DB 直读 HEX 是真理
+
+```python
+r = db.execute(text("SELECT hospital_id, hospital_name, HEX(hospital_name)
+                    FROM hospital_tenant WHERE hospital_id='H001'")).fetchone()
+# id: H001  name: æ¼"ç¤ºåŒ»é™¢  hex: C3A6C2BCE2809DC3A7C2A4C2BAC3A5C592C2BBC3A9E284A2C2A2
+```
+
+经典 UTF-8 经 latin1 错读再以 utf8mb4 存的双重 mojibake。H002 "第二医院" 正常,说明是首启时 seed 写入烂尾。验证恢复路径:`bad.encode('cp1252').decode('utf-8')` → `演示医院` ✓。
+
+### Step 3: 医院下拉空 → 没有 GET list 接口
+
+`/api/v1/tenants` 在 OpenAPI 里只有 POST 注册新 tenant,没有 admin 拿列表的 GET 接口。FilterBar 用 `mode="tags"` 且无 `options`,.dropdown 也不会自己变出医院。**衍生修复**:新增 GET 路由 + FilterBar 拉数据填 options。
+
+### Step 4: 重启 + 后端 GET 接口实现完成,前端硬刷仍空白
+
+浏览器 Console:
+```
+Uncaught SyntaxError: The requested module '/src/api/groupAnalysis.js'
+  does not provide an export named 'listTenants' (at FilterBar.tsx:4:10)
+```
+
+`ls admin-portal/src/api/` 看到 `groupAnalysis.js` 和 `groupAnalysis.ts` **同时存在**。Vite `resolve.extensions` 默认顺序是 `['.mjs', '.js', '.ts', '.jsx', '.tsx', '.json']`,`.js` 优先级高于 `.ts`,拿了不带 `listTenants` 的旧 `.js` → 死。
+
+`git ls-files admin-portal/src/api admin-portal/src/stores` 显示只有 `.ts` 入 git,`.js` 是没进版本控制的历史残留(可能是更早期 build 工具或 babel 留下的)。
+
+删 `.js` 后再硬刷,仍空白:
+```
+GET /src/stores/adminStore.js?t=1784676268762 net::ERR_ABORTED 404 (Not Found)
+```
+
+——Vite 的 `node_modules/.vite/deps/` 缓存里还存着对已删除 `.js` 的引用。清这两个目录、直接杀进程再用 vite 二进制重启(不能用 `pnpm dev`,会撞 `@hospital/shared` 找不到的 404,见 Step 5)。刷新后才真渲染。
+
+### Step 5: 不能用 `pnpm dev` / `npm run dev` 启动 admin-portal
+
+```
+[ERR_PNPM_FETCH_404] GET https://registry.npmjs.org/@hospital%2Fshared: Not Found - 404
+This error happened while installing a direct dependency of
+  /data/project/hospitalKnowledgeBase/frontend/packages/admin-portal
+```
+
+`@hospital/shared` 是 workspace-local 包,只在 monorepo 内可解析;pnpm 6+'s "deps status check" 启动前会去公网拉,失败就 abort。`start_front.sh` 用 `nohup npm run dev -w @hospital/admin-portal` 也会触发同样的问题(`npm` 把工作区包名当公网 dep 检查)。**正解**:直接调 vite 二进制:
+```bash
+cd frontend/packages/admin-portal
+/data/project/hospitalKnowledgeBase/frontend/node_modules/.bin/vite --port 3003
+```
+绕开包管理器的 deps verify,直接跑 vite 即可。`start_front.sh` 现存写法有这个隐藏炮,记录待改。
+
+## 4. 根因总结
+
+| 现象 | 根本原因 |
+|---|---|
+| 重点人群 404 | 后端进程没重启,新加的 `/api/v1/statistics/group/*` 路由未加载 |
+| 概览图一直转圈 | UI 把"空 data"和"loading"都渲染成 `<Spin />`;实际是用户没点「查询」也不自动 submit,默认占位看起来像加载中;404 修好后真实请求也会因新加 admin 接口鉴权问题显示错误 alert |
+| 概览 X 轴乱码 | `start.sh` 用 `mysql -uroot -proot` 通过 docker exec 灌 "演示医院",未声明 `--default-character-set=utf8mb4`,服务端按 latin1 接 UTF-8 字节后以 utf8mb4 存储 → 双重乱码 |
+| 医院下拉空 | 后端无 GET list tenants 接口;FilterBar 用 `mode="tags"` 无 options,只能自由键入 hospital_id 字符串 |
+| 硬刷依旧空白 | `admin-portal/src/api/groupAnalysis.js` 和 `.ts` 同存,Vite `resolve.extensions` 默认先取 `.js` 拿到旧文件,旧文件没 `listTenants` 导出 |
+| 删 .js 仍空白 | Vite `node_modules/.vite/deps/` 缓存仍指已删除 `.js`;且 `npm run dev` 走 pnpm deps verify 撞 `@hospital/shared` 公网 404 直接 abort |
+
+## 5. 修复
+
+### A. 修复 DB 已存的乱码(不重 seed)
+
+```python
+from app.core.database import get_session
+from sqlalchemy import text
+db = get_session('hospital_template')
+r = db.execute(text("SELECT hospital_name FROM hospital_tenant WHERE hospital_id='H001'")).fetchone()
+recovered = r[0].encode('cp1252').decode('utf-8')   # 双重 mojibake 反推
+db.execute(text("UPDATE hospital_tenant SET hospital_name=:n WHERE hospital_id='H001'"), {'n': recovered})
+db.commit()
+# 验证: SELECT hospital_id, hospital_name FROM hospital_tenant → '演示医院' / '第二医院' ✓
+```
+
+### B. start.sh 给 mysql CLI 加 charset
+
+```diff
+- docker exec -i hospital-mysql mysql -uroot -proot hospital_template <<'SQL' 2>/dev/null || true
++ docker exec -i hospital-mysql mysql -uroot -proot --default-character-set=utf8mb4 hospital_template <<'SQL' 2>/dev/null || true
+  INSERT INTO hospital_tenant (hospital_id, hospital_name, db_name, is_active)
+  VALUES ('H001', '演示医院', 'hospital_H001', 1)
+  ON DUPLICATE KEY UPDATE hospital_name=VALUES(hospital_name);
+  SQL
+```
+
+防 `bash start.sh` 全新部署时 seed 再写崩。其它 mysql CLI 调用点也都是同一类隐患,只在写入含中文的那条加了;后续若有其它 seed 含中文再逐一加。
+
+### C. 后端新增 GET /api/v1/tenants(admin)
+
+- `app/modules/tenant/schemas.py`: 加 `TenantListItem` / `TenantListResponse`
+- `app/modules/tenant/service.py`: 加 `list_tenants(template_db, active_only=True)` 查表返回
+- `app/modules/tenant/router.py`: 注册 `@router.get("", response_model=TenantListResponse)`,鉴权用 `Depends(require_role("admin"))`,支持 `active_only` 参数
+
+```bash
+JWT=$(curl -sX POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin1","password":"123456"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+curl -s -m5 http://localhost:8000/api/v1/tenants -H "Authorization: Bearer $JWT"
+# {
+#   "items": [
+#     {"hospital_id":"H001","hospital_name":"演示医院","is_active":1},
+#     {"hospital_id":"H002","hospital_name":"第二医院","is_active":1}
+#   ],
+#   "total": 2
+# }
+```
+
+### D. 前端 FilterBar 医院下拉接通
+
+`frontend/packages/admin-portal/src/api/groupAnalysis.ts` 新增 `listTenants(activeOnly=true)` 和 `TenantItem` / `TenantListResponse` 类型。
+
+`frontend/packages/admin-portal/src/pages/group-analysis/components/FilterBar.tsx`:
+
+```diff
+- import { Form, Select, DatePicker, Radio, Input, Button } from "antd";
+- import type { GroupBy } from "../../../api/groupAnalysis";
+- import dayjs from "dayjs";
+
++ import { useEffect, useState } from "react";
++ import { Form, Select, DatePicker, Radio, Input, Button } from "antd";
++ import type { GroupBy } from "../../../api/groupAnalysis";
++ import { listTenants, TenantItem } from "../../../api/groupAnalysis";
++ import dayjs from "dayjs";
+
+  export default function FilterBar(...) {
++   const [tenants, setTenants] = useState<TenantItem[]>([]);
++   const [tenantsLoading, setTenantsLoading] = useState(false);
++   useEffect(() => {
++     let alive = true;
++     setTenantsLoading(true);
++     listTenants(true)
++       .then(items => { if (alive) setTenants(items); })
++       .catch(() => { if (alive) setTenants([]); })
++       .finally(() => { if (alive) setTenantsLoading(false); });
++     return () => { alive = false; };
++   }, []);
+    ...
+    <Form.Item label="医院">
+-     <Select mode="tags" placeholder="留空=全部"
+-       value={value.hospital_ids || []}
+-       onChange={v => onChange({ ...value, hospital_ids: v as string[] })}
+-       style={{ minWidth: 200 }} />
++     <Select
++       mode="multiple" placeholder="留空=全部"
++       showSearch optionFilterProp="label"
++       loading={tenantsLoading}
++       value={value.hospital_ids || []}
++       onChange={v => onChange({ ...value, hospital_ids: v as string[] })}
++       options={tenants.map(t => ({
++         value: t.hospital_id,
++         label: `${t.hospital_name} (${t.hospital_id})`,
++       }))}
++       style={{ minWidth: 240 }} />
+    </Form.Item>
+```
+
+### E. 删除 admin-portal 内残留的 .js(让 Vite 只用 .ts)
+
+```bash
+rm frontend/packages/admin-portal/src/api/groupAnalysis.js
+rm frontend/packages/admin-portal/src/stores/adminStore.js
+# 这两份 .js 都是没进 git 的历史残留,内容与同名 .ts 重复但配置旧
+```
+
+### F. 清 Vite deps 缓存 + 二进制直跑
+
+```bash
+pkill -f "vite --port 3003"
+rm -rf frontend/packages/admin-portal/node_modules/.vite frontend/node_modules/.vite
+cd frontend/packages/admin-portal
+/data/project/hospitalKnowledgeBase/frontend/node_modules/.bin/vite --port 3003
+```
+
+不能用 `pnpm dev` / `npm run dev -w @hospital/admin-portal` 启动 admin-portal:pnpm 启动前的 "verify deps" 会去公网拉 `@hospital/shared`(workspace-local 包),404 后直接 abort,即便 `node_modules` 已经装好。这也意味着 `start_front.sh:93` 的 `nohup npm run dev -w ...` 在脏环境下也会失败 —— 若 `npm` 走到 pnpm/verify 分支就中招。正解是直接调 vite 二进制(绕开 verify),或 `pnpm install` 在 monorepo root 一次性把 workspace 链接完后再 `pnpm dev`。
+
+## 6. 涉及文件列表
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/modules/tenant/schemas.py` | 加 `TenantListItem` / `TenantListResponse` |
+| `backend/app/modules/tenant/service.py` | 加 `list_tenants(template_db, active_only)` 查 `hospital_tenant` |
+| `backend/app/modules/tenant/router.py` | 注册 `GET /api/v1/tenants`,鉴权 `require_role("admin")`,支持 `active_only` 查询参数 |
+| `backend/app/modules/statistics/group_router.py` | (无改动,但路由靠后端重启生效) |
+| `frontend/packages/admin-portal/src/api/groupAnalysis.ts` | 新增 `listTenants()` API + `TenantItem` / `TenantListResponse` 类型 |
+| `frontend/packages/admin-portal/src/pages/group-analysis/components/FilterBar.tsx` | 挂载时拉 tenant 列表 → `mode="multiple"` + `options` + `showSearch` |
+| `frontend/packages/admin-portal/src/api/groupAnalysis.js` | **删除**(与 .ts 重复,使 Vite resolve 走 .ts) |
+| `frontend/packages/admin-portal/src/stores/adminStore.js` | **删除**(同上) |
+| `start.sh` | 给 seed `INSERT INTO hospital_tenant` 的 mysql CLI 加 `--default-character-set=utf8mb4` |
+| DB `hospital_template.hospital_tenant` | UPDATE H001 修乱码 name → "演示医院" |
+
+## 7. 修复后验证
+
+- 后端重启后 `/openapi.json` 包含 `/api/v1/statistics/group/high-risk` 与 `/group/overview` ✓
+- `curl /api/v1/tenants` 返回 `[{H001 演示医院}, {H002 第二医院}]` ✓
+- `curl /api/v1/statistics/group/overview?group_by=hospital` 返回 2 行,labels 已是正确中文 ✓
+- `tsc --noEmit` admin-portal 全通过(新加类型无报错)✓
+- 删 `.js` + 清 `.vite/deps` + vite 二进制直跑后,浏览器硬刷新:`/src/stores/adminStore` 解析为 `.ts`(返回含 `admin_token` 的正确代码),`/src/api/groupAnalysis.ts` 含 `listTenants` ✓
+- 前端页面能正常进入,FilterBar「医院」下拉展示 `演示医院 (H001)` / `第二医院 (H002)`,概览图 X 轴正确显示中文医院名 ✓
+
+## 8. 经验
+
+1. **OpenAPI schema 是排查路由 404 的真理**:别猜哪个路由有没有,直接 `curl /openapi.json` 看 paths 数组。后端代码里 `app.include_router(...)`,如果运行中的进程是更早的二进制,路由其实就没生效——重启进程才能让动态注册可见。
+2. **MySQL CLI 写中文必带 `--default-character-set`**:`docker exec mysql -uroot -proot <SQL` 这种裸用法,连接默认 charset 跟 `my.cnf` 配置和服务端 `character_set_server` 都不一定一致;尤其容器化场景默认 latin1 仍居多。给所有写入含非 ASCII 的 seed SQL 加 `--default-character-set=utf8mb4`,比日后排"为什么 name 是乱码"工效高得多。
+3. **诊断 mojibake 用 HEX 直读 + cp1252 反推**:DB 里看出乱码时,先 `HEX(col)` 拿真实字节,再决定编码方向。双重 mojibake(UTF-8 → latin1 → utf8mb4)的恢复路径是 `bad.encode('cp1252').decode('utf-8')`;一次性乱码 latin1 接 UTF-8 是 `bad.encode('latin1').decode('utf-8')`。验证恢复成功再 UPDATE,避免把数据改成又一种乱码。
+4. **Vite resolve.extensions 默认 `.js` 优先于 `.ts`**:`admin-portal` 残留的 `.js`(没入 git)蔽屏了新的 `.ts`,导致加了类型还是报"无此导出"。Monorepo + 历史多人编辑 + 不同模板工具(babel/tsc/vite)留下的 `.js` 副本很常见,排查前端"模块找不到导出"时先 `ls` 是否有同名 `.js` 跟 `.ts` 共存。
+5. **pnpm/npm "verify deps" 是 monorepo 隐藏炮**:workspace-local 包(如 `@hospital/shared`)在公网 registry 不存在,启动前的 deps status check 一旦走包管理器(pnpm dev / npm run dev -w)就会 404 abort,即便 `node_modules` 装好了。直接调 vite 二进制可绕开验证。`start_front.sh` 的启动方式要复查,确保 `pnpm install` 在 root 一次性把 workspace link 建好后再走 `pnpm dev`,或者直接调二进制。
+6. **Vite deps 缓存 `.vite/deps/` 不随源码变动失效**:删完残留 `.js` 后,缓存里的模块仍可能指已不存在的路径。改 imports 路径或删同名文件时,顺手 `rm -rf node_modules/.vite` 清掉 dev server 的预打包缓存,否则浏览器会拿到旧的预打包版本报 404。
+7. **UI loading/empty 不分**:OverviewCharts `"if (loading || !data) return <Spin />"` 把"加载中"和"未查询"渲染成同一种 spinner,用户分不清是"在跑"还是"待点查询"。后续改造:`!data && !loading` 显示 `<Empty description="请点击查询" />`,`loading=true` 才 Spin;并可在 GroupAnalysisPage 挂载时自动 submit 一次默认查询,行为与重点人群 tab(HighRiskTable 用 useEffect + load 自动取数)对齐。这次未做,留待后续体验优化。

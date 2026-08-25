@@ -56,7 +56,7 @@ export default function ChatPanel({ sessionId, placeholder, compact }: Props) {
     store.setStreaming(true);
     store.addMessage({ role: 'assistant', content: '', streaming: true });
     send(
-      `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/chat/sessions/${sessionId}/messages`,
+      `${import.meta.env.VITE_API_BASE_URL || '/api/v1'}/chat/sessions/${sessionId}/messages`,
       content,
     );
   };
