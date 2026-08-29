@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     MEDGO_BASE_URL: str = "http://localhost:8004/v1"
     MEDGO_MODEL: str = "/data/models/MedGo"  # 本地权重路径；也可填 OpenMedZoo/MedGo 让 vLLM 自动拉取
     MEDGO_MAX_TOKENS: int = 4096
-    MEDGO_TEMPERATURE: float = 0.1
+    MEDGO_TEMPERATURE: float = 0.2
     MEDGO_API_KEY: str = "not-required"  # vLLM 本地服务无鉴权
 
     # LLM Provider

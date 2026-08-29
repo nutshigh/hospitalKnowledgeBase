@@ -164,7 +164,7 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "MedGo 已运行 (8004)"
     else
       log "启动 MedGo vLLM (8004, GPU 0-3, TP=4, ctx=32K, util=0.6)..."
-      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes" > /data/logs/vllm-medgo.stdout.log 2>&1 &
+      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes --override-generation-config '{\"temperature\": 0.2, \"repetition_penalty\": 1.2}'" > /data/logs/vllm-medgo.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-medgo.pid
       log "  MedGo 启动中 (PID: $!, log: /data/logs/vllm-medgo.stdout.log)"
     fi
