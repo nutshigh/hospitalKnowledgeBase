@@ -178,3 +178,38 @@ per spec 决策:workers (report/worker.py / interpretation/worker.py / extract_w
 ### freezegun 测试 quirk
 
 `backend/tests/core/test_logging_config.py` 的 `freezegun.freeze_time(...)` 调用必须传 `ignore=["transformers"]`,否则在跑全 suite 时 freezegun 会迭代 `dir(transformers)` 触发 `RuntimeError: cannot import name 'pil_torch_interpolation_mapping'`(pinned `transformers==4.51.3` 已移除该名字,而 freezegun 不捕获 RuntimeError)。未来其它测试用 `freeze_time` 也要加此 ignore 列表。
+
+---
+
+## RabbitMQ vhost 统一到 `/`(2026-08-30)
+
+**事实**: `backend/app/config.py` 有 `RABBITMQ_VHOST: str = "/"` 字段,`app/core/rabbitmq.py` 的 `_connect()` 通过 `virtual_host=settings.RABBITMQ_VHOST` 连接。`backend/.env` 显式 `RABBITMQ_VHOST=/`。
+
+**历史教训(2026-08-30 故障)**: 曾有 worker 从旧 checkout `/home/wjyy2/hospitalKnowledgeBase` 启动,其 `.env` 是 `RABBITMQ_VHOST=hospital_dev`,而 `/data/project` 后端当时**没有** vhost 配置 → 发布到 vhost `/`,消费在 `hospital_dev`,任务永远 `queued`。现已将 `/data/project` 侧显式固化 vhost 到 `/` 与旧环境对齐。
+
+**切换 vhost 的方法**: 只改 `backend/.env` 的 `RABBITMQ_VHOST`,并重启 **backend + 三个 worker**(report/interpretation/extract),保证生产消费同 vhost。改完用 `rabbitmqctl list_queues --vhost <vhost> name messages consumers` 核对两侧(0 积压、consumers≥1)。
+
+**注意**:
+- `/data/project` 代码**没有** `app/modules/risk` 模块(旧 `/home/wjyy2` 有)。解读流程不发布 risk 消息、不写 `disease_hit`;`high-risk` 接口读 `report_interpretation`(overall_level=="red"),不依赖 risk worker。故新架构不启动 risk worker。
+- worker 启动必须 `cd backend` 后 `setsid nohup .venv/bin/python -u -c "from app.modules.<...> import start_worker; start_worker()" > /data/logs/worker-*.stdout.log 2>&1 < /dev/null &`,否则 `import app` 会因相对路径/`PYTHONPATH` 失败。
+
+---
+
+## MedGo vLLM 不能加 repetition_penalty>1.0 (2026-08-30)
+
+**事实**: `start.sh` 的 MedGo vLLM 启动命令,`--override-generation-config` **只能设 `temperature`**,不能带 `repetition_penalty`(尤其是 >1.0)。
+
+**历史教训(2026-08-30 故障)**: commit `3c63ad9` 曾在 override 里加 `{"temperature": 0.2, "repetition_penalty": 1.2}`。vLLM 重启后,MedGo 解析体检报告时**只抽出总检结论页的 3~5 个"偏高"异常项**,化验单的 70+ 项指标(数值/参考范围)全部丢弃 → 报告解读只基于残缺指标判定 green、无异常。症状:同一份 PDF 在旧 vLLM(无 override)能抽 72 项,新 vLLM 只抽 3 项;文本型 PDF(`_pdf_has_text`)走 `_build_parse_prompt` LLM 抽取受影响。
+
+**根因**: MedGo 对长 JSON 列表输出时,`repetition_penalty=1.2` 过度抑制重复 token 模式,导致模型提前只生成首项(总检结论)就收尾。temperature 0.1→0.2 本身无影响(实测无关)。
+
+**验证方法**:
+```bash
+# rp=1.2 (坏) → ~3 项
+# rp=1.0 (好) → 72~74 项
+curl -s http://localhost:8004/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"/data/models/MedGo","messages":[{"role":"user","content":"<解析prompt>"}],"max_tokens":16384,"temperature":0.2,"repetition_penalty":1.0}'
+```
+
+**重跑受影响报告的方法**: `/tmp/reparse.py <task_id...>`(删除旧指标+解读 → 重跑 `process_task` → 自动投解读)。注意 MedGo 生成 70+ 项 JSON 每份约 2~3 分钟,`setsid nohup` 后台跑。
+

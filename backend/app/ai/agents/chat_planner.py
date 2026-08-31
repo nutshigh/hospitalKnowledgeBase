@@ -136,17 +136,29 @@ def _execute_get_report_summary(ctx: AgentContext) -> tuple[list, str]:
     db = get_session(f"hospital_{ctx.hospital_id}")
     try:
         row = db.execute(
-            text("SELECT r.report_date, r.name, i.overall_level, i.red_count, i.yellow_count, i.green_count "
+            text("SELECT r.report_date, r.name, i.overall_level, i.red_count, i.yellow_count, i.green_count, "
+                 "i.id AS interp_id "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
                  "WHERE r.id = :rid"),
             {"rid": report_id},
         ).fetchone()
+        if not row:
+            return [], "（无报告概况）"
+        # 附加异常指标明细(非 green 项),保证 LLM 拿到具体指标名/数值
+        abnormal = []
+        if row[6]:
+            abnormal = db.execute(
+                text("SELECT item_name, result_value, deviation, color_level "
+                     "FROM indicator_judgment WHERE interpretation_id = :iid "
+                     "AND color_level != 'green' ORDER BY color_level, item_name"),
+                {"iid": row[6]},
+            ).fetchall()
     finally:
         db.close()
-    if not row:
-        return [], "（无报告概况）"
     entries = [f"报告日期: {row[0]}", f"名称: {row[1]}", f"整体判定: {row[2]}",
                f"红区: {row[3]}", f"黄区: {row[4]}", f"绿区: {row[5]}"]
+    for r in abnormal:
+        entries.append(f"异常指标: {r[0]} 结果 {r[1]} (偏移 {r[2]}, {r[3]})")
     return [], "\n".join(entries)
 
 

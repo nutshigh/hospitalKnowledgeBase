@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     RABBITMQ_PORT: int = 5672
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"  # 与旧 checkout(/home/wjyy2) 对齐;切换环境时改 .env 即可
 
     # Redis (embedding 向量缓存等)
     REDIS_HOST: str = "localhost"
