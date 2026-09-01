@@ -174,7 +174,7 @@ def app_login(req: AppLoginRequest, db: Session = Depends(get_template_db)):
         raise ValidationException(detail="id_card_suffix required (5 digits + digit or X)")
 
     try:
-        hospital_id = resolve_hospital(req.id_card_suffix)
+        hospital_id = resolve_hospital(name, req.id_card_suffix)
     except ResolverUnavailableError as e:
         raise ServiceUnavailableException(detail="resolver 不可用") from e
     if not hospital_id:

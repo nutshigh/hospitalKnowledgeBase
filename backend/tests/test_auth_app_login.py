@@ -96,7 +96,7 @@ def ctx(monkeypatch):
     import app.api.auth as auth
     monkeypatch.setattr(auth.settings, "APP_API_KEY", "secret")
     monkeypatch.setattr(auth.settings, "APP_LOGIN_TOKEN_EXPIRE_MINUTES", 10080)
-    monkeypatch.setattr(auth, "resolve_hospital", lambda suf: "H001")
+    monkeypatch.setattr(auth, "resolve_hospital", lambda name, suf: "H001")
     calls = {}
 
     def fake_create(data, expires_delta=None):
@@ -198,14 +198,14 @@ def test_app_login_inactive_user_rejected(ctx):
 
 def test_app_login_resolver_no_match(ctx):
     auth, _ = ctx
-    auth.resolve_hospital = lambda suf: None
+    auth.resolve_hospital = lambda name, suf: None
     with pytest.raises(UnauthorizedException):
         app_login(_req(), db=_FakeDB())
 
 
 def test_app_login_resolver_unavailable(ctx):
     auth, _ = ctx
-    def boom(suf):
+    def boom(name, suf):
         raise ResolverUnavailableError("down")
     auth.resolve_hospital = boom
     with pytest.raises(ServiceUnavailableException):
