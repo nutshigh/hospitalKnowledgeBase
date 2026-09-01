@@ -20,7 +20,8 @@ class AgentContext:
     """
     hospital_id: str
     report_id: Optional[int] = None
-    user_id: Optional[int] = None
+    user_id: Optional[str] = None
+    name: Optional[str] = None
 
 
 def _db(hospital_id: str) -> Session:
@@ -119,15 +120,16 @@ def get_user_history_reports(runtime: ToolRuntime[AgentContext], limit: int = 5)
          报告列表，每项含 report_id/report_date/overall_level
     """
     user_id = runtime.context.user_id
-    if not user_id:
+    name = runtime.context.name
+    if not user_id or not name:
         return [{"error": "无法识别当前用户"}]
     db = _db(runtime.context.hospital_id)
     try:
         rows = db.execute(
             text("SELECT r.id, r.report_date, i.overall_level "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
-                 "WHERE r.user_id = :uid ORDER BY r.report_date DESC LIMIT :lim"),
-            {"uid": user_id, "lim": limit},
+                 "WHERE r.user_id = :uid AND r.name = :nm ORDER BY r.report_date DESC LIMIT :lim"),
+            {"uid": user_id, "nm": name, "lim": limit},
         ).fetchall()
     finally:
         db.close()
@@ -144,7 +146,8 @@ def get_indicator_history(item_name: str, runtime: ToolRuntime[AgentContext]) ->
         历史数值列表，每项含 date/value/unit
     """
     user_id = runtime.context.user_id
-    if not user_id:
+    name = runtime.context.name
+    if not user_id or not name:
         return [{"error": "无法识别当前用户"}]
     db = _db(runtime.context.hospital_id)
     try:
@@ -152,9 +155,9 @@ def get_indicator_history(item_name: str, runtime: ToolRuntime[AgentContext]) ->
             text("SELECT ri.report_date, ind.result_value, ind.unit "
                  "FROM report_indicator ind "
                  "JOIN report_info ri ON ind.report_id = ri.id "
-                 "WHERE ri.user_id = :uid AND ind.item_name = :name "
+                 "WHERE ri.user_id = :uid AND ri.name = :nm AND ind.item_name = :name "
                  "ORDER BY ri.report_date ASC"),
-            {"uid": user_id, "name": item_name},
+            {"uid": user_id, "nm": name, "name": item_name},
         ).fetchall()
     finally:
         db.close()

@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 from app.core.dependencies import get_current_user, CurrentUser
 from app.modules.report.router import router as report_router
 from app.modules.report import service as report_service
+from app.models.base import Base
+from app.modules.report.models import ReportTask, ReportInfo  # noqa: F401
+from app.modules.interpretation.models import ReportInterpretation  # noqa: F401
 
 
 def _bootstrap_app(tmp_root: str):
@@ -20,7 +23,7 @@ def _bootstrap_app(tmp_root: str):
     app = FastAPI()
     app.include_router(report_router, prefix="/api/v1/reports")
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1, role="user", hospital_id="H001"
+        user_id=1, role="user", hospital_id="H001", id_card_suffix="123456"
     )
     client = TestClient(app)
     return app, client
@@ -34,6 +37,18 @@ def env(tmp_path, monkeypatch):
     )
     app, client = _bootstrap_app(str(tmp_path))
     yield {"app": app, "client": client, "tmp": tmp_path}
+
+
+@pytest.fixture
+def db():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    s = Session()
+    yield s
+    s.close()
 
 
 def _mock_task():
@@ -105,7 +120,7 @@ def test_T14_read_uses_bounded_chunk_size(env):
     upload.filename = "test.pdf"
     upload.file = spy
 
-    user = CurrentUser(user_id=1, role="user", hospital_id="H001")
+    user = CurrentUser(user_id=1, role="user", hospital_id="H001", id_card_suffix="123456")
     db = MagicMock()
     with patch("app.modules.report.router.service.create_task", return_value=_mock_task()):
         upload_report(file=upload, db=db, current_user=user)
@@ -131,3 +146,78 @@ def test_T14_3_boundary_cross_partial_file_removed(env):
     storage_dir = env["tmp"] / "H001" / "reports" / "1"
     if storage_dir.exists():
         assert not list(storage_dir.iterdir())
+
+
+def _use_suffix_less_user(app):
+    """把 get_current_user 覆盖成无 id_card_suffix 的存量 role='user'。"""
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=2, role="user", hospital_id="H001"
+    )
+
+
+def test_list_reports_empty_for_legacy_user_without_suffix(env, db):
+    """Critical:存量 role='user' 无 id_card_suffix 时列表必须返回空,绝不泄露全库报告。"""
+    from datetime import datetime
+    t = ReportTask(id=9001, user_id="123456", original_file_path="/x/0.pdf",
+                   original_filename="0.pdf", file_type="pdf", file_size=1)
+    db.add(t)
+    db.flush()
+    db.add(ReportInfo(id=9001, task_id=t.id, user_id="123456", name="张三",
+                      created_at=datetime(2026, 1, 1)))
+    db.commit()
+
+    with patch("app.modules.report.router.service.list_reports",
+               wraps=report_service.list_reports) as mock_list:
+        _use_suffix_less_user(env["app"])
+        r = env["client"].get("/api/v1/reports")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+        mock_list.assert_not_called()
+
+
+def test_upload_rejected_for_legacy_user_without_suffix(env):
+    """Critical:存量 role='user' 无 id_card_suffix 上传必须 400,不触发 create_task(避免 NOT NULL 500)。"""
+    with patch("app.modules.report.router.service.create_task") as mock_ct:
+        _use_suffix_less_user(env["app"])
+        r = env["client"].post(
+            "/api/v1/reports/upload",
+            files={"file": ("t.pdf", io.BytesIO(b"X" * 1024), "application/pdf")},
+        )
+    assert r.status_code == 400, r.text
+    assert "后六位" in r.json()["detail"]
+    mock_ct.assert_not_called()
+
+
+def test_list_reports_filters_by_name_when_user_id_set(db):
+    """user_id 命中时,双锚定过滤生效:同 user 不同 name 的报告被隔离。"""
+    from datetime import datetime
+    for i, (uid, nm) in enumerate([
+        ("123456", "张三"), ("123456", "张三"), ("123456", "李四"),
+    ]):
+        t = ReportTask(id=1000 + i, user_id=uid, original_file_path=f"/x/{i}.pdf",
+                       original_filename=f"{i}.pdf", file_type="pdf", file_size=1)
+        db.add(t)
+        db.flush()
+        db.add(ReportInfo(id=2000 + i, task_id=t.id, user_id=uid, name=nm,
+                          created_at=datetime(2026, 1, i + 1)))
+    db.commit()
+
+    items, total = report_service.list_reports(db, "H001", user_id="123456", name="张三")
+    assert total == 2
+    assert all(r["name"] == "张三" for r in items)
+
+    items, total = report_service.list_reports(db, "H001", user_id="123456", name="李四")
+    assert total == 1
+
+    items, total = report_service.list_reports(db, "H001", user_id="123456", name="不存在")
+    assert total == 0
+
+    # 不带 name 时保持原行为(仅按 user_id 过滤)
+    items, total = report_service.list_reports(db, "H001", user_id="123456")
+    assert total == 3
+
+    # 未命中 user_id 时不按 name 过滤(保持向后兼容)
+    items, total = report_service.list_reports(db, "H001", user_id=None, name="张三")
+    assert total == 3

@@ -28,9 +28,9 @@ def db():
 
 def _make_reports(db):
     """准备 2 份报告 + 指标,第二份(最新)打算解读完成时触发对比小结。"""
-    db.add(ReportInfo(id=1, user_id=10, name="张三", gender="男", age=40,
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", gender="男", age=40,
                      report_date=date(2025, 11, 2)))
-    db.add(ReportInfo(id=2, user_id=10, name="张三", gender="男", age=41,
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", gender="男", age=41,
                      report_date=date(2026, 6, 15)))
     db.add(ReportIndicator(report_id=1, item_name="血糖", item_name_standard="空腹血糖",
                            result_value="7.2", unit="mmol/L"))
@@ -70,7 +70,7 @@ def test_try_generate_comparison_summary_writes_cache_on_first_call(db):
 
 def test_try_generate_comparison_summary_skips_when_no_history_report(db):
     """用户只有 1 份报告时,base 缺失,worker 钩子不应抛错也不应写小结。"""
-    db.add(ReportInfo(id=5, user_id=20, report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=5, user_id="123457", report_date=date(2026, 6, 15)))
     db.commit()
     db.add(ReportInterpretation(report_id=5, overall_level="green", status="completed"))
     db.commit()
@@ -133,7 +133,7 @@ def test_get_ai_summary_cache_hit_returns_cached_true(db):
     db.commit()
 
     from app.modules.user_profile.service import get_ai_summary
-    summary, cached = get_ai_summary(db, user_id=10, report_id=2, baseline_id=1)
+    summary, cached = get_ai_summary(db, user_id="123456", name="张三", report_id=2, baseline_id=1)
     assert summary == "已缓存小结"
     assert cached is True
 
@@ -153,7 +153,7 @@ def test_get_ai_summary_calls_llm_when_baseline_mismatch(db):
 
     from app.modules.user_profile.service import get_ai_summary
     with patch("app.modules.user_profile.service.get_chat_model", return_value=fake_model):
-        summary, cached = get_ai_summary(db, user_id=10, report_id=2, baseline_id=2)
+        summary, cached = get_ai_summary(db, user_id="123456", name="张三", report_id=2, baseline_id=2)
 
     assert "新基准" in summary
     assert cached is False
@@ -164,7 +164,7 @@ def test_get_ai_summary_calls_llm_when_baseline_mismatch(db):
 def test_get_overview_returns_empty_when_no_reports(db):
     """无报告时返回空结构(避免 get_overview 在 router 层崩)。"""
     from app.modules.user_profile.service import get_overview
-    result = get_overview(db, user_id=999)
+    result = get_overview(db, user_id="999999", name="张三")
     assert result["user_summary"] is None
     assert result["indicator_trends"] == []
     assert result["abnormal_distribution"] == []
@@ -175,8 +175,8 @@ def test_get_overview_aggregates_abnormal_by_item_name_standard(db):
     from app.modules.user_profile.service import get_overview
     from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 
-    db.add(ReportInfo(id=1, user_id=10, report_date=date(2025, 11, 2)))
-    db.add(ReportInfo(id=2, user_id=10, report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 11, 2)))
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2026, 6, 15)))
     db.add(ReportIndicator(id=100, report_id=1, item_name="血糖", item_name_standard="空腹血糖",
                            result_value="7.2", unit="mmol/L"))
     db.add(ReportIndicator(id=200, report_id=2, item_name="GLU", item_name_standard="空腹血糖",
@@ -193,7 +193,7 @@ def test_get_overview_aggregates_abnormal_by_item_name_standard(db):
                              color_level="red"))
     db.commit()
 
-    result = get_overview(db, user_id=10)
+    result = get_overview(db, user_id="123456", name="张三")
 
     assert result["user_summary"]["total_reports"] == 2
     assert result["user_summary"]["latest_overall_level"] == "yellow"
@@ -220,15 +220,15 @@ def test_get_comparison_does_not_double_count_baseline_with_diff_raw_names(db):
     """
     from app.modules.user_profile.service import get_comparison
 
-    db.add(ReportInfo(id=1, user_id=10, report_date=date(2025, 11, 2)))
-    db.add(ReportInfo(id=2, user_id=10, report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 11, 2)))
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2026, 6, 15)))
     db.add(ReportIndicator(report_id=1, item_name="GLU", item_name_standard="空腹血糖",
                            result_value="7.2", unit="mmol/L"))
     db.add(ReportIndicator(report_id=2, item_name="血糖", item_name_standard="空腹血糖",
                            result_value="6.8", unit="mmol/L"))
     db.commit()
 
-    result = get_comparison(db, user_id=10, report_id=2, baseline_id=1)
+    result = get_comparison(db, user_id="123456", name="张三", report_id=2, baseline_id=1)
     matched_names = {ind["item_name"] for ind in result["indicators"]}
     assert "GLU" in matched_names or "血糖" in matched_names
     baseline_only_names = {ind["item_name"] for ind in result["only_in_baseline"]}
@@ -245,8 +245,8 @@ def test_get_overview_sorts_points_by_report_date(db):
     from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 
     # id=2 is OLDER, id=1 is NEWER — non-monotonic, the case the bug surfaces in
-    db.add(ReportInfo(id=2, user_id=30, report_date=date(2025, 4, 10)))
-    db.add(ReportInfo(id=1, user_id=30, report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=2, user_id="123458", name="李四", report_date=date(2025, 4, 10)))
+    db.add(ReportInfo(id=1, user_id="123458", name="李四", report_date=date(2026, 6, 15)))
     db.add(ReportIndicator(id=500, report_id=2, item_name="血压", item_name_standard="收缩压",
                           result_value="130", unit="mmHg"))
     db.add(ReportIndicator(id=600, report_id=1, item_name="血压", item_name_standard="收缩压",
@@ -259,7 +259,7 @@ def test_get_overview_sorts_points_by_report_date(db):
     db.add(IndicatorJudgment(interpretation_id=20, indicator_id=600, item_name="血压", color_level="red"))
     db.commit()
 
-    result = get_overview(db, user_id=30)
+    result = get_overview(db, user_id="123458", name="李四")
     sys_trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "收缩压")
     # Points MUST be in chronological order by report_date
     assert [p["report_date"] for p in sys_trend["points"]] == ["2025-04-10", "2026-06-15"]
@@ -278,7 +278,7 @@ def test_get_comparison_raises_not_found_when_report_missing(db):
 
     from app.modules.user_profile.service import get_comparison
     with pytest.raises(NotFoundException):
-        get_comparison(db, user_id=10, report_id=999, baseline_id=None)
+        get_comparison(db, user_id="123456", name="张三", report_id=999, baseline_id=None)
 
 
 def test_get_comparison_raises_validation_when_baseline_not_owned(db):
@@ -288,12 +288,12 @@ def test_get_comparison_raises_validation_when_baseline_not_owned(db):
 
     from app.modules.user_profile.service import get_comparison
 
-    db.add(ReportInfo(id=1, user_id=10, report_date=date(2026, 6, 15)))
-    db.add(ReportInfo(id=99, user_id=20, report_date=date(2025, 4, 10)))  # 属于另一 user
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=99, user_id="123457", name="张三", report_date=date(2025, 4, 10)))  # 属于另一 user
     db.commit()
 
     with pytest.raises(ValidationException):
-        get_comparison(db, user_id=10, report_id=1, baseline_id=99)
+        get_comparison(db, user_id="123456", name="张三", report_id=1, baseline_id=99)
 
 
 def test_get_ai_summary_raises_validation_when_baseline_not_owned(db):
@@ -303,9 +303,9 @@ def test_get_ai_summary_raises_validation_when_baseline_not_owned(db):
 
     from app.modules.user_profile.service import get_ai_summary
 
-    db.add(ReportInfo(id=1, user_id=10, report_date=date(2026, 6, 15)))
-    db.add(ReportInfo(id=99, user_id=20, report_date=date(2025, 4, 10)))
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2026, 6, 15)))
+    db.add(ReportInfo(id=99, user_id="123457", name="张三", report_date=date(2025, 4, 10)))
     db.commit()
 
     with pytest.raises(ValidationException):
-        get_ai_summary(db, user_id=10, report_id=1, baseline_id=99)
+        get_ai_summary(db, user_id="123456", name="张三", report_id=1, baseline_id=99)

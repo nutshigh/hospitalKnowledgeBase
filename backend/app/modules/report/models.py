@@ -6,7 +6,7 @@ class ReportTask(Base):
     __tablename__ = "report_task"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=False)
+    user_id = Column(String(16), nullable=False)
     original_file_path = Column(String(500), nullable=False)
     original_filename = Column(String(200), nullable=False)
     file_type = Column(String(10), nullable=False)
@@ -26,7 +26,7 @@ class ReportInfo(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     task_id = Column(BigInteger, ForeignKey("report_task.id"), nullable=True)
-    user_id = Column(BigInteger, nullable=False)
+    user_id = Column(String(16), nullable=False)
     name = Column(String(50), nullable=True)
     gender = Column(String(5), nullable=True)
     age = Column(Integer, nullable=True)

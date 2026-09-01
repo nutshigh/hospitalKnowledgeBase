@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_hospital_db
-from app.core.dependencies import get_current_user, CurrentUser
+from app.core.dependencies import get_current_user, CurrentUser, user_identity
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.chat import service
 from app.modules.chat.stream import sse_stream
@@ -34,7 +34,10 @@ def list_sessions(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    return service.list_sessions(db, current_user.user_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        return []
+    return service.list_sessions(db, uid, nm)
 
 
 @router.post("/sessions", response_model=SessionResponse)
@@ -43,7 +46,12 @@ def create_session(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    return service.create_session(db, current_user.user_id, current_user.hospital_id, data.report_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise ValidationException(
+            detail="存量用户无身份证后六位,无法创建会话,请联系管理员补齐身份信息"
+        )
+    return service.create_session(db, uid, nm, current_user.hospital_id, data.report_id)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -52,7 +60,10 @@ def get_session(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    session = service.get_session(db, session_id, current_user.user_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Session not found")
+    session = service.get_session(db, session_id, uid, nm)
     if not session:
         raise NotFoundException(detail="Session not found")
     return session
@@ -65,8 +76,11 @@ def update_session(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Session not found")
     session = service.update_session_report(
-        db, session_id, current_user.user_id, data.report_id
+        db, session_id, uid, nm, data.report_id
     )
     if not session:
         raise NotFoundException(detail="Session not found")
@@ -79,7 +93,10 @@ def delete_session(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    if not service.delete_session(db, session_id, current_user.user_id):
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Session not found")
+    if not service.delete_session(db, session_id, uid, nm):
         raise NotFoundException(detail="Session not found")
     return {"status": "deleted"}
 
@@ -90,7 +107,10 @@ def get_messages(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    session = service.get_session(db, session_id, current_user.user_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Session not found")
+    session = service.get_session(db, session_id, uid, nm)
     if not session:
         raise NotFoundException(detail="Session not found")
     return service.get_messages(db, session_id)
@@ -103,10 +123,13 @@ async def send_message(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    session = service.get_session(db, session_id, current_user.user_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Session not found")
+    session = service.get_session(db, session_id, uid, nm)
     if not session:
         raise NotFoundException(detail="Session not found")
     token_gen = service.process_chat_stream(
-        db, session, data.content, current_user.user_id
+        db, session, data.content, uid, nm
     )
     return await sse_stream(token_gen)

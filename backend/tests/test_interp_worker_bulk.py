@@ -68,7 +68,7 @@ def env():
 
 
 def _make_report(db, hospital_id="H001"):
-    r = ReportInfo(user_id=1)
+    r = ReportInfo(user_id="123456")
     db.add(r); db.commit(); db.refresh(r)
     return r
 

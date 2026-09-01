@@ -68,7 +68,8 @@ async def run_planner(
     history_msgs: list,
     user_message: str,
     report_id: Optional[int],
-    user_id: Optional[int],
+    user_id: Optional[str],
+    name: Optional[str] = None,
 ) -> ChatPlan:
     """运行 planner：用结构化输出决定调用哪些工具（不执行工具）。
 
@@ -164,15 +165,16 @@ def _execute_get_report_summary(ctx: AgentContext) -> tuple[list, str]:
 
 def _execute_get_user_history_reports(ctx: AgentContext, limit: int = 5) -> tuple[list, str]:
     user_id = ctx.user_id
-    if not user_id:
+    name = ctx.name
+    if not user_id or not name:
         return [], "（无法识别用户）"
     db = get_session(f"hospital_{ctx.hospital_id}")
     try:
         rows = db.execute(
             text("SELECT r.id, r.report_date, i.overall_level "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
-                 "WHERE r.user_id = :uid ORDER BY r.report_date DESC LIMIT :lim"),
-            {"uid": user_id, "lim": limit},
+                 "WHERE r.user_id = :uid AND r.name = :nm ORDER BY r.report_date DESC LIMIT :lim"),
+            {"uid": user_id, "nm": name, "lim": limit},
         ).fetchall()
     finally:
         db.close()
@@ -182,15 +184,17 @@ def _execute_get_user_history_reports(ctx: AgentContext, limit: int = 5) -> tupl
 
 def _execute_get_indicator_history(ctx: AgentContext, item_name: str) -> tuple[list, str]:
     user_id = ctx.user_id
-    if not user_id:
+    name = ctx.name
+    if not user_id or not name:
         return [], "（无法识别用户）"
     db = get_session(f"hospital_{ctx.hospital_id}")
     try:
         rows = db.execute(
             text("SELECT ri.report_date, ind.result_value, ind.unit "
                  "FROM report_indicator ind JOIN report_info ri ON ind.report_id = ri.id "
-                 "WHERE ri.user_id = :uid AND ind.item_name = :name ORDER BY ri.report_date ASC"),
-            {"uid": user_id, "name": item_name},
+                 "WHERE ri.user_id = :uid AND ri.name = :nm AND ind.item_name = :name "
+                 "ORDER BY ri.report_date ASC"),
+            {"uid": user_id, "nm": name, "name": item_name},
         ).fetchall()
     finally:
         db.close()

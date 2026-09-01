@@ -55,7 +55,7 @@ class HighRiskItem(BaseModel):
     hospital_id: str
     hospital_name: str
     report_id: int
-    user_id: int
+    user_id: str
     name: Optional[str] = None
     gender: Optional[str] = None
     age: Optional[int] = None

@@ -39,7 +39,7 @@ async def test_run_planner_returns_plan_with_tools():
     ))
 
     with patch("app.ai.agents.chat_planner.get_chat_model", return_value=fake_model):
-        plan = await run_planner("H001", [], "高血压有什么并发症", None, 4)
+        plan = await run_planner("H001", [], "高血压有什么并发症", None, "123456")
 
     assert plan.need_tools is True
     assert len(plan.tool_calls) == 1
@@ -58,7 +58,7 @@ async def test_run_planner_returns_empty_plan_for_greeting():
     ))
 
     with patch("app.ai.agents.chat_planner.get_chat_model", return_value=fake_model):
-        plan = await run_planner("H001", [], "你好", None, 4)
+        plan = await run_planner("H001", [], "你好", None, "123456")
 
     assert plan.need_tools is False
     assert plan.tool_calls == []
@@ -73,7 +73,7 @@ async def test_run_planner_handles_error():
     fake_model.with_structured_output.return_value.ainvoke = AsyncMock(side_effect=RuntimeError("model down"))
 
     with patch("app.ai.agents.chat_planner.get_chat_model", return_value=fake_model):
-        plan = await run_planner("H001", [], "高血压", None, 4)
+        plan = await run_planner("H001", [], "高血压", None, "123456")
 
     assert plan.need_tools is False
     assert "planner error" in plan.summary
@@ -89,7 +89,7 @@ def test_execute_plan_search_knowledge():
         need_tools=True,
         tool_calls=[PlannedToolCall(tool="search_knowledge", query="高血压 并发症")],
     )
-    ctx = AgentContext(hospital_id="H001", report_id=None, user_id=4)
+    ctx = AgentContext(hospital_id="H001", report_id=None, user_id="123456", name="张三")
 
     mock_results = [
         SearchResult(entry_id=1, title="高血压并发症", content="心脏病、脑卒中...",
@@ -119,7 +119,7 @@ def test_execute_plan_get_report_indicators_no_report():
         need_tools=True,
         tool_calls=[PlannedToolCall(tool="get_report_indicators")],
     )
-    ctx = AgentContext(hospital_id="H001", report_id=None, user_id=4)
+    ctx = AgentContext(hospital_id="H001", report_id=None, user_id="123456", name="张三")
 
     refs, context = execute_plan(plan, ctx)
 
@@ -133,7 +133,7 @@ def test_execute_plan_empty_plan():
     from app.ai.agents.tools import AgentContext
 
     plan = ChatPlan(need_tools=False, tool_calls=[])
-    ctx = AgentContext(hospital_id="H001", report_id=None, user_id=4)
+    ctx = AgentContext(hospital_id="H001", report_id=None, user_id="123456", name="张三")
 
     refs, context = execute_plan(plan, ctx)
 
@@ -153,7 +153,7 @@ def test_execute_plan_unknown_tool_skipped():
             PlannedToolCall(tool="get_triage_rules"),
         ],
     )
-    ctx = AgentContext(hospital_id="H001", report_id=None, user_id=4)
+    ctx = AgentContext(hospital_id="H001", report_id=None, user_id="123456", name="张三")
 
     mock_db = MagicMock()
     mock_db.execute.return_value.fetchall.return_value = []
@@ -193,3 +193,55 @@ def test_build_answer_system_prompt_no_report_id():
 
     prompt = _build_answer_system_prompt("some context", None)
     assert "关联报告" not in prompt
+
+
+def test_execute_plan_get_user_history_reports_dual_filter():
+    """execute_plan 的 get_user_history_reports 按 user_id + name 双条件过滤"""
+    from app.ai.agents.chat_planner import execute_plan, ChatPlan, PlannedToolCall
+    from app.ai.agents.tools import AgentContext
+
+    plan = ChatPlan(
+        need_tools=True,
+        tool_calls=[PlannedToolCall(tool="get_user_history_reports", limit=3)],
+    )
+    ctx = AgentContext(hospital_id="H001", report_id=None, user_id="123456", name="张三")
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.fetchall.return_value = []
+    mock_db.close = MagicMock()
+    with patch("app.ai.agents.chat_planner.get_session", return_value=mock_db):
+        refs, context = execute_plan(plan, ctx)
+
+    assert "无历史报告" in context
+    args, kwargs = mock_db.execute.call_args
+    sql = args[0].text
+    assert "r.user_id = :uid" in sql
+    assert "r.name = :nm" in sql
+    params = kwargs.get("params") if "params" in kwargs else (args[1] if len(args) > 1 else None)
+    assert params == {"uid": "123456", "nm": "张三", "lim": 3}
+
+
+def test_execute_plan_get_indicator_history_dual_filter():
+    """execute_plan 的 get_indicator_history 按 user_id + name 双条件过滤"""
+    from app.ai.agents.chat_planner import execute_plan, ChatPlan, PlannedToolCall
+    from app.ai.agents.tools import AgentContext
+
+    plan = ChatPlan(
+        need_tools=True,
+        tool_calls=[PlannedToolCall(tool="get_indicator_history", item_name="血糖")],
+    )
+    ctx = AgentContext(hospital_id="H001", report_id=None, user_id="123456", name="张三")
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.fetchall.return_value = []
+    mock_db.close = MagicMock()
+    with patch("app.ai.agents.chat_planner.get_session", return_value=mock_db):
+        refs, context = execute_plan(plan, ctx)
+
+    assert "血糖" in context
+    args, kwargs = mock_db.execute.call_args
+    sql = args[0].text
+    assert "ri.user_id = :uid" in sql
+    assert "ri.name = :nm" in sql
+    params = kwargs.get("params") if "params" in kwargs else (args[1] if len(args) > 1 else None)
+    assert params == {"uid": "123456", "nm": "张三", "name": "血糖"}

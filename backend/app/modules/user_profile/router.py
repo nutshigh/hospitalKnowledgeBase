@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from app.core.database import get_hospital_db
-from app.core.dependencies import get_current_user, CurrentUser
+from app.core.dependencies import get_current_user, CurrentUser, user_identity
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.user_profile import service
 
@@ -26,7 +26,10 @@ def overview(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    return service.get_overview(db, current_user.user_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        return {"user_summary": None, "indicator_trends": [], "abnormal_distribution": []}
+    return service.get_overview(db, uid, nm)
 
 
 @router.get("/compare")
@@ -36,7 +39,10 @@ def compare(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    return service.get_comparison(db, current_user.user_id, report_id, baseline_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Report not found")
+    return service.get_comparison(db, uid, nm, report_id, baseline_id)
 
 
 @router.get("/ai-summary")
@@ -46,5 +52,8 @@ def ai_summary(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    summary, cached = service.get_ai_summary(db, current_user.user_id, report_id, baseline_id)
+    uid, nm = user_identity(current_user)
+    if uid is None:
+        raise NotFoundException(detail="Report not found")
+    summary, cached = service.get_ai_summary(db, uid, nm, report_id, baseline_id)
     return {"ai_summary": summary, "cached": cached}

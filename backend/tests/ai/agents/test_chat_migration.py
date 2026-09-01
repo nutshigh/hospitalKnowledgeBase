@@ -22,7 +22,7 @@ async def test_process_chat_stream_yields_sse_events():
         with patch.object(service, "save_message"), \
              patch.object(service, "get_messages", return_value=[]):
             events = []
-            async for ev in service.process_chat_stream(mock_db, mock_session, "你好", 1):
+            async for ev in service.process_chat_stream(mock_db, mock_session, "你好", 1, "张三"):
                 events.append(ev)
             assert len(events) == 3
             assert events[1]["event"] == "token"

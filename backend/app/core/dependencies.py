@@ -10,10 +10,13 @@ from app.utils.exceptions import UnauthorizedException, ForbiddenException
 
 
 class CurrentUser:
-    def __init__(self, user_id: int, role: str, hospital_id: Optional[str] = None):
+    def __init__(self, user_id: int, role: str, hospital_id: Optional[str] = None,
+                 id_card_suffix: Optional[str] = None, name: Optional[str] = None):
         self.user_id = user_id
         self.role = role
         self.hospital_id = hospital_id
+        self.id_card_suffix = id_card_suffix
+        self.name = name
 
 
 async def get_current_user(
@@ -29,11 +32,14 @@ async def get_current_user(
     user_id = payload.get("user_id")
     role = payload.get("role")
     hospital_id = payload.get("hospital_id")
+    id_card_suffix = payload.get("id_card_suffix")
+    name = payload.get("name")
     if not user_id or not role:
         raise UnauthorizedException(detail="Invalid token payload")
     if hospital_id:
         set_current_hospital_id(hospital_id)
-    return CurrentUser(user_id=user_id, role=role, hospital_id=hospital_id)
+    return CurrentUser(user_id=user_id, role=role, hospital_id=hospital_id,
+                       id_card_suffix=id_card_suffix, name=name)
 
 
 def require_role(*roles: str):
@@ -42,3 +48,14 @@ def require_role(*roles: str):
             raise ForbiddenException(detail=f"Requires role: {roles}")
         return current_user
     return dependency
+
+
+def user_identity(current_user) -> tuple[Optional[str], Optional[str]]:
+    """返回 (user_id_anchor, name_anchor)。
+
+    role='user' 用 id_card_suffix + name 双锚定;doctor/admin 用 str(platform user_id)+None
+    匹配存量会话/报告;存量 role='user' 无后缀 -> (None, None) 表示无结果(调用方须空/拒绝,不泄露)。
+    """
+    if current_user.role == "user":
+        return current_user.id_card_suffix, current_user.name
+    return str(current_user.user_id), None

@@ -60,7 +60,7 @@ def env():
 
 def _make_task(db, retry_count=0, status="queued", hospital_id="H001"):
     t = ReportTask(
-        user_id=1, original_file_path="/tmp/x.pdf", original_filename="x.pdf",
+        user_id="123456", original_file_path="/tmp/x.pdf", original_filename="x.pdf",
         file_type="pdf", file_size=10, status=status,
         priority=0, retry_count=retry_count,
     )

@@ -123,6 +123,11 @@ class Settings(BaseSettings):
     BATCH_FILE_MAX_SIZE: int = 52428800        # 50MB
     DEAD_LETTER_TTL: int = 604800              # 7d
 
+    # External hospital resolver (batch upload id-card suffix → hospital)
+    # 空 = 未配置,resolve_hospital 一律返回 None(全部 hospital_not_found)
+    EXTERNAL_RESOLVER_URL: str = ""
+    EXTERNAL_RESOLVER_TIMEOUT: float = 10.0
+
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"
 

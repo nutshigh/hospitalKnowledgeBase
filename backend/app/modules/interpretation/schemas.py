@@ -57,7 +57,7 @@ def parse_summary_text(summary_text: Optional[str]) -> InterpretationReportSchem
 
 
 class HighRiskItem(BaseModel):
-    user_id: int
+    user_id: str
     report_id: int
     name: Optional[str] = None
     unit_name: Optional[str] = None

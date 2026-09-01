@@ -236,7 +236,8 @@ async def run_chat_agent(
     db: Session,
     session,
     user_message: str,
-    user_id: int,
+    user_id: str,
+    name: str,
 ) -> AsyncIterator[dict]:
     """运行 chat 流程，yield SSE 事件 dict。
 
@@ -263,7 +264,7 @@ async def run_chat_agent(
         ]
 
         # ── 1. Planner：决定调用哪些工具（结构化输出，不执行工具）──
-        ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id)
+        ctx = AgentContext(hospital_id=hospital_id, report_id=session.report_id, user_id=user_id, name=name)
         planner_history = history_msgs[-PLANNER_HISTORY_MSGS:] if PLANNER_HISTORY_MSGS > 0 else []
         logger.info(
             "session=%s user=%s hospital=%s report_id=%s msg=%s",
@@ -271,7 +272,7 @@ async def run_chat_agent(
             session.report_id, (user_message or "")[:200],
         )
         t_planner_start = time.time()
-        plan = await run_planner(hospital_id, planner_history, user_message, session.report_id, user_id)
+        plan = await run_planner(hospital_id, planner_history, user_message, session.report_id, user_id, name)
         logger.info(
             "session=%s planner done tools=%s need_tools=%s latency_ms=%d",
             session_id,

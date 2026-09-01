@@ -10,18 +10,18 @@ MAX_HISTORY_ROUNDS = 20
 
 # ---- Session CRUD ----
 
-def create_session(db: Session, user_id: int, hospital_id: str,
+def create_session(db: Session, user_id: str, name: str, hospital_id: str,
                    report_id: Optional[int] = None) -> ChatSession:
-    session = ChatSession(user_id=user_id, hospital_id=hospital_id, report_id=report_id)
+    session = ChatSession(user_id=user_id, name=name, hospital_id=hospital_id, report_id=report_id)
     db.add(session)
     db.commit()
     db.refresh(session)
     return session
 
 
-def update_session_report(db: Session, session_id: int, user_id: int,
+def update_session_report(db: Session, session_id: int, user_id: str, name: str,
                           report_id: Optional[int]) -> Optional[ChatSession]:
-    session = get_session(db, session_id, user_id)
+    session = get_session(db, session_id, user_id, name)
     if not session:
         return None
     session.report_id = report_id
@@ -44,25 +44,26 @@ def _get_report_date_note(db: Session, report_id: int) -> str:
     return f"（当前引用的报告日期：{date_str}，请在你的回答中提及此日期以便用户知晓数据来源）"
 
 
-def list_sessions(db: Session, user_id: int) -> List[ChatSession]:
+def list_sessions(db: Session, user_id: str, name: str) -> List[ChatSession]:
     return (
         db.query(ChatSession)
-        .filter(ChatSession.user_id == user_id)
+        .filter(ChatSession.user_id == user_id, ChatSession.name == name)
         .order_by(ChatSession.updated_at.desc())
         .all()
     )
 
 
-def get_session(db: Session, session_id: int, user_id: int) -> Optional[ChatSession]:
+def get_session(db: Session, session_id: int, user_id: str, name: str) -> Optional[ChatSession]:
     return (
         db.query(ChatSession)
-        .filter(ChatSession.id == session_id, ChatSession.user_id == user_id)
+        .filter(ChatSession.id == session_id, ChatSession.user_id == user_id,
+                ChatSession.name == name)
         .first()
     )
 
 
-def delete_session(db: Session, session_id: int, user_id: int) -> bool:
-    session = get_session(db, session_id, user_id)
+def delete_session(db: Session, session_id: int, user_id: str, name: str) -> bool:
+    session = get_session(db, session_id, user_id, name)
     if not session:
         return False
     db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
@@ -98,12 +99,13 @@ async def process_chat_stream(
     db: Session,
     session: ChatSession,
     user_message: str,
-    user_id: int,
+    user_id: str,
+    name: str,
 ) -> AsyncIterator[dict]:
     """处理一条用户消息，异步 yield SSE 事件 dict。
     并发控制由 run_chat_agent 内部的 _session_locks 管理。
     """
     async for event in run_chat_agent(
-        session.hospital_id, db, session, user_message, user_id,
+        session.hospital_id, db, session, user_message, user_id, name,
     ):
         yield event

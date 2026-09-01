@@ -8,8 +8,11 @@ import zipfile
 import tarfile
 from typing import Optional
 
+from sqlalchemy import text
+
 from app.config import settings
-from app.core.database import get_hospital_db
+from app.core import hospital_resolver
+from app.core.database import get_hospital_db, get_template_db
 from app.core.logging_config import setup_logging
 from app.core.rabbitmq import rabbitmq, TaskMessage
 from app.core.retry import backoff_for_retry
@@ -21,19 +24,76 @@ _log = logging.getLogger("app.batch.extract")
 # 不含 docx(Spec F8:DOCX 从批量上传白名单移除)
 ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
 
-# 文件名约定: <姓名>_<医院编号>_<用户编号>.<ext>
-_FILENAME_RE = re.compile(r"^([^_]+)_([^_]+)_(\d+)$")
+# 文件名约定: <姓名>_<身份证后六位>.<ext>  (后六位 = 5 位数字 + 末位数字或 X)
+_FILENAME_RE = re.compile(r"^([^_]+)_([0-9]{5}[0-9X])$")
 
 
-def _parse_filename(filename: str) -> Optional[tuple[int, str]]:
-    """从 zip/tar 内文件名抽取 (user_id, hospital_code)。
-    Returns (int, str) on match, None on mismatch。
+def _parse_filename(filename: str) -> Optional[tuple[str, str]]:
+    """从 zip/tar 内文件名抽取 (姓名, 身份证后六位)。
+    Returns (str, str) on match, None on mismatch。
     """
     base = os.path.splitext(os.path.basename(filename))[0]
     m = _FILENAME_RE.match(base)
     if m:
-        return int(m.group(3)), m.group(2)
+        return m.group(1), m.group(2)
     return None
+
+
+# 批内缓存:batch_id → {id_suffix: hospital_id | None};批结束清理
+_batch_resolver_cache: dict[str, dict[str, Optional[str]]] = {}
+
+
+def _resolve_hospital_id(batch_id, id_suffix) -> Optional[str]:
+    cache = _batch_resolver_cache.setdefault(batch_id, {})
+    if id_suffix in cache:
+        return cache[id_suffix]
+    hospital_id = hospital_resolver.resolve_hospital(id_suffix)
+    if hospital_id is None:
+        cache[id_suffix] = None
+        return None
+    if not _hospital_registered(hospital_id):
+        _log.warning("resolve hospital not registered batch=%s suffix=%s hid=%s",
+                     batch_id, id_suffix, hospital_id)
+        cache[id_suffix] = None
+        return None
+    cache[id_suffix] = hospital_id
+    return hospital_id
+
+
+def _hospital_registered(hospital_id: str) -> bool:
+    """template 库 hospital_tenant 是否登记该医院且启用。"""
+    db = next(get_template_db())
+    try:
+        row = db.execute(
+            text("SELECT 1 FROM hospital_tenant WHERE hospital_id = :hid AND is_active = 1"),
+            {"hid": hospital_id},
+        ).fetchone()
+        return row is not None
+    finally:
+        db.close()
+
+
+def _record_hospital_not_found(db, batch_id, file_path, size):
+    """记一行 file failed='hospital_not_found',既不落盘也不投 parsing。
+
+    与 dispatch_unmatched 同等级短路:外部接口无匹配或解析出的医院本地未注册。
+    """
+    _log.info(
+        "extract stage=hospital_not_found batch=%s file=%s size=%d",
+        batch_id, file_path, size,
+    )
+    import uuid as _uuid
+    fid = _uuid.uuid4().hex
+    db.add(BatchImportFile(
+        id=fid, batch_id=batch_id, file_path=file_path, file_size=size,
+        crc32=f"hnf{_uuid.uuid4().hex[:5]}",
+        status="failed", failed_stage="hospital_not_found",
+        error_message="hospital_not_found",
+    ))
+    b = db.query(BatchImport).get(batch_id)
+    if b is not None:
+        b.failed = (b.failed or 0) + 1
+    db.commit()
 
 
 def handle_extract_task(message: dict):
@@ -87,6 +147,7 @@ def handle_extract_task(message: dict):
         # 若全部 file 已 failed(如全 oversize),推进到 partial_failed(F6)
         BatchService._maybe_advance_status(db, b)
     finally:
+        _batch_resolver_cache.pop(batch_id, None)
         db.close()
 
 
@@ -115,12 +176,16 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                 if parsed is None:
                     _record_dispatch_unmatched(db, b.id, info.filename, info.file_size)
                     continue
-                user_id, file_hospital = parsed
+                name, id_suffix = parsed
+                file_hospital = _resolve_hospital_id(b.id, id_suffix)
+                if file_hospital is None:
+                    _record_hospital_not_found(db, b.id, info.filename, info.file_size)
+                    continue
                 file_db = next(get_hospital_db(file_hospital)) if file_hospital != hospital_id else db
                 try:
                     with zf.open(info) as fh:
                         _stream_to_report(file_db, b, file_hospital, info.filename, fh,
-                                          info.file_size, user_id, batch_db=db)
+                                          info.file_size, name, id_suffix, batch_db=db)
                 finally:
                     if file_db is not db:
                         file_db.close()
@@ -146,12 +211,16 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                 if parsed is None:
                     _record_dispatch_unmatched(db, b.id, member.name, member.size)
                     continue
-                user_id, file_hospital = parsed
+                name, id_suffix = parsed
+                file_hospital = _resolve_hospital_id(b.id, id_suffix)
+                if file_hospital is None:
+                    _record_hospital_not_found(db, b.id, member.name, member.size)
+                    continue
                 file_db = next(get_hospital_db(file_hospital)) if file_hospital != hospital_id else db
                 try:
                     fh = tf.extractfile(member)
                     _stream_to_report(file_db, b, file_hospital, member.name, fh,
-                                      member.size, user_id, batch_db=db)
+                                      member.size, name, id_suffix, batch_db=db)
                 finally:
                     if file_db is not db:
                         file_db.close()
@@ -200,7 +269,7 @@ def _record_dispatch_unmatched(db, batch_id, file_path, size,
     db.commit()
 
 
-def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, user_id: int,
+def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, name, user_id: str,
                       batch_db=None):
     """读流,算 crc32,落盘,建 report_task 并 publish parsing.bulk(幂等)。
 
@@ -218,7 +287,7 @@ def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, user_id: in
     if f.report_task_id is not None:
         return  # 已发布(幂等命中,F18 补差),不再 publish
     _log.info(
-        "extract stage=queued batch=%s file=%s file_id=%s user=%d size=%d target_hospital=%s",
+        "extract stage=queued batch=%s file=%s file_id=%s user=%s size=%d target_hospital=%s",
         b.id, rel_path, fid, user_id, size, hospital_id,
     )
     ext = os.path.splitext(rel_path)[1].lstrip(".")
@@ -232,7 +301,7 @@ def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, user_id: in
     from app.modules.report.service import create_task
     task = create_task(
         db=target_db, hospital_id=hospital_id,
-        user_id=user_id,
+        user_id=user_id, name=name,
         file_path=disk_path, filename=os.path.basename(rel_path),
         file_type=file_type, file_size=size, priority="bulk",
         batch_id=b.id, file_id=fid,

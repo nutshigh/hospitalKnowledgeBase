@@ -60,8 +60,15 @@ def upload_report(
                 raise ValidationException(detail="File too large (max 20MB)")
             out.write(buf)
 
+    if current_user.role == "user" and not current_user.id_card_suffix:
+        raise ValidationException(
+            detail="存量用户无身份证后六位,无法上传报告,请联系管理员补齐身份信息"
+        )
     task = service.create_task(
-        db=db, hospital_id=current_user.hospital_id, user_id=current_user.user_id,
+        db=db, hospital_id=current_user.hospital_id,
+        user_id=current_user.id_card_suffix if current_user.role == "user"
+        else str(current_user.user_id),
+        name=None,
         file_path=file_path, filename=file.filename, file_type=file_type,
         file_size=size,
     )
@@ -92,8 +99,16 @@ def list_reports(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    user_id = None if current_user.role != "user" else current_user.user_id
-    items, total = service.list_reports(db, current_user.hospital_id, user_id, page, page_size)
+    if current_user.role != "user":
+        user_id = None
+        name = None
+    elif current_user.id_card_suffix:
+        user_id = current_user.id_card_suffix
+        name = current_user.name
+    else:
+        # 存量用户无后六位:不泄露他人报告,返回空
+        return {"items": [], "total": 0, "page": page, "page_size": page_size}
+    items, total = service.list_reports(db, current_user.hospital_id, user_id, name, page, page_size)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 

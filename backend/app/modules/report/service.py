@@ -13,8 +13,9 @@ from app.core.image_preprocess import preprocess
 from app.core.rabbitmq import rabbitmq, TaskMessage
 
 
-def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
+def create_task(db: Session, hospital_id: str, user_id: str, file_path: str,
                 filename: str, file_type: str, file_size: int,
+                name: Optional[str] = None,
                 thumbnail_path: Optional[str] = None,
                 priority: str = "normal",
                 batch_id: Optional[str] = None,
@@ -34,7 +35,7 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
     db.refresh(task)
 
     # Create report_info immediately so it appears on home page
-    report = ReportInfo(task_id=task.id, user_id=user_id)
+    report = ReportInfo(task_id=task.id, user_id=user_id, name=name)
     db.add(report)
     db.commit()
 
@@ -110,7 +111,8 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         if not report:
             report = ReportInfo(task_id=task.id, user_id=task.user_id)
             db.add(report)
-        report.name = personal_info.get("name")
+        if not report.name:
+            report.name = personal_info.get("name")
         report.gender = personal_info.get("gender")
         report.age = personal_info.get("age")
         report.report_date = personal_info.get("check_date")
@@ -270,12 +272,15 @@ def _file_to_base64_list(file_path: str, file_type: str) -> list[str]:
         raise ValueError(f"Cannot convert file_type={file_type} to images")
 
 
-def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
+def list_reports(db: Session, hospital_id: str, user_id: Optional[str] = None,
+                 name: Optional[str] = None,
                  page: int = 1, page_size: int = 20) -> tuple:
     from sqlalchemy.orm import joinedload
     q = db.query(ReportInfo)
     if user_id:
         q = q.filter(ReportInfo.user_id == user_id)
+        if name:
+            q = q.filter(ReportInfo.name == name)
     total = q.count()
     items = q.order_by(ReportInfo.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     # Attach task status to each report

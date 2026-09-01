@@ -260,7 +260,7 @@ class BatchService:
         requeued = 0
         skipped_unretryable = 0
         saw_interp = False
-        UNRETRYABLE_STAGES = ("oversize", "dispatch_unmatched")
+        UNRETRYABLE_STAGES = ("oversize", "dispatch_unmatched", "hospital_not_found")
         for f in files:
             stage = f.failed_stage
             if stage in UNRETRYABLE_STAGES:

@@ -88,7 +88,8 @@ class InterpAgentState(AgentState):
 class InterpState(TypedDict):
     hospital_id: str
     report_id: int
-    user_id: int
+    user_id: str
+    name: str
     indicators: List[dict]
     judgments: List[dict]
     abnormal_indicators: List[dict]
@@ -197,15 +198,15 @@ def _merge_citations(cite_a: list[dict], cite_b: list[dict]) -> list[dict]:
     return merged
 
 
-def _fetch_trend(user_id: int, db: Session) -> str:
-    if not user_id:
+def _fetch_trend(user_id: str, name: str, db: Session) -> str:
+    if not user_id or not name:
         return ""
     try:
         rows = db.execute(
             text("SELECT ri.report_date, ind.item_name, ind.result_value, ind.unit "
                  "FROM report_indicator ind JOIN report_info ri ON ind.report_id = ri.id "
-                 "WHERE ri.user_id = :uid ORDER BY ri.report_date ASC"),
-            {"uid": user_id},
+                 "WHERE ri.user_id = :uid AND ri.name = :nm ORDER BY ri.report_date ASC"),
+            {"uid": user_id, "nm": name},
         ).fetchall()
     except Exception:
         return ""
@@ -231,7 +232,7 @@ def _generate_report(state: InterpState, db: Session) -> dict:
         }
 
     knowledge = list((state.get("knowledge_results") or {}).values())
-    trend = _fetch_trend(state.get("user_id"), db)
+    trend = _fetch_trend(state.get("user_id"), state.get("name"), db)
 
     abnormal_lines = []
     for ind in abnormal:
@@ -319,7 +320,7 @@ def build_interp_graph(hospital_id: str, db: Session):
             text("SELECT id, user_id FROM report_info WHERE id = :rid"),
             {"rid": report_id},
         ).fetchone()
-        user_id = row[1] if row else 0
+        user_id = str(row[1]) if row else ""
         rows = db.execute(
             text("SELECT id, item_name, item_name_standard, result_value, unit, "
                  "ref_range_low, ref_range_high FROM report_indicator WHERE report_id = :rid ORDER BY id"),
@@ -571,7 +572,8 @@ def run_interpretation_agent(hospital_id: str, db: Session, report_id: int) -> d
         final_state = graph.invoke({
             "hospital_id": hospital_id,
             "report_id": report_id,
-            "user_id": 0,
+            "user_id": str(report.user_id or ""),
+            "name": report.name or "",
             "indicators": [],
             "judgments": [],
             "abnormal_indicators": [],

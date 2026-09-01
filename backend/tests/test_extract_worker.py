@@ -7,7 +7,7 @@ import zipfile
 from unittest.mock import patch, MagicMock
 
 import pytest
-from sqlalchemy import Integer
+from sqlalchemy import Integer, String
 
 from app.models.base import Base
 from app.modules.report.batch_models import BatchImport, BatchImportFile
@@ -28,6 +28,15 @@ def _swap_int(*cols):
 def _restore(saved):
     for c, t in saved:
         c.type = t
+
+
+# 生产上 user_id 将由 BIGINT 迁为 VARCHAR(后六位含 X)。测试期临时把列类型改为
+# String,保证 sqlite 不把数字型后六位("123456")强转 int,以便断言字符串语义。
+def _swap_str(*cols):
+    saved = [(c, c.type) for c in cols]
+    for c in cols:
+        c.type = String(64)
+    return saved
 
 
 def _make_zip(path, files):
@@ -61,8 +70,13 @@ def env():
         ReportInfo.__table__.c.id,
         ReportIndicator.__table__.c.id,
     )
+    saved_str = _swap_str(
+        ReportTask.__table__.c.user_id,
+        ReportInfo.__table__.c.user_id,
+    )
     Base.metadata.create_all(engine)
     _restore(saved)
+    _restore(saved_str)
     Session = sessionmaker(bind=engine)
     s = Session()
 
@@ -71,6 +85,10 @@ def env():
     msgs = []
     Mq.publish.side_effect = lambda m: msgs.append(m)
 
+    from app.core import hospital_resolver as _hr
+    hr_resolve = patch.object(_hr, "resolve_hospital", lambda suffix: "H001")
+    hr_registered = patch("app.modules.report.extract_worker._hospital_registered",
+                          lambda hid: True)
     getdb_p = patch("app.modules.report.extract_worker.get_hospital_db",
                     lambda hid: _get_db_gen(s))
     bs_settings = patch("app.modules.report.batch_service.settings.FILE_STORAGE_ROOT", tmp)
@@ -81,9 +99,13 @@ def env():
 
     getdb_p.start(); bs_settings.start(); ew_settings.start()
     bs_mq.start(); ew_mq.start(); svc_mq.start()
+    hr_resolve.start(); hr_registered.start()
     try:
         yield s, tmp, Mq, msgs
     finally:
+        from app.modules.report import extract_worker as _ew
+        _ew._batch_resolver_cache.clear()
+        hr_resolve.stop(); hr_registered.stop()
         getdb_p.stop(); bs_settings.stop(); ew_settings.stop()
         bs_mq.stop(); ew_mq.stop(); svc_mq.stop()
         s.close()
@@ -108,7 +130,7 @@ def _msg(batch_id="b1", archive_path=None):
 def test_T2_1_three_pdfs(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("u1_H001_1.pdf", b"pdf1"), ("u2_H001_2.pdf", b"pdf2"), ("u3_H001_3.pdf", b"pdf3")])
+    _make_zip(ap, [("张三_123456.pdf", b"pdf1"), ("李四_123457.pdf", b"pdf2"), ("王五_123458.pdf", b"pdf3")])
     _make_batch(env, ap)
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -132,7 +154,7 @@ def test_T2_2_oversize(env):
     # patch a tiny limit
     from app.config import settings
     with patch.object(settings, "BATCH_FILE_MAX_SIZE", 10):
-        _make_zip(ap, [("big_H001_1.pdf", b"x" * 200)])
+        _make_zip(ap, [("张三_123456.pdf", b"x" * 200)])
         _make_batch(env, ap)
         from app.modules.report.extract_worker import handle_extract_task
         handle_extract_task(_msg(archive_path=ap))
@@ -153,9 +175,9 @@ def test_T2_3_mixed_exts(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
     _make_zip(ap, [
-        ("ok1_H001_1.pdf", b"pdf"),
-        ("ok2_H001_2.jpg", b"jpg"),
-        ("ok3_H001_3.png", b"png"),
+        ("张三_123456.pdf", b"pdf"),
+        ("李四_123457.jpg", b"jpg"),
+        ("王五_123458.png", b"png"),
         ("skip1.docx", b"docx"),
         ("skip2.txt", b"txt"),
     ])
@@ -177,7 +199,7 @@ def test_T2_3_mixed_exts(env):
 def test_T2_4_dup_crc32(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("u1_H001_1.pdf", b"same"), ("u2_H001_2.pdf", b"same")])
+    _make_zip(ap, [("张三_123456.pdf", b"same"), ("李四_123457.pdf", b"same")])
     _make_batch(env, ap)
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -193,7 +215,7 @@ def test_T2_4_dup_crc32(env):
 def test_T2_5_cancelled_skipped(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("cn_H001_1.pdf", b"x")])
+    _make_zip(ap, [("张三_123456.pdf", b"x")])
     _make_batch(env, ap, status="cancelled")
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -209,7 +231,7 @@ def test_T2_5_cancelled_skipped(env):
 def test_T2_6_requeue_only_fills_gap(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("q1_H001_1.pdf", b"x"), ("q2_H001_2.pdf", b"y")])
+    _make_zip(ap, [("张三_123456.pdf", b"x"), ("李四_123457.pdf", b"y")])
     _make_batch(env, ap)
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -249,7 +271,7 @@ def test_T2_7_corrupt_zip(env):
 def test_T2_8_transient_retry_publish_retry(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("t1_H001_1.pdf", b"x")])
+    _make_zip(ap, [("张三_123456.pdf", b"x")])
     _make_batch(env, ap)
 
     from app.modules.report import extract_worker
@@ -279,7 +301,7 @@ def test_T2_8_transient_retry_publish_retry(env):
 def test_T2_9_transient_retry_exhausted_partial_failed(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("t1_H001_1.pdf", b"x")])
+    _make_zip(ap, [("张三_123456.pdf", b"x")])
     _make_batch(env, ap)
 
     from app.modules.report import extract_worker
@@ -298,27 +320,29 @@ def test_T2_9_transient_retry_exhausted_partial_failed(env):
 
 
 # ---------------------------------------------------------------------------
-# T2.10 _resolve_user_id: 三段命名命中
+# T2.10 _parse_filename: 姓名_身份证后六位 命中(末位可为 X)
 # ---------------------------------------------------------------------------
-def test_resolve_user_id_matches_three_segment():
-    from app.modules.report.extract_worker import _resolve_user_id
-    assert _resolve_user_id("张三_H001_1001.pdf") == 1001
-    assert _resolve_user_id("LiSi_H002_2048.pdf") == 2048
-    # 路径前缀 OK(basename 拆解)
-    assert _resolve_user_id("sub/dir/王五_H003_7.pdf") == 7
+def test_parse_filename_id_suffix_matches():
+    from app.modules.report.extract_worker import _parse_filename
+    assert _parse_filename("张三_123456.pdf") == ("张三", "123456")
+    assert _parse_filename("李四_12345X.pdf") == ("李四", "12345X")
+    assert _parse_filename("LiSi_204800.pdf") == ("LiSi", "204800")
+    assert _parse_filename("sub/dir/王五_204800.jpg") == ("王五", "204800")
 
 
 # ---------------------------------------------------------------------------
-# T2.11 _resolve_user_id: 反例不命中(返回 None)
+# T2.11 _parse_filename: 反例不命中(返回 None)
 # ---------------------------------------------------------------------------
-def test_resolve_user_id_rejects_non_numeric_or_missing_segment():
-    from app.modules.report.extract_worker import _resolve_user_id
-    assert _resolve_user_id("1001.pdf") is None              # 只 1 段
-    assert _resolve_user_id("张三_1001.pdf") is None         # 只 2 段
-    assert _resolve_user_id("张三_H001_abc.pdf") is None     # 末段非数字
-    assert _resolve_user_id("张三_H001_1001_extra.pdf") is None  # 4 段
-    assert _resolve_user_id("张三H0011001.pdf") is None      # 无下划线
-    assert _resolve_user_id(".pdf") is None                 # 空 basename
+def test_parse_filename_id_suffix_rejects():
+    from app.modules.report.extract_worker import _parse_filename
+    assert _parse_filename("1001.pdf") is None               # 只 1 段
+    assert _parse_filename("张三_12345.pdf") is None         # 末段 5 位
+    assert _parse_filename("张三_1234567.pdf") is None       # 末段 7 位
+    assert _parse_filename("张三_12345Y.pdf") is None        # 末位非法字符
+    assert _parse_filename("张三_H001_1001.pdf") is None     # 旧 3 段格式废弃
+    assert _parse_filename("张三_123456_extra.pdf") is None  # 3 段
+    assert _parse_filename("张三H0011001.pdf") is None       # 无下划线
+    assert _parse_filename(".pdf") is None                   # 空 basename
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +374,7 @@ def test_T2_12_dispatch_unmatched(env):
 def test_T2_13_dispatch_uses_filename_user_id(env):
     db, tmp, Mq, msgs = env
     ap = os.path.join(tmp, "a.zip")
-    _make_zip(ap, [("张三_H001_1001.pdf", b"x"), ("李四_H002_2048.pdf", b"y")])
+    _make_zip(ap, [("张三_123456.pdf", b"x"), ("李四_12345X.pdf", b"y")])
     _make_batch(env, ap, user_id="999")  # 上传者 admin user_id=999
 
     from app.modules.report.extract_worker import handle_extract_task
@@ -359,12 +383,30 @@ def test_T2_13_dispatch_uses_filename_user_id(env):
     from app.modules.report.models import ReportTask
     tasks = db.query(ReportTask).order_by(ReportTask.id).all()
     assert len(tasks) == 2
-    assert {t.user_id for t in tasks} == {1001, 2048}
-    assert 999 not in {t.user_id for t in tasks}
+    assert {t.user_id for t in tasks} == {"123456", "12345X"}
+    assert "999" not in {t.user_id for t in tasks}
     file_rows = db.query(BatchImportFile).order_by(BatchImportFile.id).all()
     for f in file_rows:
         assert f.report_task_id is not None
     assert len(msgs) == 2
+
+
+# ---------------------------------------------------------------------------
+# T2.16 批量落库后 report_info.name == 文件名姓名段(姓名+后六位双锚点)
+# ---------------------------------------------------------------------------
+def test_T2_16_batch_landing_sets_report_info_name(env):
+    db, tmp, Mq, msgs = env
+    ap = os.path.join(tmp, "a.zip")
+    _make_zip(ap, [("张三_123456.pdf", b"x"), ("李四_12345X.pdf", b"y")])
+    _make_batch(env, ap)
+
+    from app.modules.report.extract_worker import handle_extract_task
+    handle_extract_task(_msg(archive_path=ap))
+
+    from app.modules.report.models import ReportInfo
+    infos = db.query(ReportInfo).order_by(ReportInfo.task_id).all()
+    assert len(infos) == 2
+    assert {i.name for i in infos} == {"张三", "李四"}
 
 
 def test_extract_worker_logger_namespaced_under_app_batch():
@@ -399,3 +441,53 @@ def test_extract_worker_start_worker_calls_setup_logging(monkeypatch):
     with pytest.raises(SystemExit):
         mod.start_worker()
     assert calls["n"] >= 1, "start_worker 必须先调 setup_logging()"
+
+
+# ---------------------------------------------------------------------------
+# T2.14 后六位命中但外部接口无匹配 → file.failed_stage='hospital_not_found'
+# ---------------------------------------------------------------------------
+def test_T2_14_hospital_not_found(env):
+    db, tmp, Mq, msgs = env
+    from app.core import hospital_resolver as _hr
+    with patch.object(_hr, "resolve_hospital", lambda suffix: None):
+        ap = os.path.join(tmp, "a.zip")
+        _make_zip(ap, [("张三_123456.pdf", b"x")])
+        _make_batch(env, ap)
+        from app.modules.report.extract_worker import handle_extract_task
+        handle_extract_task(_msg(archive_path=ap))
+
+    f = db.query(BatchImportFile).one()
+    assert f.status == "failed"
+    assert f.failed_stage == "hospital_not_found"
+    assert f.error_message == "hospital_not_found"
+    assert f.report_task_id is None        # 不 create_task
+    assert len(msgs) == 0                  # 不投 parsing
+    b1 = db.query(BatchImport).get("b1")
+    assert b1.failed == 1
+    assert b1.status == "partial_failed"
+
+
+# ---------------------------------------------------------------------------
+# T2.15 后六位命中但外部接口宕机 → 批次重试(publish_retry extract.bulk)
+# ---------------------------------------------------------------------------
+def test_T2_15_resolver_down_retries_batch(env):
+    db, tmp, Mq, msgs = env
+    from app.core import hospital_resolver as _hr
+    from app.core.hospital_resolver import ResolverUnavailableError
+    with patch.object(_hr, "resolve_hospital",
+                      side_effect=ResolverUnavailableError("down")):
+        ap = os.path.join(tmp, "a.zip")
+        _make_zip(ap, [("张三_123456.pdf", b"x")])
+        _make_batch(env, ap)
+        from app.modules.report.extract_worker import handle_extract_task
+        handle_extract_task(_msg(archive_path=ap))
+
+    Mq.publish_retry.assert_called_once()
+    args, kwargs = Mq.publish_retry.call_args
+    assert args[0] == "extract.bulk"
+    assert kwargs.get("batch_id") == "b1"
+    import json as _json
+    assert _json.loads(args[1])["payload"]["retry_count"] == 1
+    db.refresh(db.query(BatchImport).get("b1"))
+    assert db.query(BatchImport).get("b1").status == "extracting"
+    assert len(msgs) == 0

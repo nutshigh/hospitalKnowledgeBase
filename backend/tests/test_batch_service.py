@@ -94,11 +94,11 @@ def test_retry_failed_interp_stage_routes_to_interp_bulk(db):
     b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
                     archive_path="/x", status="partial_failed", failed=1)
     # parse 已完成(ReportTask.status=completed),但 interp 失败
-    task = ReportTask(id=100, user_id=1, original_file_path="/x/a.pdf",
+    task = ReportTask(id=100, user_id="123456", original_file_path="/x/a.pdf",
                      original_filename="a.pdf", file_type="pdf", file_size=1,
                      status="completed", priority=0, retry_count=0)
     db.add(b); db.add(task); db.commit()
-    report = ReportInfo(id=200, task_id=task.id, user_id=1)
+    report = ReportInfo(id=200, task_id=task.id, user_id="123456")
     db.add(report); db.commit()
     interp = ReportInterpretation(id=300, report_id=report.id, status="failed", retry_count=3)
     db.add(interp); db.commit()
@@ -142,7 +142,7 @@ def test_retry_failed_parsing_stage_routes_to_parsing_bulk(db):
     from app.core.rabbitmq import TaskMessage
     b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
                     archive_path="/x", status="partial_failed", failed=1)
-    task = ReportTask(id=100, user_id=1, original_file_path="/x/a.pdf",
+    task = ReportTask(id=100, user_id="123456", original_file_path="/x/a.pdf",
                      original_filename="a.pdf", file_type="pdf", file_size=1,
                      status="failed", priority=0, retry_count=3,
                      error_message="parse boom")
@@ -276,7 +276,7 @@ def test_retry_failed_mixed_retryable_and_unretryable(db):
                             file_size=1, crc32="aaaa1111", status="failed",
                             failed_stage="dispatch_unmatched",
                             error_message="dispatch_unmatched")
-    task = ReportTask(id=100, user_id=1, original_file_path="/x/a.pdf",
+    task = ReportTask(id=100, user_id="123456", original_file_path="/x/a.pdf",
                       original_filename="a.pdf", file_type="pdf", file_size=1,
                       status="failed", priority=0, retry_count=3,
                       error_message="parse boom")
@@ -306,5 +306,30 @@ def test_retry_failed_mixed_retryable_and_unretryable(db):
         db.refresh(b)
         assert b.status == "parsing"
         assert b.failed == 1  # 扣减了 1(requeued=1)
+    finally:
+        patcher.stop()
+
+
+def test_retry_failed_skips_hospital_not_found(db):
+    """hospital_not_found 无 report_task_id,重试应跳过并计数 skipped_unretryable。"""
+    b = BatchImport(id="b1", hospital_id="H", user_id="u", filename="x",
+                    archive_path="/x", status="partial_failed", failed=1)
+    f_hnf = BatchImportFile(id="fhnf", batch_id="b1", file_path="/x/r.pdf",
+                            file_size=1, crc32="cccc3333",
+                            status="failed", failed_stage="hospital_not_found",
+                            error_message="hospital_not_found")
+    db.add_all([b, f_hnf]); db.commit()
+
+    patcher, msgs = _mock_publish()
+    try:
+        r = BatchService.retry_failed(db, "b1")
+        assert r["requeued"] == 0
+        assert r["skipped_unretryable"] == 1
+        db.refresh(f_hnf)
+        assert f_hnf.status == "failed"
+        assert msgs == []
+        db.refresh(b)
+        assert b.status == "partial_failed"
+        assert b.failed == 1
     finally:
         patcher.stop()
