@@ -160,11 +160,16 @@ def me(current_user: CurrentUser = Depends(get_current_user)):
 
 @router.post("/app-login", response_model=TokenResponse)
 def app_login(req: AppLoginRequest, db: Session = Depends(get_template_db)):
-    if not settings.APP_API_KEY or not secrets.compare_digest(req.app_key, settings.APP_API_KEY):
+    if not settings.APP_API_KEY or not secrets.compare_digest(
+        req.app_key.encode(), settings.APP_API_KEY.encode()
+    ):
         raise UnauthorizedException(detail="Invalid app key")
 
-    if not req.name:
+    name = req.name.strip()
+    if not name:
         raise ValidationException(detail="name required")
+    if len(name) > 50:
+        raise ValidationException(detail="name too long (max 50)")
     if not req.id_card_suffix or not _valid_suffix(req.id_card_suffix):
         raise ValidationException(detail="id_card_suffix required (5 digits + digit or X)")
 
@@ -176,13 +181,15 @@ def app_login(req: AppLoginRequest, db: Session = Depends(get_template_db)):
         raise UnauthorizedException(detail="无法匹配用户医院")
 
     row = db.execute(
-        text("SELECT id, role, hospital_id, id_card_suffix, name "
+        text("SELECT id, role, hospital_id, id_card_suffix, name, is_active "
              "FROM platform_user "
              "WHERE hospital_id = :hid AND name = :name AND id_card_suffix = :suf"),
-        {"hid": hospital_id, "name": req.name, "suf": req.id_card_suffix},
+        {"hid": hospital_id, "name": name, "suf": req.id_card_suffix},
     ).fetchone()
+    if row is not None and not row.is_active:
+        raise UnauthorizedException(detail="用户已停用")
     if row is None:
-        row = _auto_register(db, hospital_id, req.name, req.id_card_suffix)
+        row = _auto_register(db, hospital_id, name, req.id_card_suffix)
 
     token = create_access_token(
         data={"user_id": row.id, "role": row.role, "hospital_id": row.hospital_id,
@@ -211,9 +218,11 @@ def _auto_register(db, hospital_id: str, name: str, id_card_suffix: str):
     except IntegrityError:
         db.rollback()
     row = db.execute(
-        text("SELECT id, role, hospital_id, id_card_suffix, name "
+        text("SELECT id, role, hospital_id, id_card_suffix, name, is_active "
              "FROM platform_user "
              "WHERE hospital_id = :hid AND name = :name AND id_card_suffix = :suf"),
         {"hid": hospital_id, "name": name, "suf": id_card_suffix},
     ).fetchone()
+    if row is None:
+        raise ServiceUnavailableException(detail="用户注册失败,请重试")
     return row

@@ -17,12 +17,13 @@ def _req(**kw):
 
 class _Row:
     def __init__(self, user_id=1, role="user", hospital_id="H001",
-                 id_card_suffix="12345X", name="张三"):
+                 id_card_suffix="12345X", name="张三", is_active=1):
         self.id = user_id
         self.role = role
         self.hospital_id = hospital_id
         self.id_card_suffix = id_card_suffix
         self.name = name
+        self.is_active = is_active
 
 
 class _FakeResult:
@@ -163,6 +164,36 @@ def test_app_login_missing_name(ctx):
     auth, _ = ctx
     with pytest.raises(ValidationException):
         app_login(_req(name=""), db=_FakeDB())
+
+
+def test_app_login_strips_whitespace_name(ctx):
+    auth, calls = ctx
+    resp = app_login(_req(name="  张三  "), db=_FakeDB(user_exists=True))
+    assert resp.name == "张三"
+    assert calls["data"]["name"] == "张三"
+
+
+def test_app_login_rejects_overlong_name(ctx):
+    auth, _ = ctx
+    with pytest.raises(ValidationException):
+        app_login(_req(name="张" * 60), db=_FakeDB())
+
+
+def test_app_login_non_ascii_key_is_401_not_500(ctx):
+    auth, _ = ctx
+    with pytest.raises(UnauthorizedException):
+        app_login(_req(app_key="sécret"), db=_FakeDB())
+
+
+def test_app_login_inactive_user_rejected(ctx):
+    auth, _ = ctx
+    class _FakeInactiveDB(_FakeDB):
+        def execute(self, sql, params=None):
+            if "SELECT id, role" in str(sql):
+                return _FakeResult(_Row(is_active=0))
+            return _FakeResult(None)
+    with pytest.raises(UnauthorizedException):
+        app_login(_req(), db=_FakeInactiveDB())
 
 
 def test_app_login_resolver_no_match(ctx):
