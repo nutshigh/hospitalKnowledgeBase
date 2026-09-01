@@ -62,6 +62,34 @@ class _FakeDB:
         pass
 
 
+class _FakeRaceDB:
+    """模拟并发竞态:首次 SELECT 无行 → INSERT → commit 撞唯一索引抛 IntegrityError
+    → rollback → 回查 SELECT 返回并发事务已插入的行。"""
+
+    def __init__(self):
+        self.inserted = []
+        self.select_calls = 0
+
+    def execute(self, sql, params=None):
+        sql = str(sql)
+        if sql.lstrip().startswith("INSERT"):
+            self.inserted.append(params)
+            return _FakeResult(None)
+        if "SELECT id, role" in sql:
+            self.select_calls += 1
+            if self.select_calls == 1:
+                return _FakeResult(None)
+            return _FakeResult(_Row())
+        return _FakeResult(None)
+
+    def commit(self):
+        from sqlalchemy.exc import IntegrityError
+        raise IntegrityError("stmt", {}, Exception("dup"))
+
+    def rollback(self):
+        pass
+
+
 @pytest.fixture
 def ctx(monkeypatch):
     import app.api.auth as auth
@@ -106,9 +134,10 @@ def test_app_login_auto_registers_and_idempotent(ctx):
 
 def test_app_login_race_integrity_error_idempotent(ctx):
     auth, _ = ctx
-    db = _FakeDB(user_exists=True, commit_fails=True)  # 另一事务已插入,本事务 INSERT 撞唯一索引
+    db = _FakeRaceDB()
     resp = app_login(_req(), db=db)
     assert resp.id_card_suffix == "12345X"
+    assert len(db.inserted) == 1
 
 
 def test_app_login_wrong_key(ctx):
