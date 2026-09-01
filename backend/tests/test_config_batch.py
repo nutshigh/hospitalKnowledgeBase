@@ -16,3 +16,12 @@ def test_batch_config_defaults(monkeypatch):
     assert s.BULK_WINDOW_END == 8
     assert s.BATCH_FILE_MAX_SIZE == 52428800
     assert s.DEAD_LETTER_TTL == 604800
+
+
+def test_app_login_config_defaults(monkeypatch):
+    for k in ["APP_API_KEY", "APP_LOGIN_TOKEN_EXPIRE_MINUTES"]:
+        monkeypatch.delenv(k, raising=False)
+    from app.config import Settings
+    s = Settings()
+    assert s.APP_API_KEY == ""
+    assert s.APP_LOGIN_TOKEN_EXPIRE_MINUTES == 10080

@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     EXTERNAL_RESOLVER_URL: str = ""
     EXTERNAL_RESOLVER_TIMEOUT: float = 10.0
 
+    # External App (app-login: app_key + name + id_card_suffix → user token)
+    # 空 = app-login 一律 401(接口不配置则无法使用)
+    APP_API_KEY: str = ""
+    APP_LOGIN_TOKEN_EXPIRE_MINUTES: int = 10080
+
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"
 
