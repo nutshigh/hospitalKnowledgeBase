@@ -53,7 +53,9 @@ def _parse_response(resp: httpx.Response, name: str, id_suffix: str) -> Optional
     org_ids = {
         str(item["orgId"])
         for item in data
-        if item.get("realName") == name and item.get("idCardLast6") == id_suffix
+        if item.get("orgId")
+        and item.get("realName") == name
+        and item.get("idCardLast6") == id_suffix
     }
     if not org_ids:
         return None

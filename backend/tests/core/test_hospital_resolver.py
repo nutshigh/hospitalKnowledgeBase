@@ -125,7 +125,7 @@ def test_resolve_hospital_business_code_500_raises(monkeypatch):
         hospital_resolver.resolve_hospital("张三", "123456")
 
 
-def test_resolve_hospital_http_404_is_no_match(monkeypatch):
+def test_resolve_hospital_http_404_is_no_match(monkeypatch, caplog):
     monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "http://x/searchUser")
 
     class FakeResp:
@@ -135,7 +135,9 @@ def test_resolve_hospital_http_404_is_no_match(monkeypatch):
 
     monkeypatch.setattr(hospital_resolver.httpx, "Client",
                         lambda **k: _StubClient(lambda url, params: FakeResp()))
-    assert hospital_resolver.resolve_hospital("张三", "123456") is None
+    with caplog.at_level("WARNING", logger="app.batch.extract.resolver"):
+        assert hospital_resolver.resolve_hospital("张三", "123456") is None
+    assert any("resolver 4xx status=404" in rec.message for rec in caplog.records)
 
 
 def test_resolve_hospital_http_500_raises_unavailable(monkeypatch):
@@ -167,6 +169,51 @@ def test_resolve_hospital_timeout_raises_unavailable(monkeypatch):
 def test_resolve_hospital_url_not_configured_returns_none(monkeypatch):
     monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "")
     assert hospital_resolver.resolve_hospital("张三", "123456") is None
+
+
+def test_resolve_hospital_bad_json_raises(monkeypatch):
+    monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "http://x/searchUser")
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            raise ValueError("bad json")
+
+    monkeypatch.setattr(hospital_resolver.httpx, "Client",
+                        lambda **k: _StubClient(lambda url, params: FakeResp()))
+    with pytest.raises(hospital_resolver.ResolverUnavailableError):
+        hospital_resolver.resolve_hospital("张三", "123456")
+
+
+def test_resolve_hospital_bad_data_shape_raises(monkeypatch):
+    monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "http://x/searchUser")
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"code": 200, "msg": "ok", "data": {"records": []}}
+
+    monkeypatch.setattr(hospital_resolver.httpx, "Client",
+                        lambda **k: _StubClient(lambda url, params: FakeResp()))
+    with pytest.raises(hospital_resolver.ResolverUnavailableError):
+        hospital_resolver.resolve_hospital("张三", "123456")
+
+
+def test_resolve_hospital_null_orgid_skipped(monkeypatch):
+    monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "http://x/searchUser")
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"code": 200, "msg": "ok",
+                    "data": [
+                        {"realName": "张三", "idCardLast6": "12345X", "orgId": None},
+                        {"realName": "张三", "idCardLast6": "12345X", "orgId": 1000002},
+                    ]}
+
+    monkeypatch.setattr(hospital_resolver.httpx, "Client",
+                        lambda **k: _StubClient(lambda url, params: FakeResp()))
+    assert hospital_resolver.resolve_hospital("张三", "12345X") == "1000002"
 
 
 class _StubClient:

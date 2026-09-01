@@ -152,7 +152,7 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 **事实**: `backend/app/api/auth.py` 提供 `POST /api/v1/auth/app-login`,外部 App 用
 `app_key + name + id_card_suffix` 换取与普通登录一致的 JWT(role='user',有效期
 `APP_LOGIN_TOKEN_EXPIRE_MINUTES` 默认 7 天),再以 Bearer 调用现有 `/api/v1/reports/*`、
-`/api/v1/chat/*`(router 零改动)。hospital_id 由 `resolve_hospital(suffix)` 经
+`/api/v1/chat/*`(router 零改动)。hospital_id 由 `resolve_hospital(name, id_card_suffix)` 经
 `EXTERNAL_RESOLVER_URL` 解析。
 
 **信任模型(重要)**: 持有 `APP_API_KEY` 的系统可代任意 `(name, 后六位)` 签发 user token,
