@@ -39,24 +39,25 @@ def _parse_filename(filename: str) -> Optional[tuple[str, str]]:
     return None
 
 
-# 批内缓存:batch_id → {id_suffix: hospital_id | None};批结束清理
-_batch_resolver_cache: dict[str, dict[str, Optional[str]]] = {}
+# 批内缓存:batch_id → {(name, id_suffix): hospital_id | None};批结束清理
+_batch_resolver_cache: dict[str, dict[tuple[str, str], Optional[str]]] = {}
 
 
-def _resolve_hospital_id(batch_id, id_suffix) -> Optional[str]:
+def _resolve_hospital_id(batch_id, name, id_suffix) -> Optional[str]:
     cache = _batch_resolver_cache.setdefault(batch_id, {})
-    if id_suffix in cache:
-        return cache[id_suffix]
-    hospital_id = hospital_resolver.resolve_hospital(id_suffix)
+    key = (name, id_suffix)
+    if key in cache:
+        return cache[key]
+    hospital_id = hospital_resolver.resolve_hospital(name, id_suffix)
     if hospital_id is None:
-        cache[id_suffix] = None
+        cache[key] = None
         return None
     if not _hospital_registered(hospital_id):
-        _log.warning("resolve hospital not registered batch=%s suffix=%s hid=%s",
-                     batch_id, id_suffix, hospital_id)
-        cache[id_suffix] = None
+        _log.warning("resolve hospital not registered batch=%s name=%s suffix=%s hid=%s",
+                     batch_id, name, id_suffix, hospital_id)
+        cache[key] = None
         return None
-    cache[id_suffix] = hospital_id
+    cache[key] = hospital_id
     return hospital_id
 
 
@@ -177,7 +178,7 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                     _record_dispatch_unmatched(db, b.id, info.filename, info.file_size)
                     continue
                 name, id_suffix = parsed
-                file_hospital = _resolve_hospital_id(b.id, id_suffix)
+                file_hospital = _resolve_hospital_id(b.id, name, id_suffix)
                 if file_hospital is None:
                     _record_hospital_not_found(db, b.id, info.filename, info.file_size)
                     continue
@@ -212,7 +213,7 @@ def _extract_and_enqueue(db, b, hospital_id, archive_path):
                     _record_dispatch_unmatched(db, b.id, member.name, member.size)
                     continue
                 name, id_suffix = parsed
-                file_hospital = _resolve_hospital_id(b.id, id_suffix)
+                file_hospital = _resolve_hospital_id(b.id, name, id_suffix)
                 if file_hospital is None:
                     _record_hospital_not_found(db, b.id, member.name, member.size)
                     continue

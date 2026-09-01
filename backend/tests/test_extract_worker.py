@@ -86,7 +86,7 @@ def env():
     Mq.publish.side_effect = lambda m: msgs.append(m)
 
     from app.core import hospital_resolver as _hr
-    hr_resolve = patch.object(_hr, "resolve_hospital", lambda suffix: "H001")
+    hr_resolve = patch.object(_hr, "resolve_hospital", lambda name, suffix: "H001")
     hr_registered = patch("app.modules.report.extract_worker._hospital_registered",
                           lambda hid: True)
     getdb_p = patch("app.modules.report.extract_worker.get_hospital_db",
@@ -449,7 +449,7 @@ def test_extract_worker_start_worker_calls_setup_logging(monkeypatch):
 def test_T2_14_hospital_not_found(env):
     db, tmp, Mq, msgs = env
     from app.core import hospital_resolver as _hr
-    with patch.object(_hr, "resolve_hospital", lambda suffix: None):
+    with patch.object(_hr, "resolve_hospital", lambda name, suffix: None):
         ap = os.path.join(tmp, "a.zip")
         _make_zip(ap, [("张三_123456.pdf", b"x")])
         _make_batch(env, ap)
