@@ -336,8 +336,9 @@ ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS id_card_suffix VARCHAR(8) NUL
 
 ## 8. 对外终端用户注册接口
 
-- **做法**:扩展现有 `api/auth.py::register`(`POST /auth/register`),请求体增加可选字段 `id_card_suffix`。role='user' 时 `id_card_suffix` **必填**;role='doctor'/'admin' 可不填(保持兼容)。
-- 外部系统(医院 HIS 等)调用该接口完成终端用户注册 → 写入 `platform_user.id_card_suffix`。
+- **语义**:这是**新增终端用户的完整入口**(不只是一个填充后缀的补丁)——外部系统调用它即创建一个新的 `platform_user` 记录,`id_card_suffix` 是该用户注册信息的一部分。
+- **做法**:扩展现有 `api/auth.py::register`(`POST /auth/register`):它当前已负责新增用户(校验 username 唯一 → `INSERT platform_user`),本设计在其请求体上增加 `id_card_suffix` 字段,role='user' 时**必填**,role='doctor'/'admin' 可不填(保持兼容)。
+- 外部系统(医院 HIS 等)调用该接口注册新终端用户 → 创建 `platform_user` 行并写入 `id_card_suffix`。
 - 校验:`id_card_suffix` 匹配 `^[0-9]{5}[0-9X]$`,且 hospital_id 必填(role='user')。
 - 用户明确:外部注册时调用接口再注册到本系统。
 
@@ -347,7 +348,7 @@ ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS id_card_suffix VARCHAR(8) NUL
 
 **必须由用户提供/确认:**
 1. **外部接口契约**(最关键):当前按 §3.4 最简约定设计;接口文档后只需改 resolver 内部两处(请求构造 + `_parse_response`)。接口提供前 `EXTERNAL_RESOLVER_URL` 留空 → 全部 `hospital_not_found`(行为明确但不可用)。
-2. **`platform_user.id_card_suffix` 填充方式**:已定对外注册接口(§8),外部系统调用后写入。
+2. **终端用户创建入口**:已定对外注册接口(§8)——外部系统通过它新增带 `id_card_suffix` 的 `platform_user` 用户,新用户注册与后缀来源一体解决。
 3. **存量库迁移执行**:已定独立脚本(§6.5),部署时手动跑。
 
 **本设计已自带资源:**
