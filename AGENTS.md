@@ -144,6 +144,33 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 
 ---
 
+## 外部 App 免密登录(app-login)(2026-09-01 起)
+
+**事实**: `backend/app/api/auth.py` 提供 `POST /api/v1/auth/app-login`,外部 App 用
+`app_key + name + id_card_suffix` 换取与普通登录一致的 JWT(role='user',有效期
+`APP_LOGIN_TOKEN_EXPIRE_MINUTES` 默认 7 天),再以 Bearer 调用现有 `/api/v1/reports/*`、
+`/api/v1/chat/*`(router 零改动)。hospital_id 由 `resolve_hospital(suffix)` 经
+`EXTERNAL_RESOLVER_URL` 解析。
+
+**信任模型(重要)**: 持有 `APP_API_KEY` 的系统可代任意 `(name, 后六位)` 签发 user token,
+等于可访问任意用户的报告与 chat。必须 TLS + key 保密,仅给可信 HIS。
+
+**配置**(`backend/.env`):
+```
+APP_API_KEY=<全局密钥>              # 空 = app-login 一律 401
+APP_LOGIN_TOKEN_EXPIRE_MINUTES=10080
+EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
+```
+
+**行为约定**:
+- `platform_user` 三元组 `(hospital_id, name, id_card_suffix)` 不存在时**自动注册**:
+  username = `app_<hospital_id>_<name>_<id_card_suffix>`,password_hash 为随机串(不可密码登录)。
+- 错误码:key 错误 / resolver 无匹配 → 401;name 空 / 后六位非法 → 400;resolver 宕机 → 503。
+- app_key 用 `secrets.compare_digest` 常量时间比较。
+- 存量 `platform_user` 必须先跑 `003_user_id_suffix.sql` 迁移,否则新列不存在会 500。
+
+---
+
 ## 日志收口(2026-07-18 起)
 
 **完整设计**: `docs/superpowers/specs/2026-07-18-logging-consolidation-design.md`
