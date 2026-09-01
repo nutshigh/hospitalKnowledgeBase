@@ -2,6 +2,8 @@
 
 **日期**:2026-09-01
 **状态**:Draft(已与用户对齐各节,待 review)
+**修订**:2026-09-01 增补「姓名 + 后六位」双锚定(见 §15,最终 review 阶段用户确认)
+
 **前置**:
 - 批量上传 + 文件名分发:`docs/superpowers/specs/2026-07-16-batch-dispatch-by-filename-design.md`(已交付)
 - 批量上传基础设施:`docs/superpowers/specs/2026-07-15-batch-report-upload-design.md`
@@ -454,3 +456,26 @@ batch_import.status: parsing → interpreting → completed / partial_failed
 9. **文档** `AGENTS.md` 更新命名约定 / failed_stage 矩阵 / 后六位锚定说明;旧 spec 标注废弃
 10. **前端(可选)** doctor-portal 批量上传页命名提示文案
 11. **commit 策略** 后端主改动一 commit(tests green)→ DDL/迁移一 commit → 文档一 commit
+
+---
+
+## 15. 增补:姓名 + 后六位双锚定(2026-09-01 最终 review 阶段确认)
+
+### 15.1 动机
+最终 review 指出:仅凭身份证后六位(≈1.1M 组合)做唯一身份锚定,存在两人撞后缀 → 共享全部报告/档案/chat 的风险。用户确认:**锚定改为「姓名 + 身份证后六位」的组合,与报告文件名 `<姓名>_<后六位>` 一致**。
+
+### 15.2 变更点
+
+1. **DDL**:
+   - `platform_user` 新增 `name VARCHAR(50)` 列(登录姓名,注册时由外部系统传入)
+   - `chat_session` 新增 `name VARCHAR(50)` 列(chat 会话双锚定)
+   - `01_template_db.sql` / `003_user_id_suffix.sql` / `start.sh` else-branch 同步
+2. **register**:请求体加 `name`(role='user' 必填);唯一性校验 `(hospital_id, name, id_card_suffix)` 已存在则拒绝;INSERT 带 name
+3. **login**:SELECT name → JWT claim → 响应带 name;`CurrentUser` 加 `name` 字段
+4. **报告匹配双条件**:报告列表 / user_profile / chat 过滤 `user_id == 后六位 AND name == 登录姓名`
+5. **批量上传**:`_stream_to_report` / `create_task` 接收文件名姓名段 → 写入 `report_info.name`;`process_task` 仅在 name 为空时用 VLM 解析填充
+6. **单独上传**:保留 VLM 解析逻辑(仅在 name 为空时填充;已存则用登录姓名)
+7. **测试**:register 唯一性、JWT 带 name、报告双条件过滤、批量落库文件名姓名
+
+### 15.3 与既有实现的关系
+既有 Task 1-10(后六位锚定 + 医院解析 + 字符串化)全部保留;本增补在其上叠加姓名维度,不改变后六位的存储与解析链路。

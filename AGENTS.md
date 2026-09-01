@@ -124,10 +124,24 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 
 `batch_import_file.failed_stage` 是增量列,旧库需 `ALTER TABLE batch_import_file ADD COLUMN IF NOT EXISTS failed_stage VARCHAR(24) DEFAULT NULL`(`start.sh` 已带,新 tenant 建表时直接包含)。
 
-`failed_stage` 已知取值:`parsing` / `interpretation` / `oversize` / `dispatch_unmatched`。
+`failed_stage` 已知取值:`parsing` / `interpretation` / `oversize` / `dispatch_unmatched` / `hospital_not_found`。
 - `oversize`:单文件 > 50MB,无 `report_task_id`,**不可重试**(UI 禁用重试按钮)。
-- `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<医院编号>_<用户编号>.<ext>` 约定(三段下划线、末段纯数字),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
-- 后端 `retry_failed` 把这两类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
+- `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<身份证后六位>.<ext>` 约定(两段下划线、末段 5 位数字 + 末位 0-9/X),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
+- `hospital_not_found`:文件名格式合法,但外部接口(`EXTERNAL_RESOLVER_URL`)无匹配或解析出的 hospital_id 本地未注册。**不可重试**。
+- 后端 `retry_failed` 把这三类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
+---
+
+## 批量上传文件名约定(2026-09-01 起)
+
+- 命名:`<姓名>_<身份证后六位>.<ext>`,后六位 = 5 位数字 + 末位数字或 X(校验位)。
+- 用户锚定 = **姓名 + 后六位(双锚定)**:`report_info.name` / `chat_session.name` 存 `name`(姓名,VARCHAR(50)),各表存 `user_id`(后六位字符串,VARCHAR(16));`report_task` 只有 `user_id`(无 `name` 列)。报告列表/档案/chat 一律按 **`user_id == 后六位 AND name == 姓名`** 双条件匹配。
+- `platform_user.id_card_suffix` / `platform_user.name` 存登录用户双锚定,登录后经 JWT 带出(CurrentUser 有 `id_card_suffix` / `name` 字段)。
+- 注册唯一性:`platform_user` 上 (hospital_id, name, id_card_suffix) 三元组唯一,`/auth/register` 对重复组合返回 400。
+- `chat_session.name` 列:create_session 时落 `name`,list/get/delete/update 会话按双条件过滤。
+- 存量数据(user_id 为旧数字 ID、name 为 NULL 的行)按「存量不动」原则:双条件匹配只对新会话/新报告/新用户生效。
+- 外部接口:`EXTERNAL_RESOLVER_URL` 配置,契约见 `docs/superpowers/specs/2026-09-01-batch-upload-idcard-suffix-design.md §3`。
+- 旧 `<姓名>_<医院编号>_<用户编号>` 三段命名已废弃;存量数据 user_id 仍为旧数字 ID,不迁移(只影响新数据)。
+
 ---
 
 ## 日志收口(2026-07-18 起)
