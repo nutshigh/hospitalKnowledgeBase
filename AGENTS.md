@@ -127,7 +127,7 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 `failed_stage` 已知取值:`parsing` / `interpretation` / `oversize` / `dispatch_unmatched` / `hospital_not_found`。
 - `oversize`:单文件 > 50MB,无 `report_task_id`,**不可重试**(UI 禁用重试按钮)。
 - `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<身份证后六位>.<ext>` 约定(两段下划线、末段 5 位数字 + 末位 0-9/X),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
-- `hospital_not_found`:文件名格式合法,但外部接口(`EXTERNAL_RESOLVER_URL`)无匹配或解析出的 hospital_id 本地未注册。**不可重试**。
+- `hospital_not_found`:文件名格式合法,但外部接口(`EXTERNAL_RESOLVER_URL`,baUser searchUser)按 `realName+idCardLast6` 无精确匹配、解析出 orgId 本地未注册、或匹配歧义。**不可重试**。
 - 后端 `retry_failed` 把这三类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
 ---
 
@@ -141,6 +141,9 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 - 存量数据(user_id 为旧数字 ID、name 为 NULL 的行)按「存量不动」原则:双条件匹配只对新会话/新报告/新用户生效。
 - 外部接口:`EXTERNAL_RESOLVER_URL` 配置,契约见 `docs/superpowers/specs/2026-09-01-batch-upload-idcard-suffix-design.md §3`。
 - 旧 `<姓名>_<医院编号>_<用户编号>` 三段命名已废弃;存量数据 user_id 仍为旧数字 ID,不迁移(只影响新数据)。
+- 外部接口契约:`GET {EXTERNAL_RESOLVER_URL}?realName={姓名}&idCardLast6={后六位}` → baUser 信封
+  `{code,msg,data}`;data 数组按 `realName==姓名 AND idCardLast6==后六位` 精确过滤,唯一命中项
+  `str(orgId)` 即 hospital_id(orgId 与本地 hospital_tenant.hospital_id 一致)。
 
 ---
 
