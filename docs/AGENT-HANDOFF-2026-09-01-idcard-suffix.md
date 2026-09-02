@@ -1,120 +1,111 @@
-# Agent 接力工作文档:批量上传按「姓名 + 身份证后六位」双锚定分发
+# Agent 接力工作文档:双锚定 + app-login + baUser 接入(测试接力)
 
-**交接日期**:2026-09-01
-**交接分支**:`feat/local-model-import`(当前)
-**交接基点**:HEAD = `1784498`(spec 提交)
-**交接状态**:实现已完成并通过 15 个任务的逐任务审查 + 最终整支审查;工作区有 39 个已修改文件 + 6 个未跟踪新文件,**尚未 commit,尚未迁移,尚未配置外部接口**。
+**交接日期**:2026-09-02
+**交接分支**:`feat/login-change-and-interface-expose`(当前)
+**交接基点**:HEAD = `7265234`
+**交接状态**:三个功能(批量上传双锚定 / app-login 免密登录 / baUser resolver 接入)实现均已提交并通过逐任务审查 + 整支审查;测试基线 **297 passed / 2 pre-existing failed**。代码已就绪,**但服务器后端仍是旧进程(Aug30 启动),数据库未迁移,尚未端到端验证**。
 
-> 本文件是给下一个接手的 Agent 的工作接力入口。先读本文件,再读
-> `docs/superpowers/plans/2026-09-01-batch-upload-idcard-suffix.md`(含 §15 增量)
-> 与 `docs/superpowers/specs/2026-09-01-batch-upload-idcard-suffix-design.md`(含 §15)。
-> SDD 过程记录在 `.superpowers/sdd/progress.md`(逐任务审查结论 + 遗留项)。
-
----
-
-## 1. 功能一句话
-
-批量上传 zip 的文件命名从旧 `<姓名>_<医院编号>_<用户编号>.<ext>` 改为 `<姓名>_<身份证后六位>.<ext>`,
-通过可配置外部接口(`EXTERNAL_RESOLVER_URL`)把后六位解析成用户所在医院的 `hospital_id` 并跨租户落库;
-用户身份锚定从平台数字 user_id 改为 **姓名 + 身份证后六位** 双条件,全链路(报告列表 / user_profile / chat / AI agent 工具 / interp trend)按 `user_id == 后六位 AND name == 姓名` 过滤。
+> 本文件是给下一个接手的 Agent 的测试接力入口。先读本文件,再按需读:
+> - 批量上传双锚定:`docs/superpowers/specs/2026-09-01-batch-upload-idcard-suffix-design.md`(含 §15)
+> - app-login:`docs/superpowers/specs/2026-09-01-app-login-api-key-design.md`
+> - baUser 接入:`docs/superpowers/specs/2026-09-01-baUser-open-api-resolver-design.md`
+> - 外部接口文档:`docs/baUser-open-api.md`
+> - SDD 过程记录:`.superpowers/sdd/progress.md`
+> - 工程约束:`AGENTS.md`(venv/GPU/多租户/日志)
 
 ---
 
-## 2. 已完成(已实现 + 已审查通过,未 commit)
+## 1. 已提交内容(按提交序)
 
-| 模块 | 内容 | 关键文件 |
-|------|------|---------|
-| resolver | 外部接口客户端:配置 `EXTERNAL_RESOLVER_URL`/`TIMEOUT`,返回 `hospital_id`/`None`/抛 `ResolverUnavailableError`;4xx 记 warning 日志 | `backend/app/core/hospital_resolver.py`(新) |
-| extract_worker | 正则 `^([^_]+)_([0-9]{5}[0-9X])$`;批内缓存;本地 `hospital_tenant` 校验;新失败阶段 `hospital_not_found`;文件名姓名段落库 `report_info.name` | `backend/app/modules/report/extract_worker.py` |
-| 重试 | `UNRETRYABLE_STAGES = ("oversize","dispatch_unmatched","hospital_not_found")` | `backend/app/modules/report/batch_service.py:263` |
-| 表结构 | `report_task/report_info/chat_session.user_id` → `VARCHAR(16)`;`chat_session` 加 `name`;`platform_user` 加 `id_card_suffix` + `name` + 唯一索引 `uq_platform_user_anchor(hospital_id,name,id_card_suffix)` | `models.py`(report/chat)、`01_template_db.sql`、`003_user_id_suffix.sql`、`start.sh` |
-| 认证 | register 必填 name+后六位(role='user')、拒绝重复三元组;login/JWT/`TokenResponse`/`/me` 带 name+后缀;`CurrentUser` 有 `id_card_suffix`+`name`;`user_identity()` 助手 | `backend/app/api/auth.py`、`backend/app/core/dependencies.py` |
-| 报告 | `create_task(name=...)`;`process_task` 仅在 name 空时用 VLM 填;`list_reports` 双条件;存量无后缀 user 返回空列表(不泄露)、upload 400 守卫 | `backend/app/modules/report/service.py`、`router.py` |
-| 下游 | user_profile / chat / AI agent 工具 / chat_planner / interp `_fetch_trend` 全部双锚定;非 user 角色回退平台 user_id | `user_profile/*`、`chat/*`、`ai/agents/{tools,chat_graph,chat_planner,interp_graph}.py` |
-| 迁移 | 独立迁移脚本 + start.sh 增量 ALTER + 新建环境 template DDL | `backend/scripts/manual_migrations/003_user_id_suffix.sql`、`start.sh` else 分支 |
-| 文档 | AGENTS.md 更新(failed_stage 矩阵 + 命名约定双锚定小节);旧 spec 标注废弃;新 spec/plan 含 §15 | `AGENTS.md`、两个 spec/plan 文件 |
+| commit | 内容 |
+|--------|------|
+| `beb3f5e`/`3ff9d5c`/`e89776b` | 批量上传「姓名+后六位」双锚定:resolver、extract_worker、DDL、迁移 `003_user_id_suffix.sql`、auth/chat/report/user_profile/ai 全链路 |
+| `9dceb04`~`58c759a` | app-login:`POST /api/v1/auth/app-login`(app_key+name+id_card_suffix→JWT)、自动注册、`APP_API_KEY`/`APP_LOGIN_TOKEN_EXPIRE_MINUTES`、健壮性修复 |
+| `696cbc2`~`7265234` | baUser 接入:`resolve_hospital(name,id_suffix)` → GET `{BaseURL}{SEARCH_USER_PATH}` → orgId=hospital_id;`EXTERNAL_RESOLVER_URL` 存 BaseURL,`SEARCH_USER_PATH="/biz/baUserOpen/searchUser"` 调用处拼装 |
 
-**测试基线**:`cd backend && .venv/bin/pytest tests/ -q` → **276 passed, 2 failed**。
-2 个失败均为改动前基线已存在、与本次无关:
-- `tests/core/test_logging_config.py::test_monthly_rollover_renames_to_yyyymm_and_starts_new_file` —— 已知 freezegun/transformers 4.51.3 quirk(见 AGENTS.md,`freeze_time(..., ignore=["transformers"])`)
-- `tests/modules/statistics/test_group_sql.py::test_high_risk_list_basic` —— 断言旧 SQL 字符串,与本次无关
+## 2. 关键契约速查
+
+- 后六位正则:`[0-9]{5}[0-9X]`;文件名 `^([^_]+)_([0-9]{5}[0-9X])$`
+- 双锚定:`user_id`(后六位)+ `name`(姓名);`platform_user` 唯一索引 `uq_platform_user_anchor(hospital_id,name,id_card_suffix)`
+- resolver:`resolve_hospital(name, id_suffix)`;信封 `{code,msg,data}`;data 精确过滤 `realName==name AND idCardLast6==id_suffix`;`str(orgId)` 即 hospital_id;4xx→None、5xx/code!=200/坏JSON→`ResolverUnavailableError`
+- app-login:key 错/resolver 无匹配→401;name 空/后六位非法→400;resolver 宕→503;三元组不存在自动注册(username=`app_<hid>_<name>_<suffix>`,随机密码)
+- `failed_stage` 不可重试三类:`oversize`/`dispatch_unmatched`/`hospital_not_found`
 
 ---
 
-## 3. 遗留项(需要下一个 agent / 运维处理)
+## 3. 待办项(下一个 agent 接力执行,含验证)
 
-### 3.1 必须做(否则功能不可用或会出错)
+### 3.1 必须做(否则功能不可用)
 
-1. **commit**(用户明确要求:由用户自行 commit,agent 全程未 commit)。建议分 3 个 commit:
-   - 后端主改动(extract_worker/batch_service/report/chat/user_profile/ai/auth/dependencies/models/resolver+测试)
-   - DDL/迁移(`start.sh`/`01_template_db.sql`/`003_user_id_suffix.sql`)
-   - 文档(AGENTS.md/spec/plan)
-   `git status --short` 列出 39 个 M + 6 个 ?? 新文件:
-   - 新文件:`hospital_resolver.py`、`003_user_id_suffix.sql`、`test_hospital_resolver.py`、`test_dependencies_user_identity.py`、`test_auth_id_suffix.py`、plan 文档
-   - 注意 `.superpowers/sdd/*` 已自忽略(git 不会追踪),无需处理
-
-2. **存量库迁移(先于后端部署)**:对**每个**存量 tenant 库(`hospital_<id>`)与 `hospital_template` 执行
+1. **存量库迁移(先于后端部署)** — 对**每个**存量 tenant 库 `hospital_<id>` 与 `hospital_template` 执行
    `backend/scripts/manual_migrations/003_user_id_suffix.sql`。顺序敏感:
-   - `hospital_<id>` 库:`report_task/report_info/chat_session` 的 `user_id` MODIFY 为 VARCHAR(16),`chat_session` 加 `name`
-   - `hospital_template` 库:`platform_user` 加 `id_card_suffix`+`name`+唯一索引
-   - **务必先迁移再部署后端**,否则 login/register/报告列表 SELECT 新列会 500
-   - `start.sh` 仅对 `hospital_H001` + template 自动做增量 ALTER;其他 tenant 必须手动跑脚本
+   - `hospital_<id>` 库:`report_task/report_info/chat_session.user_id` MODIFY 为 VARCHAR(16),`chat_session` 加 `name`
+   - `hospital_template` 库:`platform_user` 加 `id_card_suffix`+`name`+唯一索引 `uq_platform_user_anchor`
+   - **务必先迁移再重启后端**,否则 login/register/报告列表 SELECT 新列会 500
+   - 当前服务器数据库状态:**未迁移**(`platform_user` 仍只有 8 列,已核实)
 
-3. **配置外部接口**:在 `backend/.env` 配置
+2. **重启后端为新代码** — 当前 `:8000` 后端进程是 **Aug30 启动的旧代码**(已核实,`ps lstart`)。迁移后需重启 backend + 三个 worker(report/interpretation/extract),vLLM/BGE/Reranker/OCR 不受影响不用动。
+
+3. **本地租户与 orgId 对齐** — baUser 真机返回 `orgId=1`(市人民医院,`idCardLast6=011234`,姓名"张三")。当前 `hospital_tenant` 只有 H001-H004。**必须**:
+   - 为 baUser 中实际存在的 orgId 建租户(`POST /api/v1/tenants` 或 SQL),使 `hospital_id == str(orgId)`
+   - 否则 resolver 解析出 orgId 后 `_hospital_registered` 短路 → `hospital_not_found`
+
+4. **注册终端用户** — 外部系统(HIS)调 `POST /api/v1/auth/register`,role='user' 必填 `name`+`id_card_suffix`+`hospital_id`;重复三元组返回 400。
+
+### 3.2 端到端验证(上线前)
+
+5. **baUser 真机契约核对** — 已初步验证:
    ```
-   EXTERNAL_RESOLVER_URL=http://<你的接口地址>/...
-   EXTERNAL_RESOLVER_TIMEOUT=10
+   GET http://localhost:8082/snowyApi/biz/baUserOpen/searchUser?realName=张三&idCardLast6= → 200
+   data: [{"realName":"张三","idCardLast6":"011234","orgId":1}]
+   GET .../page?current=1&size=1 → 200,records[0] 含 userId/realName/idCardLast6/orgId/orgName
    ```
-   - 不配置(默认 `""`)→ `resolve_hospital` 一律返回 None → 所有批量文件短路 `hospital_not_found`
-   - 契约暂定最简:`POST body {"id_suffix":"12345X"} → resp {"hospital_id":"H001"}`;接口文档后只改 `hospital_resolver._build_request` / `_parse_response` 两处
+   注意:searchUser **空参返回 Tomcat HTML 400**(HTTP 400,resolver 会按 4xx→None 处理,符合预期,但仅当带参查询才有意义)。建议下一步用 `realName=张三&idCardLast6=011234` 双条件再验一次。
 
-4. **注册终端用户**:外部系统(医院 HIS)调用 `POST /api/v1/auth/register`,role='user' 时必填
-   `name` + `id_card_suffix`(5 位数字 + 末位 0-9/X)+ `hospital_id`;重复 `(hospital_id,name,id_card_suffix)` 返回 400。
+6. **批量上传端到端** — 上传含 `张三_011234.pdf` 的 zip → extract → 落 `report_info.name=张三` / `user_id=011234` → 用户登录看到自己报告。
 
-### 3.2 建议做(上线前验证)
+7. **app-login 端到端** — 配好 `APP_API_KEY` 后:`POST /api/v1/auth/app-login {app_key,name:"张三",id_card_suffix:"011234"}` → 200 token → 以 Bearer 调 `/api/v1/reports` 看到报告;错误 key→401;未注册用户自动建行。
 
-- **注册唯一性 + 中文姓名**:`test_auth_id_suffix.py` 的唯一性测试用 fake-DB SQL 字符串匹配,CI 可接受但语义不全。
-  上线前对真实 MySQL 手动验一遍:唯一索引 `uq_platform_user_anchor` 生效、中文姓名 + 后六位重复注册被拒。
-- **外部接口真机验证**:配好 `EXTERNAL_RESOLVER_URL` 后走一遍端到端:上传含 `张三_123456.pdf` 的 zip → 落库 → 用户登录看到自己报告。
-- **start.sh else 分支 ALTER 实际执行验证**:`2>/dev/null || true` 会吞掉失败,确认三张表的 MODIFY 真的生效。
+8. **存量用户行为核对** — 存量 role='user'(无 id_card_suffix):报告列表返回空、upload 400、chat 建会话 400。确认符合预期。
 
----
+9. **X 大小写** — 后六位末位为 X 的用例,确认 baUser 返回与本地正则大小写一致。
 
-## 4. 待执行(本接力点明确未做的工作)
+### 3.3 建议做
 
-- 前端 doctor-portal 批量上传页的**命名提示文案**仍显示旧三段格式(plan Task 10 标注为"可选同步项",未做)。
-  位置:`frontend/packages/doctor-portal/src/pages/BatchUploadPage.tsx`(提示卡 `<姓名>_<医院编号>_<用户编号>` → 改为 `<姓名>_<身份证后六位>`)。
-- user-portal 前端无需改(报告列表走 JWT),但若产品要在界面显示登录姓名/后六位需另排。
+10. **前端命名提示** — doctor-portal `BatchUploadPage.tsx` 提示卡仍为旧三段格式 `<姓名>_<医院编号>_<用户编号>`,改为 `<姓名>_<身份证后六位>`(plan 标注"可选同步项",未做)。
+11. **doctor-portal `hospital_not_found` UI** — 红色 + 禁用重试,与 `dispatch_unmatched` 一致(未做)。
+12. **searchUser 空参 400 观察** — 目前 resolver 把 4xx 当 no-match;若外部接口语义需区分"参数错"与"无匹配",可在接口文档明确后调整。
 
 ---
 
-## 5. 后续规划(建议的演进方向,未承诺)
+## 4. 验证命令速查
 
-1. **外部接口契约落地后**收紧 resolver:`_parse_response` 按真实响应字段适配;明确 4xx 语义(现在 401/403 也当无匹配,接口文档后可考虑 404 才 no-match、其他 4xx 走重试)。
-2. **前端同步**:doctor-portal 批量上传页命名提示、失败阶段 `hospital_not_found` 的 UI 展示(红色 + 禁用重试,与 `dispatch_unmatched` 一致)。
-3. **report_task 存姓名**:当前 `report_task` 无 `name` 列(姓名只落 `report_info.name`)。若统计/审计需要任务级姓名可加列,但需评估收益。
-4. **chat 会话的存量数字 user_id 行**:doctor/admin 旧会话 `user_id` 是数字字符串、`name` NULL;当前按 `str(user_id)` 匹配可兼容。若未来统一清洗可做一次性数据修复。
-5. **医院注册自动同步**:外部接口返回的 hospital_id 本地未注册时现在短路 `hospital_not_found`;可考虑对接 tenant 创建接口自动建租户(需产品确认,避免误建)。
-6. **观察项**:`hospital_not_found` 在 extract 重试后可能重复记行(与 dispatch_unmatched 同款,非本次引入);量大可改成按 `file_path` 去重。
+```bash
+# 全套健康
+for p in 8000 8004 8002 8003 8001; do curl -s -m2 http://localhost:$p/health >/dev/null && echo ":$p UP" || echo ":$p DOWN"; done
+
+# baUser searchUser(真机)
+curl -s "http://localhost:8082/snowyApi/biz/baUserOpen/searchUser?realName=张三&idCardLast6=011234"
+
+# 注册终端用户(带后六位)
+curl -s -X POST http://localhost:8000/api/v1/auth/register -H 'Content-Type: application/json' \
+  -d '{"username":"u1","password":"123456","role":"user","hospital_id":"1","name":"张三","id_card_suffix":"011234"}'
+
+# app-login
+curl -s -X POST http://localhost:8000/api/v1/auth/app-login -H 'Content-Type: application/json' \
+  -d '{"app_key":"<APP_API_KEY>","name":"张三","id_card_suffix":"011234"}'
+
+# 测试基线
+cd backend && .venv/bin/pytest tests/ -q   # 期望 297 passed / 2 pre-existing failed
+```
+
+**测试基线说明**:297 = 276(双锚定基线)+ 9(app-login)+ 1(config)+ 4(resolver 重写增量)+ 3(final fix 新增,含 404 caplog 改造)。2 个 pre-existing failed:`test_logging_config.py::test_monthly_rollover...`(freezegun quirk)与 `test_group_sql.py::test_high_risk_list_basic`(旧 SQL 断言),与本功能无关。
 
 ---
 
-## 6. 关键约定速查(写代码/改配置前必读)
+## 5. 服务器当前环境状态(2026-09-02 核实)
 
-- 后六位正则:`[0-9]{5}[0-9X]`(末位可 X);文件名整正则 `^([^_]+)_([0-9]{5}[0-9X])$`
-- 双锚定:`user_id`(后六位,VARCHAR(16))+ `name`(姓名,VARCHAR(50));过滤 `user_id == suffix AND name == 姓名`
-- `failed_stage` 取值:`oversize` / `dispatch_unmatched` / `hospital_not_found`(不可重试)+ `parsing` / `interpretation`(可重试)
-- 文件检查顺序:大小 → 文件名格式 → 医院解析
-- 存量数据原则:**存量不动**,只影响新数据;旧三段命名已废弃
-- 部署顺序:迁移脚本 → `.env` 配 resolver → 启动后端
-- 测试命令:`cd backend && .venv/bin/pytest tests/ -q`
-- 工程约束(venv/GPU/多租户)见 `AGENTS.md`,不得在 `backend/pyproject.toml` 加 vllm
-
----
-
-## 7. 交接时的环境状态
-
-- 工作区:39 M + 6 ??(全部是本次功能改动,无无关杂物)
-- HEAD:`1784498`,分支 `feat/local-model-import`
-- `.env` 未配置 `EXTERNAL_RESOLVER_URL`(`.env.example` 已有注释占位)
-- 测试:276 passed / 2 pre-existing failed
+- 后端 `:8000` = Aug30 旧代码;5 个服务全部 UP(:8000/8004/8002/8003/8001)
+- `backend/.env`:`EXTERNAL_RESOLVER_URL=http://localhost:8082/snowyApi`(已配,端口 8082 非文档默认 82)、`EXTERNAL_RESOLVER_TIMEOUT=10`;**`APP_API_KEY` 未配置**(app-login 一律 401)
+- `hospital_tenant`:`H001`/`H002`/`H003`/`H004`(均 active);`platform_user` 11 行,**无 id_card_suffix/name 列**
+- 工作区 git 干净(仅 `.superpowers/sdd/task-10-report.md` 是历史 scratch,不提交)
