@@ -22,6 +22,7 @@ def test_app_login_config_defaults(monkeypatch):
     for k in ["APP_API_KEY", "APP_LOGIN_TOKEN_EXPIRE_MINUTES"]:
         monkeypatch.delenv(k, raising=False)
     from app.config import Settings
-    s = Settings()
+    # _env_file=None 隔离 .env(生产 .env 会配置 APP_API_KEY,不能让它影响默认值断言)
+    s = Settings(_env_file=None)
     assert s.APP_API_KEY == ""
     assert s.APP_LOGIN_TOKEN_EXPIRE_MINUTES == 10080
