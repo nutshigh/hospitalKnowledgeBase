@@ -1,7 +1,8 @@
 """身份证后六位 → hospital_id 的外部解析客户端(批量上传分发 + app-login 用)。
 
 对接 baUser 开放接口 searchUser:
-  GET {EXTERNAL_RESOLVER_URL}?realName={name}&idCardLast6={id_suffix}
+  GET {EXTERNAL_RESOLVER_URL}{SEARCH_USER_PATH}?realName={name}&idCardLast6={id_suffix}
+配置只存 BaseURL(不含接口路径);接口路径写在调用处(本模块 SEARCH_USER_PATH),使用时拼装。
 统一信封 {code, msg, data},data 为数组 [{realName, idCardLast6, orgId}, ...]。
 orgId 即 hospital_id(用户确认),直接 str(orgId) 返回;对 data 做精确过滤防串号。
 """
@@ -13,6 +14,9 @@ import httpx
 from app.config import settings
 
 logger = logging.getLogger("app.batch.extract.resolver")
+
+# baUser 开放接口路径(接口写在调用处,与 BaseURL 拼装)
+SEARCH_USER_PATH = "/biz/baUserOpen/searchUser"
 
 
 class ResolverUnavailableError(Exception):
@@ -68,12 +72,12 @@ def _parse_response(resp: httpx.Response, name: str, id_suffix: str) -> Optional
 
 def resolve_hospital(name: str, id_suffix: str) -> Optional[str]:
     """返回 hospital_id(匹配)/ None(明确无匹配)。宕机抛 ResolverUnavailableError。"""
-    url = settings.EXTERNAL_RESOLVER_URL
-    if not url:
+    base = settings.EXTERNAL_RESOLVER_URL
+    if not base:
         return None  # 未配置:默认无匹配,防误落库
     client = _get_client()
     try:
-        resp = client.get(url, params=_build_params(name, id_suffix))
+        resp = client.get(base + SEARCH_USER_PATH, params=_build_params(name, id_suffix))
         return _parse_response(resp, name, id_suffix)
     except (httpx.TimeoutException, httpx.TransportError) as e:
         raise ResolverUnavailableError(str(e)) from e
