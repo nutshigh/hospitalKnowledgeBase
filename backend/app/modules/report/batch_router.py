@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException
 from sqlalchemy.orm import Session
@@ -92,12 +92,12 @@ def complete_batch(batch_id: str, body: dict,
 @router.get("/batches")
 def list_batches(page: int = Query(1, ge=1),
                  page_size: int = Query(20, ge=1, le=100),
-                 status: Optional[str] = None,
+                 status: Optional[List[str]] = Query(None),
                  db: Session = Depends(_db),
                  user: CurrentUser = Depends(get_current_user)):
     q = db.query(BatchImport).filter_by(hospital_id=user.hospital_id)
     if status:
-        q = q.filter(BatchImport.status == status)
+        q = q.filter(BatchImport.status.in_(status))
     total = q.count()
     items = (q.order_by(BatchImport.created_at.desc())
               .offset((page - 1) * page_size).limit(page_size).all())
@@ -107,6 +107,7 @@ def list_batches(page: int = Query(1, ge=1),
             "total": b.total, "parsed_ok": b.parsed_ok, "interp_ok": b.interp_ok,
             "failed": b.failed,
             "created_at": b.created_at.isoformat() if b.created_at else None,
+            "completed_at": b.completed_at.isoformat() if b.completed_at else None,
         } for b in items],
         "total": total, "page": page, "page_size": page_size,
     }

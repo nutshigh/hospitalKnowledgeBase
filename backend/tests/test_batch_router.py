@@ -278,3 +278,44 @@ def test_T11_progress_exposes_failed_stage(env):
     stages = {x["id"]: x["failed_stage"] for x in ff}
     assert stages["f_1"] == "dispatch_unmatched"
     assert stages["f_2"] == "parsing"
+
+
+def test_T11_list_batches_status_or_and_completed_at(env):
+    """多 status OR 过滤 + list 项含 completed_at(向后兼容单值 status)。"""
+    from datetime import datetime, timezone
+    s = env["Session"]()
+    rows = [
+        ("so0", "completed"),
+        ("so1", "partial_failed"),
+        ("so2", "parsing"),
+        ("so3", "interpreting"),
+        ("so4", "cancelled"),
+    ]
+    for bid, st in rows:
+        s.add(BatchImport(id=bid, hospital_id="H001", user_id="1",
+                          filename=f"{st}.zip", archive_path="/x", status=st,
+                          completed_at=datetime.now(timezone.utc) if st == "completed" else None))
+    s.commit(); s.close()
+
+    # 多 status OR:只回 parsing + interpreting
+    r = env["client"].get(
+        "/api/v1/reports/batches",
+        params=[("status", "parsing"), ("status", "interpreting")],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert {x["status"] for x in body["items"]} == {"parsing", "interpreting"}
+    assert body["total"] == 2
+
+    # 单值 status 行为不变
+    r1 = env["client"].get("/api/v1/reports/batches?status=completed")
+    assert r1.status_code == 200
+    items1 = r1.json()["items"]
+    assert len(items1) == 1 and items1[0]["status"] == "completed"
+    assert "completed_at" in items1[0]
+    assert items1[0]["completed_at"] is not None
+
+    # 未终态行 completed_at 为 null
+    r2 = env["client"].get("/api/v1/reports/batches?status=parsing")
+    assert r2.status_code == 200
+    assert r2.json()["items"][0]["completed_at"] is None
