@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, message, Spin, Table, Tag, Tooltip } from 'antd';
+import { Alert, Button, message, Spin, Table, Tag, Tooltip } from 'antd';
 import type { ApiClient } from '@hospital/shared';
 import type { BatchDetail, FailingFile } from '../types/batch';
 import { STAGE_LABEL, UNRETRYABLE_STAGES } from '../types/batch';
@@ -26,15 +26,17 @@ interface Props {
 export default function BatchDetailPanel({ api, batchId, onChanged }: Props) {
   const [detail, setDetail] = useState<BatchDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const { data } = await api.get(`/reports/batches/${batchId}`);
       setDetail(data);
     } catch {
-      message.error('批次详情加载失败');
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -51,6 +53,7 @@ export default function BatchDetailPanel({ api, batchId, onChanged }: Props) {
       if (rq > 0) message.success(`已重投 ${rq} 个;跳过 ${sk} 个不可重试`);
       else message.warning(`无可重试文件;跳过 ${sk} 个不可重试`);
       onChanged();
+      void load();
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '重试失败');
     } finally {
@@ -60,7 +63,17 @@ export default function BatchDetailPanel({ api, batchId, onChanged }: Props) {
 
   if (loading) return <Spin size="small" style={{ margin: 8 }} />;
 
-  const failing: FailingFile[] = detail?.failing_files || [];
+  if (loadError || !detail) {
+    return (
+      <Alert
+        type="error" showIcon style={{ margin: '8px 0' }}
+        message="批次详情加载失败"
+        action={<Button size="small" onClick={() => void load()}>重试</Button>}
+      />
+    );
+  }
+
+  const failing: FailingFile[] = detail.failing_files || [];
   const retryable = failing.some((f) => !UNRETRYABLE_STAGES.has(f.failed_stage || ''));
 
   return (
