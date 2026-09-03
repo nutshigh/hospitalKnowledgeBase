@@ -13,11 +13,12 @@ const STATUS_COLOR: Record<string, string> = {
   cancelled: 'default',
 };
 
-const UNRETRYABLE_STAGES = new Set(['oversize', 'dispatch_unmatched']);
+const UNRETRYABLE_STAGES = new Set(['oversize', 'dispatch_unmatched', 'hospital_not_found']);
 
 const STAGE_LABEL: Record<string, string> = {
   oversize: '文件过大',
   dispatch_unmatched: '命名不合规',
+  hospital_not_found: '未匹配到用户/医院',
   parsing: '解析失败',
   interpretation: '解读失败',
 };
@@ -166,9 +167,11 @@ export default function BatchUploadPage() {
             <div style={{ fontWeight: 600, color: 'var(--color-text)', marginBottom: 6 }}>
               文件命名要求(必须严格遵循)
             </div>
-            <div>每份文件名必须形如:<code>张三_H001_1001.pdf</code> 即 <code>&lt;姓名&gt;_&lt;医院编号&gt;_&lt;用户编号&gt;.ext</code></div>
+            <div>每份文件名必须形如:<code>张三_011234.pdf</code> 即 <code>&lt;姓名&gt;_&lt;身份证后六位&gt;.ext</code></div>
             <ul style={{ margin: '6px 0 0 20px', padding: 0 }}>
-              <li>三段以半角下划线 <code>_</code> 分隔,<b>索引 2(末段)</b>必须是纯数字 user_id</li>
+              <li>姓名 + 身份证后六位(<code>5 位数字 + 末位 0-9/X</code>)以半角下划线 <code>_</code> 分隔;姓名不能含下划线</li>
+              <li>分发时按 <code>姓名 + 后六位</code> 到外部 HIS 精确匹配定位所属医院,匹配不到将被标记为
+                <Tag color="red" style={{ margin: '0 4px' }}>hospital_not_found</Tag>,不解析、不可重试</li>
               <li>命名不合规的文件将被标记为 <Tag color="red" style={{ margin: 0 }}>dispatch_unmatched</Tag>,不解析、不可重试</li>
               <li>扩展名仅支持 pdf / doc / jpg / jpeg / png(不含 docx)</li>
               <li>单文件 ≤ 50MB,整包 ≤ 10GB</li>
@@ -244,7 +247,7 @@ export default function BatchUploadPage() {
             <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
               <Tooltip
                 title={failing.some(f => UNRETRYABLE_STAGES.has(f.failed_stage || ''))
-                  ? '部分文件(naming/size 问题)重试无效,请改文件名后重新上传整批'
+                  ? '部分文件(命名/用户医院不匹配/超大)重试无效,请改文件名后重新上传整批'
                   : '重投所有可重试的失败文件'}
               >
                 <Button onClick={retryAll} loading={retrying} disabled={retrying}>

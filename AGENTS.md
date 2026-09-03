@@ -120,16 +120,27 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 | 批量上传新增表(易遗漏) | 用途 |
 |------|------|
 | `batch_import` | 批量上传批次 |
-| `batch_import_file` | 批次内单文件(含 `failed_stage` 列,记录失败阶段) |
+| `batch_import_file` | 批次内单文件(含 `failed_stage` 列,记录失败阶段;`dispatch_hospital` 列记录分发目标医院) |
 
 `batch_import_file.failed_stage` 是增量列,旧库需 `ALTER TABLE batch_import_file ADD COLUMN IF NOT EXISTS failed_stage VARCHAR(24) DEFAULT NULL`(`start.sh` 已带,新 tenant 建表时直接包含)。
+
+`batch_import_file.dispatch_hospital`(2026-09-03 起):文件名解析出的**目标医院**(跨院分发时 ≠ 批次 `hospital_id`),worker/`retry_failed` 据此定位任务所在库。单医院场景为 NULL。存量库迁移:`scripts/manual_migrations/005_add_dispatch_hospital.sql`(本机 MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`,用纯 ALTER)。
 
 `failed_stage` 已知取值:`parsing` / `interpretation` / `oversize` / `dispatch_unmatched` / `hospital_not_found`。
 - `oversize`:单文件 > 50MB,无 `report_task_id`,**不可重试**(UI 禁用重试按钮)。
 - `dispatch_unmatched`:批量上传时文件名不符合 `<姓名>_<身份证后六位>.<ext>` 约定(两段下划线、末段 5 位数字 + 末位 0-9/X),不 create_task 不投 parsing。**不可重试**,需 admin 改文件名后整批重新上传。
 - `hospital_not_found`:文件名格式合法,但外部接口(`EXTERNAL_RESOLVER_URL`,baUser searchUser)按 `realName+idCardLast6` 无精确匹配、解析出 orgId 本地未注册、或匹配歧义。**不可重试**。
 - 后端 `retry_failed` 把这三类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
----
+
+## 批量上传跨院分发:进度与重试跨库定位(2026-09-03 起)
+
+**事实**:批量上传时 `BatchImport`/`BatchImportFile`/进度计数器写在上传方(批次)库,而 `report_task`/`report`/解读跑在**文件名解析出的目标医院库**(可 ≠ 上传方)。若 worker 用目标库记批次进度,会 `file_not_found` 让批次永远卡 `parsing`(2026-09-03 真实故障)。
+
+**修法**:
+- 消息(`parsing`/`interpretation`)payload 带 `batch_hospital_id`(=批次库/上传方医院);worker 记进度用 `BatchService.update_batch_progress(batch_hospital_id, hospital_id, db, ...)`:两者一致走当前会话,不一致另开批次库会话。`service.create_task` / `service.process_task` 负责把该字段透传(extract_worker 从 `b.hospital_id` 取)。
+- `BatchImportFile.dispatch_hospital` 存每文件的目标医院;`retry_failed` 重投/定位任务按它打开目标库,再带 `batch_hospital_id` 发布(旧数据 NULL → 回退 `b.hospital_id`,行为不变)。
+- 测试:`tests/test_batch_cross_hospital.py`(update_batch_progress 同/跨库 + retry 跨库路由)、`tests/test_extract_worker.py::test_cross_hospital_dispatch_records_target_and_batch_hospital`。**改回仅用单库会话前先看这些测试**。
+
 
 ## 批量上传文件名约定(2026-09-01 起)
 

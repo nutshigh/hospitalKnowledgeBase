@@ -24,6 +24,7 @@ def handle_interpretation_task(message: dict):
     hospital_id = payload.get("hospital_id")
     batch_id = payload.get("batch_id")
     file_id = payload.get("file_id")
+    batch_hospital_id = payload.get("batch_hospital_id")
 
     if not report_id:
         return
@@ -63,9 +64,10 @@ def handle_interpretation_task(message: dict):
                     f"Comparison summary failed for report {report_id}: {e}",
                     flush=True,
                 )
-            # 成功 → 计 batch file 进度(interp_ok)
+            # 成功 → 计 batch file 进度(interp_ok),落在批次所属库
             if batch_id and file_id:
-                BatchService.increment_progress(db, batch_id, file_id, "interp_ok")
+                BatchService.update_batch_progress(
+                    batch_hospital_id, hospital_id, db, batch_id, file_id, "interp_ok")
         except Exception as e:
             latency_ms = int((time.time() - t_start) * 1000)
             _log.warning(
@@ -88,7 +90,9 @@ def handle_interpretation_task(message: dict):
                 # 走 DLQ;同时回写 file failed
                 if batch_id and file_id:
                     try:
-                        BatchService.increment_progress(db, batch_id, file_id, "failed", stage="interpretation")
+                        BatchService.update_batch_progress(
+                            batch_hospital_id, hospital_id, db, batch_id, file_id,
+                            "failed", stage="interpretation")
                     except Exception:
                         pass
                 raise  # 让 _callback nack(requeue=False) → DLQ

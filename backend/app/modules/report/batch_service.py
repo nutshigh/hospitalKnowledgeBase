@@ -8,6 +8,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.database import get_hospital_db
 from app.core.rabbitmq import rabbitmq, TaskMessage
 from app.modules.report.batch_models import BatchImport, BatchImportFile
 
@@ -201,6 +202,33 @@ class BatchService:
         BatchService._maybe_advance_status(db, b)
 
     @staticmethod
+    def update_batch_progress(batch_hospital_id: Optional[str],
+                              fallback_hospital_id: Optional[str],
+                              fallback_db: Session, batch_id: str, file_id: str,
+                              field: str, stage: Optional[str] = None) -> None:
+        """在“批次所属库”记 file 进度(跨院分发时 batch_hospital_id 是上传方医院)。
+
+        worker 打开的是任务所在的目标医院库,而 BatchImportFile/BatchImport 行存在
+        上传方(批次)库中;两者一致时用 fallback_db,不一致时另开批次库会话。
+        """
+        if batch_hospital_id and batch_hospital_id != fallback_hospital_id:
+            batch_db = next(get_hospital_db(batch_hospital_id))
+            try:
+                BatchService._increment(batch_db, batch_id, file_id, field, stage)
+            finally:
+                batch_db.close()
+            return
+        BatchService._increment(fallback_db, batch_id, file_id, field, stage)
+
+    @staticmethod
+    def _increment(db: Session, batch_id: str, file_id: str, field: str,
+                   stage: Optional[str] = None) -> None:
+        if stage is not None:
+            BatchService.increment_progress(db, batch_id, file_id, field, stage=stage)
+        else:
+            BatchService.increment_progress(db, batch_id, file_id, field)
+
+    @staticmethod
     def _maybe_advance_status(db: Session, b: BatchImport) -> None:
         old = b.status
         if old in ("completed", "partial_failed", "cancelled"):
@@ -266,40 +294,51 @@ class BatchService:
             if stage in UNRETRYABLE_STAGES:
                 skipped_unretryable += 1
                 _log.info("retry skip unretryable batch=%s fid=%s stage=%s",
-                           batch_id, f.id, stage)
+                          batch_id, f.id, stage)
                 continue
             f.status = "queued"
             f.error_message = None
             f.failed_stage = None
-            if stage == "interpretation":
-                report_id = BatchService._report_id_for_file(db, f)
-                if report_id is not None:
-                    BatchService._reset_interp_for_retry(db, report_id)
-                    rabbitmq.publish(TaskMessage(
-                        task_type="interpretation", hospital_id=b.hospital_id,
-                        priority="bulk",
-                        payload={"report_id": report_id, "hospital_id": b.hospital_id,
-                                 "batch_id": batch_id, "file_id": f.id},
-                    ))
-                    saw_interp = True
-                    _log.info("retry requeue interp batch=%s fid=%s report_id=%s",
-                               batch_id, f.id, report_id)
-            else:
-                if f.report_task_id:
-                    from app.modules.report.models import ReportTask
-                    t = db.query(ReportTask).get(f.report_task_id)
-                    if t:
-                        t.status = "queued"
-                        t.retry_count = 0
+            # 任务/report 位于该文件分发的目标医院库(跨院分发时与批次库不同)
+            target_hospital = f.dispatch_hospital or b.hospital_id
+            need_sep = target_hospital != b.hospital_id
+            tdb = next(get_hospital_db(target_hospital)) if need_sep else db
+            try:
+                if stage == "interpretation":
+                    report_id = BatchService._report_id_for_file(tdb, f)
+                    if report_id is not None:
+                        BatchService._reset_interp_for_retry(tdb, report_id)
                         rabbitmq.publish(TaskMessage(
-                            task_type="parsing", hospital_id=b.hospital_id,
+                            task_type="interpretation", hospital_id=target_hospital,
                             priority="bulk",
-                            payload={"task_id": t.id, "hospital_id": b.hospital_id,
-                                     "file_path": t.original_file_path, "batch_id": batch_id,
-                                     "file_id": f.id},
+                            payload={"report_id": report_id, "hospital_id": target_hospital,
+                                     "batch_id": batch_id, "file_id": f.id,
+                                     "batch_hospital_id": b.hospital_id},
                         ))
-                        _log.info("retry requeue parsing batch=%s fid=%s task_id=%s",
-                                   batch_id, f.id, t.id)
+                        saw_interp = True
+                        _log.info("retry requeue interp batch=%s fid=%s report_id=%s target=%s",
+                                  batch_id, f.id, report_id, target_hospital)
+                else:
+                    if f.report_task_id:
+                        from app.modules.report.models import ReportTask
+                        t = tdb.query(ReportTask).get(f.report_task_id)
+                        if t:
+                            t.status = "queued"
+                            t.retry_count = 0
+                            rabbitmq.publish(TaskMessage(
+                                task_type="parsing", hospital_id=target_hospital,
+                                priority="bulk",
+                                payload={"task_id": t.id, "hospital_id": target_hospital,
+                                         "file_path": t.original_file_path,
+                                         "batch_id": batch_id, "file_id": f.id,
+                                         "batch_hospital_id": b.hospital_id},
+                            ))
+                            _log.info("retry requeue parsing batch=%s fid=%s task_id=%s target=%s",
+                                      batch_id, f.id, t.id, target_hospital)
+            finally:
+                if need_sep:
+                    tdb.commit()
+                    tdb.close()
             requeued += 1
         b.failed = max(0, (b.failed or 0) - requeued)
         if b.status == "partial_failed" and requeued > 0:

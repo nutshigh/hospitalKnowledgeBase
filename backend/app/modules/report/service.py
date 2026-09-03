@@ -19,7 +19,8 @@ def create_task(db: Session, hospital_id: str, user_id: str, file_path: str,
                 thumbnail_path: Optional[str] = None,
                 priority: str = "normal",
                 batch_id: Optional[str] = None,
-                file_id: Optional[str] = None) -> ReportTask:
+                file_id: Optional[str] = None,
+                batch_hospital_id: Optional[str] = None) -> ReportTask:
     # 向后兼容: legacy int priority(0=normal, 1=urgent)
     if isinstance(priority, int):
         priority = "urgent" if priority else "normal"
@@ -44,6 +45,8 @@ def create_task(db: Session, hospital_id: str, user_id: str, file_path: str,
         payload["batch_id"] = batch_id
     if file_id is not None:
         payload["file_id"] = file_id
+    if batch_hospital_id is not None:
+        payload["batch_hospital_id"] = batch_hospital_id
     rabbitmq.publish(TaskMessage(
         task_type="parsing", hospital_id=hospital_id, priority=priority,
         payload=payload,
@@ -57,7 +60,8 @@ def get_task_status(db: Session, task_id: int) -> Optional[ReportTask]:
 
 def process_task(db: Session, task_id: int, hospital_id: str,
                  batch_id: Optional[str] = None,
-                 file_id: Optional[str] = None):
+                 file_id: Optional[str] = None,
+                 batch_hospital_id: Optional[str] = None):
     task = get_task_status(db, task_id)
     if not task:
         return
@@ -149,6 +153,8 @@ def process_task(db: Session, task_id: int, hospital_id: str,
             payload["batch_id"] = batch_id
         if file_id is not None:
             payload["file_id"] = file_id
+        if batch_hospital_id is not None:
+            payload["batch_hospital_id"] = batch_hospital_id
         rabbitmq.publish(TaskMessage(
             task_type="interpretation", hospital_id=hospital_id, priority=publish_priority,
             payload=payload,

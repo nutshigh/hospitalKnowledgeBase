@@ -491,3 +491,26 @@ def test_T2_15_resolver_down_retries_batch(env):
     db.refresh(db.query(BatchImport).get("b1"))
     assert db.query(BatchImport).get("b1").status == "extracting"
     assert len(msgs) == 0
+
+
+# ---------------------------------------------------------------------------
+# 跨院分发(H001 上传、文件解析到 org 1):file 记 dispatch_hospital,
+# parsing 消息带 batch_hospital_id(批次库),worker 才能把进度写回上传方库。
+# ---------------------------------------------------------------------------
+def test_cross_hospital_dispatch_records_target_and_batch_hospital(env):
+    db, tmp, Mq, msgs = env
+    from app.core import hospital_resolver as _hr
+    with patch.object(_hr, "resolve_hospital", lambda name, suffix: "1"):
+        ap = os.path.join(tmp, "a.zip")
+        _make_zip(ap, [("张三_011234.pdf", b"x"), ("李四_151234.pdf", b"y")])
+        _make_batch(env, ap, hospital_id="H001")  # 上传方医院 H001
+        from app.modules.report.extract_worker import handle_extract_task
+        handle_extract_task({"payload": {"batch_id": "b1", "hospital_id": "H001",
+                                         "archive_path": ap}})
+
+    files = db.query(BatchImportFile).all()
+    assert {f.dispatch_hospital for f in files} == {"1"}
+    assert len(msgs) == 2
+    for m in msgs:
+        assert m.hospital_id == "1"                      # 任务/解析在目标医院跑
+        assert m.payload.get("batch_hospital_id") == "H001"  # 进度要记回上传方(批次)库

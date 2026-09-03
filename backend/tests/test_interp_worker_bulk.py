@@ -141,7 +141,7 @@ def test_retry_count_1_publish_retry(env):
     assert args[0] == "interpretation.normal"
     assert kwargs["expiration_ms"] == backoff_for_retry(0)
     assert kwargs.get("batch_id") == "b1"
-    batch_mock.increment_progress.assert_not_called()  # 未 failed
+    batch_mock.update_batch_progress.assert_not_called()  # 未 failed
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +168,8 @@ def test_retry_count_3_raises_and_failed(env):
         handle_interpretation_task(msg)
 
     Mq.publish_retry.assert_not_called()
-    batch_mock.increment_progress.assert_called_once_with(
-        s, "b1", "f1", "failed", stage="interpretation")
+    batch_mock.update_batch_progress.assert_called_once_with(
+        None, "H001", s, "b1", "f1", "failed", stage="interpretation")
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +187,8 @@ def test_success_increments_interp_ok(env):
                        "batch_id": "b1", "file_id": "f1"}}
     handle_interpretation_task(msg)
 
-    batch_mock.increment_progress.assert_called_once_with(
-        s, "b1", "f1", "interp_ok")
+    batch_mock.update_batch_progress.assert_called_once_with(
+        None, "H001", s, "b1", "f1", "interp_ok")
     Mq.publish_retry.assert_not_called()
 
 
@@ -208,8 +208,8 @@ def test_comparison_summary_failure_doesnt_break(env):
                        "batch_id": "b1", "file_id": "f1"}}
     handle_interpretation_task(msg)
 
-    batch_mock.increment_progress.assert_called_once_with(
-        s, "b1", "f1", "interp_ok")
+    batch_mock.update_batch_progress.assert_called_once_with(
+        None, "H001", s, "b1", "f1", "interp_ok")
     Mq.publish_retry.assert_not_called()
 
 
@@ -232,7 +232,7 @@ def test_f15_running_skip_existing_processing(env):
     handle_interpretation_task(msg)
 
     agent_mock.assert_not_called()
-    batch_mock.increment_progress.assert_not_called()
+    batch_mock.update_batch_progress.assert_not_called()
     Mq.publish_retry.assert_not_called()
 
 
@@ -252,7 +252,7 @@ def test_f15_running_skip_existing_completed(env):
     handle_interpretation_task(msg)
 
     agent_mock.assert_not_called()
-    batch_mock.increment_progress.assert_not_called()
+    batch_mock.update_batch_progress.assert_not_called()
 
 
 def test_interp_worker_has_app_interp_worker_logger():

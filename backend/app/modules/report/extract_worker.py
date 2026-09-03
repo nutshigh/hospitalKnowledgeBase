@@ -287,6 +287,9 @@ def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, name, user_
         return
     if f.report_task_id is not None:
         return  # 已发布(幂等命中,F18 补差),不再 publish
+    if not f.dispatch_hospital:
+        # 记录本文件分发的目标医院(跨院分发时 worker/retry 需要定位任务所在库)
+        f.dispatch_hospital = hospital_id
     _log.info(
         "extract stage=queued batch=%s file=%s file_id=%s user=%s size=%d target_hospital=%s",
         b.id, rel_path, fid, user_id, size, hospital_id,
@@ -306,6 +309,7 @@ def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, name, user_
         file_path=disk_path, filename=os.path.basename(rel_path),
         file_type=file_type, file_size=size, priority="bulk",
         batch_id=b.id, file_id=fid,
+        batch_hospital_id=b.hospital_id,
     )
     f.report_task_id = task.id
     batch_db.commit()
