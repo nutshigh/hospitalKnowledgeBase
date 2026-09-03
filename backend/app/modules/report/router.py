@@ -103,6 +103,24 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
     if not report:
         raise NotFoundException(detail="Report not found")
     indicators = service.get_report_indicators(db, report_id)
+    # 2026-09-01: 绿区展示层垃圾过滤(黄/红/结论不动)
+    # 2026-09-02: "弃检/未检/放弃"类名称任何区都滤(非指标, 步新宇眼压弃检行)
+    from app.modules.report.service import _clean_green_indicator, _ABANDON_ITEM_RE
+    kept = []
+    for i in indicators:
+        if i.raw_text:
+            kept.append(i)
+            continue
+        if _ABANDON_ITEM_RE.search(i.item_name):
+            continue
+        if not i.signal_flag:
+            clean = _clean_green_indicator(i.item_name, i.result_value or "")
+            if clean is None:
+                continue
+            if clean != i.item_name:
+                i.item_name = clean
+        kept.append(i)
+    indicators = kept
     return {
         "id": report.id, "task_id": report.task_id,
         "name": report.name, "gender": report.gender, "age": report.age,

@@ -25,6 +25,10 @@ _STANDARD_MAP: Dict[str, str] = {
     "尿蛋白": "尿蛋白(PRO)",
     "尿潜血": "尿潜血(BLD)",
     "尿葡萄糖": "尿葡萄糖(GLU)",
+    "葡萄糖(尿)": "尿葡萄糖(GLU)",
+    "白细胞(尿)": "尿白细胞(LEU)",
+    "红细胞(尿)": "尿红细胞(镜检)",
+    "尿隐血": "尿潜血(BLD)",
     "尿白细胞": "尿白细胞(LEU)",
     "尿红细胞": "尿红细胞(镜检)",
     # === 血常规/血生化别名 ===
@@ -38,6 +42,8 @@ _STANDARD_MAP: Dict[str, str] = {
     "红细胞分布宽度(CV)": "红细胞变异系数(RDW-CV)",
     "红细胞分布宽度(SD)": "红细胞分布宽度(RDW-SD)",
     "红细胞压积": "红细胞压积(HCT)",
+    "红细胞比容": "红细胞压积(HCT)",
+    "红细胞比积": "红细胞压积(HCT)",
     "平均红细胞体积": "红细胞平均体积(MCV)",
     "红细胞平均体积": "红细胞平均体积(MCV)",
     "血小板体积分布宽度": "血小板分布宽度(PDW)",
@@ -45,6 +51,8 @@ _STANDARD_MAP: Dict[str, str] = {
     "血小板平均体积": "血小板平均容积(MPV)",
     "平均血小板体积": "血小板平均容积(MPV)",
     "血小板压积": "血小板压积(PCT)",
+    "血小板比容": "血小板压积(PCT)",
+    "血小板比积": "血小板压积(PCT)",
     "血小板比积": "血小板压积(PCT)",
     "血小板计数": "血小板数(PLT)",
     "大血小板比率": "大血小板比例(P-LCR)",
@@ -80,7 +88,15 @@ _STANDARD_MAP: Dict[str, str] = {
     "谷氨酰转酞酶": "谷氨酰转移酶(r-GT)",
     "γ-谷氨酰转肽酶": "谷氨酰转移酶(r-GT)",
     "γ-谷氨酰转移酶": "谷氨酰转移酶(r-GT)",
+    "γ-谷氨酰基转移酶": "谷氨酰转移酶(r-GT)",
+    "谷氨酰基转移酶": "谷氨酰转移酶(r-GT)",
+    "谷氨酰转肽酶": "谷氨酰转移酶(r-GT)",
     "谷草/谷丙": "谷草/谷丙",
+    "白/球比值": "白球比值",
+    "肝内钙化点": "肝内钙化灶",
+    "大型血小板比率": "大血小板比例(P-LCR)",
+    "a羟基丁酸脱氢酶": "α-羟丁酸脱氢酶",
+    "糖类抗原19-9": "CA-199",
     "谷丙转氨酶": "丙氨酸氨基转移酶(谷丙酶)",
     "谷草转氨酶": "天门冬氨酸氨基转移酶(谷草酶)",
     "总胆红质": "总胆红素(TBIL)",
@@ -108,6 +124,8 @@ _STANDARD_MAP: Dict[str, str] = {
     "甘油三酯": "甘油三酯(TG)",
     "肌酸激酶": "肌酸激酶(CK)",
     "血肌酸激酶": "肌酸激酶(CK)",
+    "肌钙蛋白I": "心肌肌钙蛋白I",
+    "超敏肌钙蛋白": "超敏肌钙蛋白(hs-cTn)",
     "CK同工酶(质量)": "肌酸激酶MB型同工酶(CK-MB)",
     "CK 同工酶(质量)": "肌酸激酶MB型同工酶(CK-MB)",
     "心肌肌钙蛋白I": "心肌肌钙蛋白I",
@@ -137,6 +155,7 @@ _STANDARD_MAP: Dict[str, str] = {
     "游离甲状腺素(FT4)测定": "游离甲状腺素(FT4)",
     "游离甲状腺素": "游离甲状腺素(FT4)",
     "游离T4": "游离甲状腺素(FT4)",
+    "游离甲状腺激素": "游离甲状腺素(FT4)",
     "甲状腺素": "总甲状腺原氨酸(T4)",
     "甲状腺摄取率": "甲状腺摄取率",
     # === 肿瘤标志物 ===
@@ -144,6 +163,9 @@ _STANDARD_MAP: Dict[str, str] = {
     "甲胎蛋白": "甲胎蛋白(AFP)定量",
     "糖原蛋白125": "CA125",
     "糖原蛋白153": "CA153",
+    "糖类抗原CA199": "CA-199",
+    "糖类抗原CA125": "CA125",
+    "糖类抗原CA153": "CA153",
     "癌抗原CA19-9": "CA-199",
     "神经元特异性烯醇化酶": "神经元特异性烯醇化酶",
     "CA72-4": "CA724",
@@ -171,6 +193,8 @@ _STANDARD_MAP: Dict[str, str] = {
     "载脂蛋白B": "血清载脂蛋白B",
     "血清载脂蛋白B": "血清载脂蛋白B",
     "游离前列腺特异性抗原": "游离前列腺特异性抗原(FPSA)",
+    "总前列腺特异抗原": "总前列腺特异性抗原(TPSA)",
+    "游离前列腺特异抗原": "游离前列腺特异性抗原(FPSA)",
     "前列腺特异性抗原": "前列腺特异性抗原(PSA)",
     "肿瘤特异生长因子": "肿瘤特异生长因子",
     # === 查体 ===
@@ -196,6 +220,17 @@ _STANDARD_MAP: Dict[str, str] = {
     "颈动脉粥样硬化": "颈动脉粥样硬化",
     "骨量减少": "骨质疏松",
     "骨质疏松": "骨质疏松",
+    # 2026-08-26: 幽门螺杆菌分型抗体为独立检测项, 不得吞入"幽门螺杆菌感染"
+    # (长别名在前, 优先于短名"幽门螺杆菌"包含匹配)
+    "幽门螺杆菌尿素酶抗体": "幽门螺杆菌尿素酶抗体",
+    "幽门螺杆菌细胞毒素抗体": "幽门螺杆菌细胞毒素抗体",
+    "幽门螺杆菌空泡毒素抗体": "幽门螺杆菌空泡毒素抗体",
+    "幽门螺杆菌空炮毒素抗体": "幽门螺杆菌空泡毒素抗体",
+    "幽门螺杆菌分型幽门螺杆菌抗体I型": "幽门螺杆菌抗体I型",
+    "幽门螺杆菌分型幽门螺杆菌抗体II型": "幽门螺杆菌抗体II型",
+    "幽门螺杆菌抗体I型": "幽门螺杆菌抗体I型",
+    "幽门螺杆菌抗体II型": "幽门螺杆菌抗体II型",
+    "幽门螺杆菌分型": "幽门螺杆菌分型",
     "幽门螺旋杆菌": "幽门螺杆菌感染",
     "幽门螺杆菌": "幽门螺杆菌感染",
     "前列腺肥大": "前列腺增生",
@@ -215,8 +250,8 @@ _STANDARD_MAP: Dict[str, str] = {
     "脂肪肝": "脂肪肝",
     # 注意: 不做裸"囊性结节"别名 —— "乳腺囊性结节"等跨器官短语会被误指为甲状腺。
     "甲状腺囊性结节": "甲状腺囊性结节",
-    "甲状腺混合性结节": "甲状腺混合性结节",
-    "甲状腺实性结节": "甲状腺实性结节",
+    "甲状腺混合性结节": "甲状腺结节",
+    "甲状腺实性结节": "甲状腺结节",
     "甲状腺结节": "甲状腺结节",
     "乙肝表面抗原": "乙肝表面抗原(HBsAg)",
     # === 尿检短别名(必须位于含其子串的长别名之后, 如"胆红素"在"总胆红素"后) ===
@@ -283,45 +318,169 @@ _AMBIGUOUS_MAP: Dict[str, Callable] = {
 }
 
 
+def _clean_textual_noise(s: str) -> str:
+    """方案1: 文本清洗层(2026-08-24, 广西多院测试暴露)。
+
+    LLM 输出指标名带排版噪声: 全角连字符/括号、空格、前后缀。
+    纯规则统一书写, 不改变语义; 与标准目录(半角括号)对齐。
+    - 全角连字符/括号/标点 → 半角
+    - 去空格(全角/半角)
+    """
+    _FIX = {"－": "-", "（": "(", "）": ")", "：": ":", "，": ",", "．": "."}
+    for a, b in _FIX.items():
+        s = s.replace(a, b)
+    return s.strip().replace(" ", "").replace("\u3000", "")
+
+
+# 剥头部前缀(长词优先, 防"血小板"被"血"误剥): 剥后必须命中才采用(见 _match_with_fallback)
+_AFFIX_PREFIX_RE = re.compile(r"^(血清|血浆|全血|血)")
+# 剥尾部后缀: 不剥"定量"(标准名含"癌胚抗原(CEA)定量"), 仅剥测量动作词;
+# 允许动作词后跟括号修饰("葡萄糖测定(空腹)"→"葡萄糖")
+_AFFIX_SUFFIX_RE = re.compile(r"(测定|检测|试验|检查)(\([^)]*\))?$")
+
+
+def _strip_affixes(s: str) -> str:
+    s = _AFFIX_SUFFIX_RE.sub("", s)
+    return _AFFIX_PREFIX_RE.sub("", s)
+
+
+# === 方案2: 结构化匹配(2026-08-24, 广西多院测试暴露) ===
+# 枚举别名追不完 LLM 变体; 改为拆解比对:
+#   1) 主名匹配: 标准名去掉括号后的主名(如"天门冬氨酸氨基转移酶(谷草酶)"→主名)
+#      与输入剥括号后全等 → 命中, 覆盖"无括号变体"类 MISS。
+#   2) 量词正则: 血细胞 5 系 × (数/值/绝对值/计数 → 绝对值口径; 比率/百分数/百分比/百分率 → 百分比口径)。
+#   3) 解剖限定剥离: 左/右/叶/双侧 等词剥除后命中才采用(甲状腺左叶结节 → 甲状腺结节)。
+#   4) 同义前缀替换: 仅确定同义词(乙型肝炎→乙肝)。
+_PAREN_RE = re.compile(r"\([^)]*\)")
+_QUANT_PAREN_RE = re.compile(r"\((绝对值|绝对数|百分比|百分数|比率|比值|计数)\)")
+_ANATOMY_WORDS = ("左叶", "右叶", "双侧", "左", "右", "双眼", "单眼")
+_SYNONYM_SUB = (("乙型肝炎", "乙肝"),)
+
+_CELL_ABS_RE = re.compile(
+    r"^(中性|淋巴|单核|嗜酸|嗜酸性|嗜碱|嗜碱性)(?:粒细胞|细胞)?(数|值|数目|绝对数|绝对值|计数)$")
+_CELL_PCT_RE = re.compile(
+    r"^(中性|淋巴|单核|嗜酸|嗜酸性|嗜碱|嗜碱性)(?:粒细胞|细胞)?(比率|比值|百分数|百分比|百分率)$")
+_CELL_ABS_MAP = {
+    "中性": "中性粒细胞绝对值(NEUT#)", "淋巴": "淋巴细胞绝对值(LYM#)",
+    "单核": "单核细胞绝对值(MONO#)", "嗜酸": "嗜酸细胞绝对值(EO#)",
+    "嗜碱": "嗜碱细胞绝对值(BASO#)",
+}
+_CELL_PCT_MAP = {
+    "中性": "中性粒细胞百分比", "淋巴": "淋巴细胞百分比(LYM)",
+    "单核": "单核细胞百分比(MONO%)", "嗜酸": "嗜酸性细胞比例(EO)",
+    "嗜碱": "嗜碱性细胞比例(BASO)",
+}
+
+
+def _build_main_name_map() -> dict:
+    """标准目录 ∪ 中央映射表的"主名"(去括号) → 标准名; 主名冲突(多目标)剔除。"""
+    from collections import defaultdict
+    names = set(STANDARD_NAMES)
+    try:
+        from app.modules.risk.seed import CENTRAL_MAPPINGS
+        names |= {m[0] for m in CENTRAL_MAPPINGS}
+    except Exception:
+        pass
+    main: dict = defaultdict(list)
+    for n in names:
+        m = _PAREN_RE.sub("", n).strip()
+        if m:
+            main[m].append(n)
+    return {k: v[0] for k, v in main.items() if len(v) == 1}
+
+
+_MAIN_NAME_MAP = _build_main_name_map()
+
+
+def _match_core(name: str, result: Optional[str], unit: Optional[str]) -> Optional[str]:
+    """核心匹配链(不含解剖剥离/同义替换递归): 幂等→消歧→量词→主名→别名。"""
+    if name in STANDARD_NAMES and name not in ("白细胞", "红细胞"):
+        return name
+    if name in _AMBIGUOUS_MAP:
+        return _AMBIGUOUS_MAP[name](result, unit)
+    for alias, fn in _AMBIGUOUS_MAP.items():
+        if alias in ("葡萄糖", "白细胞", "红细胞"):
+            continue
+        if alias in name:
+            return fn(result, unit)
+    # 括号修饰(空腹/尿/方法学/量词等)剥除后递归走核心链:
+    # "葡萄糖(空腹)"→"葡萄糖"(裸名消歧); "白细胞(WBC)"→"白细胞"(消歧)
+    unparen = _PAREN_RE.sub("", name)
+    if unparen != name:
+        hit = _match_core(unparen, result, unit)
+        if hit:
+            return hit
+    # 括号内量词展开: "中性粒细胞(绝对值)"→"中性粒细胞绝对值"
+    name_quant = _QUANT_PAREN_RE.sub(r"\1", name)
+    if name_quant != name:
+        hit = _match_core(name_quant, result, unit)
+        if hit:
+            return hit
+    m = _CELL_ABS_RE.match(_PAREN_RE.sub("", name))
+    if m:
+        return _CELL_ABS_MAP[m.group(1).replace("嗜酸性", "嗜酸").replace("嗜碱性", "嗜碱")]
+    m = _CELL_PCT_RE.match(_PAREN_RE.sub("", name))
+    if m:
+        return _CELL_PCT_MAP[m.group(1).replace("嗜酸性", "嗜酸").replace("嗜碱性", "嗜碱")]
+    if name in _MAIN_NAME_MAP:
+        return _MAIN_NAME_MAP[name]
+    for alias, standard in _STANDARD_MAP.items():
+        if alias in name:
+            if len(alias) <= 1 and name != alias:
+                continue
+            # "球蛋白"不得吞"微球蛋白"(β2-微球蛋白是肾损伤指标, 非球蛋白)
+            if alias == "球蛋白" and "微球蛋白" in name:
+                continue
+            # "尿素"不得吞"尿素酶"(幽门螺杆菌尿素酶抗体是 Hp 检测, 非肾功能尿素)
+            if alias == "尿素" and "尿素酶" in name:
+                continue
+            return standard
+    return None
+
+
+def _match(name: str, result: Optional[str], unit: Optional[str]) -> Optional[str]:
+    """方案2: 核心匹配 + 解剖限定剥离/同义替换(命中才采用, 有限层)。"""
+    hit = _match_core(name, result, unit)
+    if hit:
+        return hit
+    # 解剖限定词剥离: "甲状腺左叶结节"→"甲状腺结节"
+    for w in _ANATOMY_WORDS:
+        cand = name.replace(w, "")
+        if cand and cand != name:
+            hit = _match_core(cand, result, unit)
+            if hit:
+                return hit
+    # 同义前缀替换: "乙型肝炎表面抗原"→"乙肝表面抗原"
+    for a, b in _SYNONYM_SUB:
+        if a in name:
+            cand = name.replace(a, b)
+            if cand != name:
+                hit = _match_core(cand, result, unit)
+                if hit:
+                    return hit
+    return None
+
+
 def normalize_item_name(raw_name: str, result: Optional[str] = None,
                         unit: Optional[str] = None) -> tuple:
     """名称标准化: 标准表/别名表命中 → 标准表名; 未命中 → 保留原文名。
 
     同名跨科目指标(葡萄糖/白细胞/红细胞/红细胞分布宽度/尿胆原)按 result/unit 消歧。
+
+    方案1(2026-08-24): 入口先做文本清洗(全角→半角/去空格/剥前后缀),
+    清洗候选(stem)匹配失败时回退未剥版本, 保证"血小板"类词不被"血"前缀误剥。
     """
-    cleaned = raw_name.strip().replace(" ", "").replace("　", "")
+    cleaned = _clean_textual_noise(raw_name)
     if not cleaned:
         return cleaned, None
-    # === STRATEGY:v2026-08-18-normalize-order 消歧/幂等顺序 ===
-    # 匹配顺序(2026-08-18 定稿):
-    #   1. 标准名幂等 —— 归一化输出(如"红细胞平均体积(MCV)")再输入原样返回,
-    #      防短别名("红细胞")或含"钙"的结论条目("肝内钙化灶")误吞。
-    #      例外: 标准表 1267/1268 行的"白细胞/红细胞"是白带镜检项(unit=个/视野),
-    #      需放行到裸名消歧按单位区分(血/尿/白带口径)。
-    #   2. 裸名精确消歧: 输入整名为"葡萄糖/白细胞/红细胞"时按 result/unit 消歧。
-    #   3. 特异子串消歧: "红细胞分布宽度/红细胞体积分布宽度/尿胆原"。
-    #   4. 别名表子串匹配。
-    # 回退: git 历史版本为旧顺序(消歧在前, 会吞掉含"红细胞"的所有指标)。
-    if cleaned in STANDARD_NAMES and cleaned not in ("白细胞", "红细胞"):
-        return cleaned, None
-    if cleaned in _AMBIGUOUS_MAP:
-        return _AMBIGUOUS_MAP[cleaned](result, unit), None
-    for alias, fn in _AMBIGUOUS_MAP.items():
-        # 裸名(葡萄糖/白细胞/红细胞)只做整名精确匹配(上一步已处理), 不做子串
-        if alias in ("葡萄糖", "白细胞", "红细胞"):
-            continue
-        if alias in cleaned:
-            return fn(result, unit), None
-    # === END STRATEGY ===
-    for alias, standard in _STANDARD_MAP.items():
-        if alias in cleaned:
-            # === STRATEGY:v2026-08-18-short-alias-exact 单字别名仅精确匹配 ===
-            # "钙/钾/钠/氯/磷/镁"等单字别名若做子串匹配, 会吞掉"肝内钙化灶"等结论条目。
-            # 回退: 删除本判断即恢复旧行为。
-            if len(alias) <= 1 and cleaned != alias:
-                continue
-            # === END STRATEGY ===
-            return standard, None
+    hit = _match(cleaned, result, unit)
+    if hit:
+        return hit, None
+    stem = _strip_affixes(cleaned)
+    if stem != cleaned:
+        hit = _match(stem, result, unit)
+        if hit:
+            return hit, None
     return cleaned, None
 
 
@@ -347,6 +506,15 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
             str(ind.get("result", "") or "").strip(),
         )
         if key in seen:
+            # 2026-08-29: 同 key 去重时保留 signal_flag 更高者(标志行优先于无标志行)
+            for existing in deduped:
+                ekey = (
+                    existing.get("item_name_standard") or existing.get("item_name", ""),
+                    str(existing.get("result", "") or "").strip(),
+                )
+                if ekey == key and (ind.get("signal_flag") or 0) > (existing.get("signal_flag") or 0):
+                    deduped.remove(existing)
+                    deduped.append(ind)
             continue
         seen.add(key)
         deduped.append(ind)

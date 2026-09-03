@@ -65,40 +65,16 @@ CENTRAL_MAPPINGS = [
     # 保持 RED 命中: 黄区(超重)不计入肥胖, 避免超重检出率(>50%)刷屏统计口径。
     ("体重指数", "肥胖症", "CHRONIC", "内分泌代谢", "RED", "偏高", 49),
     ("肝内钙化灶", "肝内钙化灶", "OTHER", "消化系统", "YELLOW", None, 50),
-    # ---- MAJOR 肿瘤 ----
-    # 肿瘤标志物收紧(2026-08-19): 单指标 RED 才命中, 降低假阳性(CA125/CA199/CEA 等良性病亦升高)。
-    # 组合命中可承载低可靠性线索(见 CENTRAL_RULES 说明), 需新增时以 combo 规则表达。
-    ("甲胎蛋白(AFP)定量", "肝癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 60),
-    ("癌胚抗原(CEA)定量", "结直肠癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 61),
-    ("CA125", "卵巢癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 62),
-    ("CA153", "乳腺癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 63),
-    ("CA-199", "胰腺癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 64),
-    ("神经元特异性烯醇化酶", "肺癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 65),
-    ("肿瘤特异生长因子", "恶性肿瘤(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 66),
-    ("总前列腺特异性抗原(TPSA)", "前列腺癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 67),
-    ("游离前列腺特异性抗原(FPSA)", "前列腺癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 68),
-    ("尿核基质蛋白(NMP22)测定", "膀胱癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 69),
-    # 结论/检查类(非标志物)保持 YELLOW: 影像/专项检查结论本身即可靠证据
-    ("肺结节", "肺癌(疑似)", "MAJOR", "肿瘤", "YELLOW", None, 70),
-    # ---- MAJOR 心血管 ----
-    ("肌酸激酶(CK)", "心肌损伤(疑似)", "MAJOR", "心血管系统", "YELLOW", "偏高", 71),
-    ("乳酸脱氢酶(LDH)", "心肌损伤(疑似)", "MAJOR", "心血管系统", "YELLOW", "偏高", 72),
-    ("α-羟丁酸脱氢酶", "心肌损伤(疑似)", "MAJOR", "心血管系统", "YELLOW", "偏高", 73),
-    ("心肌肌钙蛋白I", "心肌梗死(疑似)", "MAJOR", "心血管系统", "RED", "偏高", 74),
-    ("肌酸激酶MB型同工酶(CK-MB)", "心肌梗死(疑似)", "MAJOR", "心血管系统", "RED", "偏高", 75),
-    # ---- MAJOR 肿瘤补充(2026-08-18, 标准表补齐; 2026-08-19 标志物统一收紧为 RED) ----
-    ("CA724", "胃癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 76),
-    ("鳞状细胞癌相关抗原 (SCC)", "鳞状细胞癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 77),
-    ("细胞角蛋白19片段", "肺癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 78),
-    ("EB病毒抗体", "鼻咽癌(疑似)", "MAJOR", "肿瘤", "RED", "偏高", 79),
-    ("膀胱癌尿FISH测定", "膀胱癌(疑似)", "MAJOR", "肿瘤", "YELLOW", None, 80),
+    # 2026-09-02 决策: 移除全部 MAJOR 重疾映射(肿瘤标志物/心肌损伤/心梗线索不再映射到"XX癌(疑似)"类)。
+    # 检验指标类(AFP/CEA/肌酸激酶/肌钙蛋白等)仅作为异常指标存在(绿区/异常指标列表), 不进 disease 统计;
+    # 结论型总检异常(影像/专项检查结论)改 OTHER 自映射, 作为"检查发现"参与统计。
+    ("肺结节", "肺结节", "OTHER", "其他", "YELLOW", None, 70),
     # ---- CHRONIC 心血管/血脂补充(2026-08-18) ----
     ("血清载脂蛋白A", "血脂异常", "CHRONIC", "心血管系统", "YELLOW", "偏低", 81),
     ("血清载脂蛋白B", "血脂异常", "CHRONIC", "心血管系统", "YELLOW", "偏高", 82),
     ("D-二聚体", "血栓风险", "CHRONIC", "心血管系统", "YELLOW", "偏高", 83),
     ("利钠肽(BNP)", "心力衰竭(疑似)", "CHRONIC", "心血管系统", "YELLOW", "偏高", 84),
     ("神经末端利钠肽原(NT-ProBNP)", "心力衰竭(疑似)", "CHRONIC", "心血管系统", "YELLOW", "偏高", 85),
-    ("超敏肌钙蛋白(hs-cTn)", "心肌梗死(疑似)", "MAJOR", "心血管系统", "RED", "偏高", 86),
     # ---- CHRONIC 泌尿补充(2026-08-18) ----
     ("胱抑素C", "慢性肾病", "CHRONIC", "泌尿系统", "YELLOW", "偏高", 87),
     ("尿蛋白/尿肌酐比值", "慢性肾病", "CHRONIC", "泌尿系统", "YELLOW", "偏高", 88),
@@ -144,10 +120,6 @@ CENTRAL_RULES = [
         {"name": "甘油三酯(TG)", "min_level": "YELLOW", "deviation": "偏高"},
         {"name": "空腹血糖", "min_level": "YELLOW", "deviation": "偏高"},
     ], 4),
-    ("C-AMI", "急性心肌梗死(疑似)", "MAJOR", "心血管系统", [
-        {"name": "心肌肌钙蛋白I", "min_level": "RED", "deviation": "偏高"},
-        {"name": "肌酸激酶(CK)", "min_level": "YELLOW", "deviation": "偏高"},
-    ], 5),
     ("C-HYPERTH", "甲状腺功能亢进", "CHRONIC", "内分泌代谢", [
         {"name": "促甲状腺激素(TSH)", "min_level": "YELLOW", "deviation": "偏低"},
         {"name": "游离甲状腺素(FT4)", "min_level": "YELLOW", "deviation": "偏高"},
@@ -205,4 +177,11 @@ def sync_central(db):
         f"UPDATE disease_mapping SET enabled=0 WHERE enabled=1 AND source='CENTRAL'"
         f" AND item_name_standard NOT IN ({_phs})"
     ), {f"n{i}": n for i, n in enumerate(_names)})
+    # 规则同理: CENTRAL_RULES 收缩时停用旧 CENTRAL 规则(例: 移除 C-AMI, 2026-09-02)。
+    _rcodes = [r[0] for r in CENTRAL_RULES]
+    _rps = ",".join(f":c{i}" for i in range(len(_rcodes)))
+    db.execute(text(
+        f"UPDATE disease_rule SET enabled=0 WHERE enabled=1 AND source='CENTRAL'"
+        f" AND rule_code NOT IN ({_rps})"
+    ), {f"c{i}": c for i, c in enumerate(_rcodes)})
     db.commit()

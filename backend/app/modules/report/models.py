@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, Integer, Date, DateTime, ForeignKey, func
+from sqlalchemy import Column, BigInteger, String, Text, Integer, SmallInteger, Date, DateTime, ForeignKey, func
 from app.models.base import Base
 
 
@@ -51,3 +51,4 @@ class ReportIndicator(Base):
     ref_range_high = Column(String(50), nullable=True)
     category = Column(String(50), nullable=True)
     raw_text = Column(Text, nullable=True)
+    signal_flag = Column(SmallInteger, nullable=True, default=0)  # 1=异常信号行(红字/箭头/异常词), 2026-08-25

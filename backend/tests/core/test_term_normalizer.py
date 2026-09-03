@@ -6,8 +6,14 @@ def test_normalize_item_name_alias_to_standard():
     assert normalize_item_name("血糖")[0] == "空腹血糖"
     assert normalize_item_name("葡萄糖")[0] == "空腹血糖"
     assert normalize_item_name("谷丙转氨酶")[0] == "丙氨酸氨基转移酶(谷丙酶)"
+    # 方案2量词收敛(2026-08-24): 百分数/百分率/比率 → 百分比口径标准名
+    assert normalize_item_name("淋巴细胞百分数")[0] == "淋巴细胞百分比(LYM)"
+    assert normalize_item_name("中性粒细胞数")[0] == "中性粒细胞绝对值(NEUT#)"
+    # 方案1清洗(2026-08-24): 全角/空格/前后缀
+    assert normalize_item_name("血清钾")[0] == "钾(K)"
+    assert normalize_item_name("α－羟丁酸脱氢酶")[0] == "α-羟丁酸脱氢酶"
     # 未知名称原样保留
-    assert normalize_item_name("淋巴细胞百分数")[0] == "淋巴细胞百分数"
+    assert normalize_item_name("随机未知项目X")[0] == "随机未知项目X"
 
 
 def test_normalize_indicators_sets_standard_and_code():

@@ -28,6 +28,12 @@ from app.config import settings
 _RANGE_RE = re.compile(r"([\d.]+)\s*[-~—到至]\s*([\d.]+)")
 
 
+def _to_num(v) -> float:
+    """结果/参考值转数字: 剥 >/</~ 等符号(如 ">1000" → 1000), 无法解析返回 0。"""
+    m = re.search(r"([\d.]+)", str(v or ""))
+    return float(m.group(1)) if m else 0.0
+
+
 def _fix_ref_range(ind: dict) -> None:
     """防御性修复：当 ref_range_low 包含完整范围且 ref_range_high 为空时拆分。"""
     low = ind.get("ref_range_low")
@@ -175,7 +181,9 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
 
 
 def build_interp_agent():
-    model = get_chat_model(streaming=False)
+    # 2026-08-27: 解读改 no_think —— MedGo 思考模式下长报告单条 15-40 分钟,
+    # 解读为结构化 JSON 提取/生成, 思考收益低; no_think 约 3-5 分钟/条。
+    model = get_chat_model(streaming=False, no_think=True)
     model.max_tokens = 16384
     return create_agent(
         model=model,
@@ -188,7 +196,7 @@ def build_interp_agent():
 
 
 def build_report_model():
-    model = get_chat_model(streaming=False)
+    model = get_chat_model(streaming=False, no_think=True)
     model.max_tokens = 16384
     return model
 
@@ -299,12 +307,22 @@ def _generate_report(state: InterpState, db: Session) -> dict:
                 report_raw = json.loads(repair_json(match.group()))
             except Exception:
                 report_raw = {}
+    def _coerce_str(v) -> str:
+        """2026-08-29: MedGo JSON 字段类型漂移(abnormal_focus 偶发 list)容错。"""
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            return "、".join(str(x) for x in v)
+        return str(v)
+
     report = InterpretationReport(
-        overall_summary=strip_think_tags(report_raw.get("overall_summary", "")),
-        abnormal_focus=strip_think_tags(report_raw.get("abnormal_focus", "")),
-        trend_note=strip_think_tags(report_raw.get("trend_note", "")),
-        suggestions=strip_think_tags(report_raw.get("suggestions", "")),
-        risk_alert=strip_think_tags(report_raw.get("risk_alert", "")),
+        overall_summary=strip_think_tags(_coerce_str(report_raw.get("overall_summary"))),
+        abnormal_focus=strip_think_tags(_coerce_str(report_raw.get("abnormal_focus"))),
+        trend_note=strip_think_tags(_coerce_str(report_raw.get("trend_note"))),
+        suggestions=strip_think_tags(_coerce_str(report_raw.get("suggestions"))),
+        risk_alert=strip_think_tags(_coerce_str(report_raw.get("risk_alert"))),
     )
 
     refs_all: list[dict] = []
@@ -336,13 +354,14 @@ def build_interp_graph(hospital_id: str, db: Session):
         user_id = row[1] if row else 0
         rows = db.execute(
             text("SELECT id, item_name, item_name_standard, result_value, unit, "
-                 "ref_range_low, ref_range_high FROM report_indicator WHERE report_id = :rid ORDER BY id"),
+                 "ref_range_low, ref_range_high, signal_flag FROM report_indicator WHERE report_id = :rid ORDER BY id"),
             {"rid": report_id},
         ).fetchall()
         indicators = [
             {"id": r[0], "item_name": r[1], "item_name_standard": r[2],
              "result_value": r[3], "unit": r[4],
-             "ref_range_low": r[5], "ref_range_high": r[6]}
+             "ref_range_low": r[5], "ref_range_high": r[6],
+             "signal_flag": r[7]}
             for r in rows
         ]
         for ind in indicators:
@@ -374,11 +393,40 @@ def build_interp_graph(hospital_id: str, db: Session):
             result = rules_engine.evaluate(state["hospital_id"], ind_dict)
             deviation = result.deviation
             color_level = result.color_level
+            # === 2026-08-25: 异常信号行强制黄区 ===
+            # signal_flag=3(2026-08-28): 列式提示列异常标志(报告方明确判定), 强制黄;
+            # signal_flag=2(↑↓箭头): 语义标记, 强制黄(不复核, 箭头不会标在正常值上);
+            # signal_flag=1(红字/异常词): 样式标记, 有参考范围时复核
+            #   (超限→黄, 范围内→绿, 如"眼压 13"红字误标)。
+            if ind.get("signal_flag") == 3:
+                color_level = "yellow"
+                if deviation == "normal":
+                    deviation = "abnormal"
+            elif ind.get("signal_flag") == 2:
+                color_level = "yellow"
+                if deviation == "normal":
+                    deviation = "abnormal"
+            elif ind.get("signal_flag") == 1:
+                try:
+                    val = _to_num(ind["result_value"])
+                    ref_high = _to_num(ind["ref_range_high"])
+                    ref_low = _to_num(ind["ref_range_low"])
+                    if ref_high and ref_low and (val > ref_high or val < ref_low):
+                        deviation = "high" if val > ref_high else "low"
+                        color_level = "yellow"
+                    elif not (ref_high or ref_low):
+                        color_level = "yellow"
+                        if deviation == "normal":
+                            deviation = "abnormal"
+                except (ValueError, TypeError):
+                    color_level = "yellow"
+                    if deviation == "normal":
+                        deviation = "abnormal"
             if deviation == "normal":
                 try:
-                    val = float(ind["result_value"] or 0)
-                    ref_high = float(ind["ref_range_high"] or 0)
-                    ref_low = float(ind["ref_range_low"] or 0)
+                    val = _to_num(ind["result_value"])
+                    ref_high = _to_num(ind["ref_range_high"])
+                    ref_low = _to_num(ind["ref_range_low"])
                     if ref_high and val > ref_high:
                         deviation = "high"
                         if color_level == "green":

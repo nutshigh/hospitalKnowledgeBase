@@ -27,18 +27,14 @@ def test_disease_mode_dispatches_to_hit_queries(monkeypatch):
 
 
 def test_excluded_diseases_not_in_stats():
-    """仅剔除纯指标自映射杂项(肌酸激酶/尿酸)。"""
-    sql = ds._excluded_sql()
-    assert "NOT IN" in sql
-    assert "肌酸激酶" in sql
-    assert "尿酸" in sql
-    # 真实体检异常发现(屈光不正/龋齿/扁桃体肥大等)保留统计, 按类别归"异常"
-    assert "龋齿" not in sql
-    assert "屈光不正" not in sql
-    assert "甲状腺囊性结节" not in sql
-    # 肥胖症/牙周病为 WHO 认定的慢性病, 计入统计, 不在剔除列表
-    assert "肥胖症" not in sql
-    assert "牙周病" not in sql
+    """白名单已清空(2026-09-02, MAJOR 移除后无需剔除指标自映射杂项)。
+
+    真实体检异常发现(屈光不正/龋齿/扁桃体肥大等)保留统计, 按类别归"异常";
+    指标不再自映射进 disease_hit, 无需 NOT IN 剔除。空集合时过滤函数返回空串。
+    """
+    assert ds._STATS_EXCLUDED_DISEASES == ()
+    assert ds._excluded_sql() == ""
+    assert ds._excluded_item_sql() == ""
 
 
 def test_indicator_mode_untouched(monkeypatch):

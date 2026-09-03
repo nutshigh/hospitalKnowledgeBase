@@ -3,5 +3,15 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  server: { port: 3001 },
+  server: {
+    port: 3001,
+    // 2026-08-31: API 同源代理 —— 远程浏览器 localhost 访问时, /api 由 vite 转发
+    // 到后端 8005, 无需用户额外转发 8005 端口(生产构建由 nginx 同源反代)
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8005",
+        changeOrigin: true,
+      },
+    },
+  },
 });

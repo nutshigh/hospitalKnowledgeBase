@@ -49,7 +49,8 @@ def test_high_prevalence_conclusion_normalization():
     assert normalize_item_name("子宫平滑肌瘤")[0] == "子宫肌瘤"
     assert normalize_item_name("胆结石")[0] == "胆囊结石"
     assert normalize_item_name("甲状腺实性结节")[0] == "甲状腺结节"
-    assert normalize_item_name("右叶混合性结节")[0] == "甲状腺结节"
+    assert normalize_item_name("甲状腺右叶混合性结节")[0] == "甲状腺结节"
+    assert normalize_item_name("甲状腺左叶结节")[0] == "甲状腺结节"
     assert normalize_item_name("乙肝表面抗原阳性")[0] == "乙肝表面抗原(HBsAg)"
 
 

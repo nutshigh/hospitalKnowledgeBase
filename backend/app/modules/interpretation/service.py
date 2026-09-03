@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Optional, List
 from sqlalchemy.orm import Session
@@ -136,6 +137,22 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
         for r in rows
     ]
 
+    # 2026-09-01: 绿区展示层垃圾过滤(黄/红区指标与总检异常不动)
+    # 2026-09-02: "弃检/未检/放弃"类名称任何区都滤(非指标, 步新宇眼压弃检行)
+    from app.modules.report.service import _clean_green_indicator, _ABANDON_ITEM_RE
+    cleaned_items = []
+    for it in all_items:
+        if it.get("source") != "conclusion" and _ABANDON_ITEM_RE.search(it["item_name"]):
+            continue
+        if it.get("color_level") == "green" and it.get("source") != "conclusion":
+            clean = _clean_green_indicator(it["item_name"], it.get("result_value") or "")
+            if clean is None:
+                continue
+            if clean != it["item_name"]:
+                it["item_name"] = clean
+        cleaned_items.append(it)
+    all_items = cleaned_items
+
     regular_items = [it for it in all_items if it.get("source") != "conclusion"]
     conclusion_items = [it for it in all_items if it.get("source") == "conclusion"]
 
@@ -156,6 +173,13 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
         fuzzy_matched = False
         for rname in reg_anomaly_names:
             if _fuzzy_overlap(citem["item_name"], rname):
+                # 2026-08-31: 结论名是疾病全称且显著更长时不剔除 ——
+                # "高尿酸血症"(结论, 疾病诊断) vs "尿酸(UA)"(指标简称) 是
+                # 不同语义层级, 用户要求两者都展示(指标黄区 + 总检建议)。
+                if rname in citem["item_name"] \
+                        and len(citem["item_name"]) >= len(rname) + 2 \
+                        and re.search(r"(血症|病|症|炎|瘤|癌|肿|硬化|息肉|结节|结石|囊肿)$", citem["item_name"]):
+                    continue
                 _link_disease_mapping(db, citem["item_name"], rname)
                 fuzzy_matched = True
                 break
@@ -172,6 +196,14 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
                 "SELECT disease_name FROM disease_mapping WHERE item_name_standard = :nm OR disease_name = :nm LIMIT 1"
             ), {"nm": citem["item_name"]}).scalar()
             if dm_r and dm_c and dm_r == dm_c:
+                # 2026-08-31: 疾病全称豁免 —— 指标"尿酸(UA)" 与结论"高尿酸血症"
+                # 映射到同一疾病名, 但结论是总检建议的疾病诊断(用户要求展示),
+                # 指标是化验异常(黄区展示), 两者语义层级不同, 不剔除。
+                rstem = re.sub(r"[（(].*?[)）]", "", rname).strip()
+                cname = citem["item_name"]
+                if rstem and len(rstem) >= 2 and rstem in cname \
+                        and re.search(r"(血症|病|症|炎|瘤|癌|肿|硬化|息肉|结石|囊肿)$", cname):
+                    continue
                 dm_matched = True
                 break
         if dm_matched:

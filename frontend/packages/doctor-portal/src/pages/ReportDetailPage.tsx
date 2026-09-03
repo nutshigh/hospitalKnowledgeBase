@@ -41,7 +41,14 @@ export default function ReportDetailPage() {
     { title: '结果', dataIndex: 'result_value', key: 'result_value',
       render: (v: any, r: any) => <span>{v} <span style={{ color: '#888', fontSize: 12 }}>{r.unit}</span></span> },
     { title: '参考范围', key: 'ref',
-      render: (_: any, r: any) => r.ref_range_low && r.ref_range_high ? `${r.ref_range_low}-${r.ref_range_high}` : '-' },
+      // 2026-08-31: 单限参考范围也显示(<5.2 / >1.04), "无"视为无值
+      render: (_: any, r: any) => {
+        const ok = (v: any) => v !== undefined && v !== null && v !== '' && v !== '无';
+        if (ok(r.ref_range_low) && ok(r.ref_range_high)) return `${r.ref_range_low}-${r.ref_range_high}`;
+        if (ok(r.ref_range_high)) return `<${r.ref_range_high}`;
+        if (ok(r.ref_range_low)) return `>${r.ref_range_low}`;
+        return '-';
+      } },
     { title: '色级', dataIndex: 'color_level', key: 'color_level',
       render: (c: string) => c ? <Tag color={COLORS[c]}>{c}</Tag> : '-' },
     { title: '偏离', dataIndex: 'deviation', key: 'deviation',

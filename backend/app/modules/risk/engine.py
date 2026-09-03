@@ -10,6 +10,8 @@
   仅保留级别要求最严的那组(如 BMI 红时只记肥胖症, 不记超重)。
 """
 
+import re
+
 _LEVEL_RANK = {"green": 0, "yellow": 1, "red": 2}
 
 # deviation 双值域归一: rules_engine 产 high/low, LLM 产 偏高/偏低/异常
@@ -90,6 +92,13 @@ def compute_hits(judgments, indicator_std_names, mappings, rules):
         if not judges and conclusions and len(std) >= _MIN_SUBSTR_LEN:
             # 结论型子串兜底: 标准名与结论名互相包含(如 "脂肪肝" in "脂肪肝(中度)")
             judges = [j for j in conclusions if std in j.item_name or j.item_name in std]
+            if not judges:
+                # 2026-08-27: 去括号后再试(结论原文"右肺尖间隔旁型肺气肿" vs
+                # 标准名"肺气肿(间隔旁型)") — 括号修饰不影响语义包含
+                std_clean = re.sub(r"[（(][^）)]*[）)]", "", std)
+                if std_clean and std_clean != std:
+                    judges = [j for j in conclusions
+                              if std_clean in j.item_name or j.item_name in std_clean]
         if not judges:
             continue
         rank = _level_rank(m.get("match_level"))

@@ -156,35 +156,41 @@ def disease_trend(
     category: Optional[str],
     diseases: Optional[List[str]],
     years: int,
+    unit_names: Optional[List[str]] = None,
 ) -> dict:
     """变化趋势：近 N 年各病种/指标 检出率趋势（年份序列连续，缺数据年份补零）"""
     if stat_mode == "disease":
-        return _disease_trend_disease(db, category, diseases, years)
+        return _disease_trend_disease(db, category, diseases, years, unit_names)
+    count_filter, count_params = _unit_filter_sql(unit_names, col="ri.unit_name")
+    info_filter, info_params = _unit_filter_sql(unit_names, col="unit_name")
     # 1) 确定年份序列：以数据中最大年份为锚点，向前生成连续的 N 年序列
-    max_year_sql = """
+    max_year_sql = f"""
         SELECT MAX(YEAR(report_date)) AS y FROM report_info
         WHERE check_type IS NULL OR check_type != 'DEMO'
+          {info_filter}
     """
-    max_year = db.execute(text(max_year_sql)).scalar()
+    max_year = db.execute(text(max_year_sql), info_params).scalar()
     if not max_year:
         return {"stat_mode": stat_mode, "category": category, "years": [], "series": []}
     year_list = list(range(max_year - years + 1, max_year + 1))
 
     # 2) 每年样本量
-    sample_sql = """
+    sample_sql = f"""
         SELECT YEAR(report_date) AS y, COUNT(DISTINCT user_id, report_date) AS sample_size
         FROM report_info
         WHERE check_type IS NULL OR check_type != 'DEMO'
+          {info_filter}
         GROUP BY y
     """
     samples = {
-        r.y: r.sample_size for r in db.execute(text(sample_sql))
+        r.y: r.sample_size for r in db.execute(text(sample_sql), info_params)
     }
 
     # 3) 确定统计对象清单
     join = _INDICATOR_JOIN + (_DISEASE_JOIN if stat_mode == "disease" else "")
     item_col = _item_expr(stat_mode)
     params = {"y0": year_list[0], "y1": year_list[-1]}
+    params.update(count_params)
     filters = ""
     if stat_mode == "disease" and category:
         filters += " AND dm.disease_category = :category"
@@ -211,6 +217,7 @@ def disease_trend(
           {dedup_filter}
           AND ij.color_level IN ('red', 'yellow')
           {filters}
+          {count_filter}
         GROUP BY y, item_name
     """
     rows = db.execute(text(count_sql), params).fetchall()
@@ -239,19 +246,17 @@ def disease_trend(
 
 def unit_disease_spectrum(
     db: Session,
-    unit_name: Optional[str],
+    unit_names: Optional[List[str]],
     topn: int,
     stat_mode: str,
     start_date: str,
     end_date: str,
 ) -> dict:
-    """单位疾病谱与健康画像：TOP N 疾病/指标 + 疾病类别分布"""
+    """单位疾病谱与健康画像：TOP N 疾病/指标 + 疾病类别分布（支持多单位过滤）"""
     if stat_mode == "disease":
-        return _unit_spectrum_disease(db, unit_name, topn, start_date, end_date)
-    unit_filter = "AND ri.unit_name = :unit_name" if unit_name else ""
-    params = {"start": start_date, "end": end_date, "topn": topn}
-    if unit_name:
-        params["unit_name"] = unit_name
+        return _unit_spectrum_disease(db, unit_names, topn, start_date, end_date)
+    unit_filter, params = _unit_filter_sql(unit_names)
+    params.update({"start": start_date, "end": end_date, "topn": topn})
 
     total_sql = f"""
         SELECT COUNT(DISTINCT ri.user_id, ri.report_date) AS total FROM report_info ri
@@ -317,7 +322,7 @@ def unit_disease_spectrum(
     class_distribution = [{"name": r.class_name, "value": r.cnt} for r in class_rows]
 
     return {
-        "unit_name": unit_name,
+        "unit_name": ",".join(unit_names) if unit_names else None,
         "stat_mode": stat_mode,
         "total": total,
         "top_diseases": top_diseases,
@@ -334,19 +339,31 @@ def unit_disease_spectrum(
 # 不进入统计数字。映射表保留(供解读链接), 统计层统一剔除。
 # 2026-08-20 收窄: 仅剔除"纯指标自映射杂项"(指标名==病种名, 如 肌酸激酶/尿酸),
 # 屈光不正/扁桃体肥大/龋齿 等真实体检异常发现保留, 按 disease_category 归入"异常"。
-_STATS_EXCLUDED_DISEASES = (
-    "肌酸激酶", "尿酸",
-)
+# 2026-09-02: 移除全部 MAJOR 重疾映射(见 seed.py), 指标不再自映射进 disease_hit,
+# 该白名单使命结束, 清空(空集合时过滤函数返回空串, 不生成 NOT IN ())。
+_STATS_EXCLUDED_DISEASES = ()
 
 
 def _excluded_sql() -> str:
+    if not _STATS_EXCLUDED_DISEASES:
+        return ""
     return " AND dh.disease_name NOT IN (" + ",".join(
         f"'{n}'" for n in _STATS_EXCLUDED_DISEASES
     ) + ")"
 
 
+def _unit_filter_sql(unit_names: Optional[List[str]], col: str = "ri.unit_name") -> tuple:
+    """多单位过滤 SQL 片段与参数（列名由调用方指定：disease 模式用 dh.unit_name）。"""
+    if not unit_names:
+        return "", {}
+    names = ",".join(f":u{i}" for i in range(len(unit_names)))
+    return f" AND {col} IN ({names})", {f"u{i}": n for i, n in enumerate(unit_names)}
+
+
 def _excluded_item_sql() -> str:
     """按判定名(ij.item_name)过滤的非疾病条目 SQL(health-profile 等旧接口用)。"""
+    if not _STATS_EXCLUDED_DISEASES:
+        return ""
     return " AND ij.item_name NOT IN (" + ",".join(
         f"'{n}'" for n in _STATS_EXCLUDED_DISEASES
     ) + ")"
@@ -398,24 +415,31 @@ def _indicator_cross_disease(db: Session, dimension: str, start_date: str, end_d
     return {"dimension": dimension, "stat_mode": "disease", "data": data}
 
 
-def _disease_trend_disease(db: Session, category, diseases, years: int) -> dict:
-    max_year_sql = """
+def _disease_trend_disease(db: Session, category, diseases, years: int,
+                           unit_names: Optional[List[str]] = None) -> dict:
+    hit_filter, hit_params = _unit_filter_sql(unit_names, col="dh.unit_name")
+    # 样本量/年份锚点基于 report_info（无别名），单位过滤用原始列名
+    info_filter, info_params = _unit_filter_sql(unit_names, col="unit_name")
+    max_year_sql = f"""
         SELECT MAX(YEAR(report_date)) AS y FROM report_info
         WHERE check_type IS NULL OR check_type != 'DEMO'
+          {info_filter}
     """
-    max_year = db.execute(text(max_year_sql)).scalar()
+    max_year = db.execute(text(max_year_sql), info_params).scalar()
     if not max_year:
         return {"stat_mode": "disease", "category": category, "years": [], "series": []}
     year_list = list(range(max_year - years + 1, max_year + 1))
-    sample_sql = """
+    sample_sql = f"""
         SELECT YEAR(report_date) AS y, COUNT(DISTINCT user_id, report_date) AS sample_size
         FROM report_info
         WHERE check_type IS NULL OR check_type != 'DEMO'
+          {info_filter}
         GROUP BY y
     """
-    samples = {r.y: r.sample_size for r in db.execute(text(sample_sql))}
+    samples = {r.y: r.sample_size for r in db.execute(text(sample_sql), info_params)}
 
     params = {"y0": year_list[0], "y1": year_list[-1]}
+    params.update(hit_params)
     filters = ""
     if category:
         filters += " AND dh.disease_category = :category"
@@ -434,6 +458,7 @@ def _disease_trend_disease(db: Session, category, diseases, years: int) -> dict:
           {_DEMO_FILTER}
           {_excluded_sql()}
           {filters}
+          {hit_filter}
         GROUP BY y, item_name
     """
     rows = db.execute(text(count_sql), params).fetchall()
@@ -458,15 +483,14 @@ def _disease_trend_disease(db: Session, category, diseases, years: int) -> dict:
     return {"stat_mode": "disease", "category": category, "years": year_list, "series": series}
 
 
-def _unit_spectrum_disease(db: Session, unit_name, topn: int, start_date: str, end_date: str) -> dict:
-    unit_filter = "AND dh.unit_name = :unit_name" if unit_name else ""
+def _unit_spectrum_disease(db: Session, unit_names, topn: int, start_date: str, end_date: str) -> dict:
+    unit_filter, unit_params = _unit_filter_sql(unit_names, col="dh.unit_name")
     params = {"start": start_date, "end": end_date, "topn": topn}
-    if unit_name:
-        params["unit_name"] = unit_name
+    params.update(unit_params)
     total_sql = f"""
         SELECT COUNT(DISTINCT ri.user_id, ri.report_date) AS total FROM report_info ri
         WHERE ri.report_date BETWEEN :start AND :end {_DEMO_FILTER}
-          {"AND ri.unit_name = :unit_name" if unit_name else ""}
+          {_unit_filter_sql(unit_names, col="ri.unit_name")[0]}
     """
     total = db.execute(text(total_sql), params).fetchone().total or 0
     top_sql = f"""
@@ -507,7 +531,7 @@ def _unit_spectrum_disease(db: Session, unit_name, topn: int, start_date: str, e
     class_rows = db.execute(text(class_sql), params).fetchall()
     class_distribution = [{"name": r.class_name, "value": r.cnt} for r in class_rows]
     return {
-        "unit_name": unit_name,
+        "unit_name": ",".join(unit_names) if unit_names else None,
         "stat_mode": "disease",
         "total": total,
         "top_diseases": top_diseases,

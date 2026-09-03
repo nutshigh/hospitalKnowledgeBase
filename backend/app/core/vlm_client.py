@@ -1,7 +1,10 @@
+import logging
 import re
 from typing import Optional
 from httpx import Client, Timeout
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 OCR_PROMPT = """<image>\n<|grounding|>Extract all lab test indicators from this medical report as a Markdown table.
 
@@ -104,46 +107,90 @@ def _parse_personal_info_cn(text: str) -> dict:
     return info
 
 
+def _html_table_rows(text: str) -> list[list[str]]:
+    """从 PaddleOCR-VL 输出的 HTML <table> 提取行单元格(PaddleOCR-VL 默认输出 HTML 表格而非 markdown |)。"""
+    rows = []
+    for tr in re.findall(r"<tr>(.*?)</tr>", text, re.S):
+        cells = []
+        for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S):
+            cells.append(re.sub(r"<[^>]+>", "", td).strip())
+        rows.append(cells)
+    return rows
+
+
 def _parse_markdown_table(text: str) -> list[dict]:
     """Parse a Markdown table into a list of indicator dicts."""
     lines = text.split("\n")
     table_rows = []
 
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("|") and stripped.endswith("|"):
-            cells = [c.strip() for c in stripped[1:-1].split("|")]
-            if all(c.replace("-", "").replace(" ", "") == "" for c in cells):
-                continue  # separator row
-            table_rows.append(cells)
+    if "<tr>" in text:
+        table_rows = _html_table_rows(text)
+    else:
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("|") and stripped.endswith("|"):
+                cells = [c.strip() for c in stripped[1:-1].split("|")]
+                if all(c.replace("-", "").replace(" ", "") == "" for c in cells):
+                    continue  # separator row
+                table_rows.append(cells)
 
     if len(table_rows) < 2:
         return []
 
+    # 2026-08-26: 表头行不一定是第一行(钦州等报告的"模块标题行"先出现)
+    # 找第一个能映射出字段的表头行; 其后的"检查人员/审核时间"类行跳过
+    header_idx = None
+    for i, row in enumerate(table_rows):
+        if _match_header_columns(row):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+
     # Map header columns
-    header = table_rows[0]
+    header = table_rows[header_idx]
     col_map = _match_header_columns(header)
 
     indicators = []
     seen = set()
-    for row in table_rows[1:]:
+    for row in table_rows[header_idx + 1:]:
+        if any(("人员" in c) or ("检查时间" in c) or ("审核时间" in c) or ("时间:" in c) for c in row):
+            continue
+        # 2026-08-26: 多表格报告(钦州)后续模块自带表头 → 切换列映射
+        cm = _match_header_columns(row)
+        if cm:
+            col_map = cm
+            continue
         indicator = _row_to_indicator(row, col_map)
         name = indicator.get("item_name", "").strip()
         if not name or name in ("(each indicator)", "项目名称", "结果"):
+            continue
+        # 2026-08-26: 页眉姓名行 / 问诊类行不入指标
+        if re.search(r"(姓名[:：]|性别[:：]|门诊号|体检编号|既往病史|家族病史|月经史|"
+                     r"遗传病史|过敏史|婚育史|手术史|输血史|神经及精神疾病)", name):
+            continue
+        # 2026-08-26: 无结果无参考的行(报告尾页医师/热线)不入指标
+        if not indicator.get("result") and not (indicator.get("ref_low") or indicator.get("ref_high")):
             continue
         # Deduplicate: same name + same value → skip
         key = (name, indicator.get("result", ""))
         if key in seen:
             continue
         seen.add(key)
-        # If ref_low/ref_high still contain a range, parse them
+        # 参考范围解析: 支持 "3.5~9.5" / "~5.17"(仅上限) / "5.17~"(仅下限) / "<5.2"
+        # 非数字参考(如"阴性")置 None, 避免脏数据落库
         for ref_key in ("ref_low", "ref_high"):
             val = indicator.get(ref_key)
-            if val and re.search(r"[\d.]+\s*[-~—到至]\s*[\d.]+", str(val)):
-                lo, hi = _parse_ref_range(str(val))
+            if val is None:
+                continue
+            sv = str(val)
+            if not re.search(r"\d", sv):
+                indicator[ref_key] = None
+                continue
+            lo, hi = _parse_ref_range(sv)
+            if lo is not None or hi is not None:
                 indicator["ref_low"] = lo
                 indicator["ref_high"] = hi
-                break
         indicators.append(indicator)
 
     return indicators
@@ -158,6 +205,8 @@ def _match_header_columns(headers: list[str]) -> dict:
         "unit": ["单位", "计量单位"],
         "ref_low": ["参考范围低", "参考低", "下限"],
         "ref_high": ["参考范围高", "参考高", "上限"],
+        # 2026-08-29: 提示/标志列(广西"提示"列: ↑/偏高/H 等报告方异常标志)
+        "flag": ["提示", "标志", "结果提示"],
     }
 
     def _jaccard(a: str, b: str) -> float:
@@ -184,6 +233,12 @@ def _match_header_columns(headers: list[str]) -> dict:
 def _row_to_indicator(row: list[str], col_map: dict) -> dict:
     """Convert a table row to an indicator dict using column mapping."""
     indicator = {}
+    # 2026-08-29: 任意列出现报告方异常标志(提示列值/错位列) → signal_flag=3
+    # (钦州 YMII 行列错位, "↑"落在参考列; 统一按标志词扫描兜底)
+    for cell in row:
+        if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\\uparrow|\\downarrow)$", cell.strip()):
+            indicator["signal_flag"] = 3
+            break
     for i, cell in enumerate(row):
         key = col_map.get(i)
         if key is None:
@@ -206,7 +261,19 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
         elif key == "result":
             indicator["result"] = cell
         elif key == "unit":
-            indicator["unit"] = cell
+            cell = cell.strip()
+            # 2026-08-26: 无单位行(体重指数等)参考范围可能被 VLM 对齐到单位列
+            if re.search(r"\d[\d.]*\s*[~\-—～到至]\s*[\d.]+", cell) or re.match(r"[<>＜＞~～]\s*[\d.]+", cell):
+                lo, hi = _parse_ref_range(cell)
+                indicator["ref_low"] = lo
+                indicator["ref_high"] = hi
+            else:
+                indicator["unit"] = cell
+        elif key == "flag":
+            # 2026-08-29: 提示/标志列 → 报告方异常标志(↑/↓/偏高/H/L/阳性/LaTeX \uparrow) → signal_flag=3
+            cell = cell.strip()
+            if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\\uparrow|\\downarrow)$", cell):
+                indicator["signal_flag"] = 3
         elif key == "ref_low":
             indicator["ref_low"] = cell or None
         elif key == "ref_high":
@@ -226,6 +293,13 @@ def _parse_ref_range(text: str) -> tuple:
     if m:
         return None, m.group(1)
     m = re.match(r"[>＞]\s*([\d.]+)", text)
+    if m:
+        return m.group(1), None
+    # 2026-08-26: 钦州单限格式 "~5.17"(仅有上限) / "5.17~"(仅有下限)
+    m = re.match(r"[~～]\s*([\d.]+)$", text)
+    if m:
+        return None, m.group(1)
+    m = re.match(r"([\d.]+)\s*[~～]$", text)
     if m:
         return m.group(1), None
     return None, None
@@ -265,8 +339,15 @@ class VLMClient:
         all_indicators = []
         personal_info = {}
         raw_texts = []
-        for img in images_base64:
-            result = self.extract_from_image(img)
+        failed_pages = []
+        for i, img in enumerate(images_base64):
+            # 2026-08-26: 单页失败跳过, 不中断整份报告
+            # (PaddleOCR-VL 对个别扫描页会崩且服务不自动恢复, 保底至少拿到能识别的页)
+            try:
+                result = self.extract_from_image(img)
+            except Exception:
+                failed_pages.append(i + 1)
+                continue
             if result.get("personal_info"):
                 for k, v in result["personal_info"].items():
                     if v is not None:
@@ -275,6 +356,8 @@ class VLMClient:
                 all_indicators.extend(result["indicators"])
             if result.get("raw_text"):
                 raw_texts.append(result["raw_text"])
+        if failed_pages:
+            logger.warning("VLM extract_from_images failed pages: %s", failed_pages)
         return {"personal_info": personal_info, "indicators": all_indicators,
                 "raw_text": "\n\n".join(raw_texts)}
 
@@ -300,6 +383,10 @@ class VLMClient:
             try:
                 t = self.extract_conclusion(img)
                 if t and t.upper() != "NONE" and len(t) > 10:
+                    # 2026-08-29: 结论输出可能混入 HTML 表格/图片标签, 剥除(仅结论路径)
+                    t = re.sub(r"<table.*?</table>", "", t, flags=re.DOTALL)
+                    t = re.sub(r"<[^>]+>", "", t)
+                    t = re.sub(r"\n{2,}", "\n", t)
                     texts.append(t)
             except Exception:
                 pass
