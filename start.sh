@@ -25,6 +25,15 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PATH="$VENV:$PATH"
 
 export LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+# 批量处理 worker 并发(每类进程数;默认 parse=2 / interp=3 / extract=1,可环境变量覆盖)
+export WORKER_PARSE="${WORKER_PARSE:-2}"
+export WORKER_INTERP="${WORKER_INTERP:-3}"
+export WORKER_EXTRACT="${WORKER_EXTRACT:-1}"
+# 本 checkout 唯一标记:拼进 worker cmdline,保证 pgrep/pkill 只命中本目录起的 worker,
+# 不误杀其它 checkout(如 /home/wjyy2/hospitalKnowledgeBase)隔离运行的旧 worker。
+export WORKER_TAG="$BACKEND_DIR"
+
 mkdir -p /data/logs
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -49,17 +58,33 @@ PIDS=()
 cleanup() {
   log "Stopping all services..."
   for pidfile in /tmp/start-sh-*.pid; do
-    [[ -f "$pidfile" ]] && kill "$(cat $pidfile)" 2>/dev/null || true
-    rm -f "$pidfile"
+    [[ -f "$pidfile" ]] || continue
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    # 仅 worker pidfile 需校验 cmdline 带本 checkout 的 WORKER_TAG:
+    # 其它 checkout(如 /home/wjyy2)同前缀的旧 pidfile 不应被本 start.sh 误杀。
+    case "$pidfile" in
+      */start-sh-worker-*.pid)
+        if [[ -n "$pid" ]] && ps -p "$pid" -o args= 2>/dev/null | grep -q "# $WORKER_TAG"; then
+          kill "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+        ;;
+      *)
+        if [[ -n "$pid" ]]; then
+          kill "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+        ;;
+    esac
   done
   pkill -f "vllm serve /data/models/MedGo" 2>/dev/null || true
   pkill -f "vllm serve /data/models/bge-m3" 2>/dev/null || true
   pkill -f "paddle_ocr_service.main:app" 2>/dev/null || true
   pkill -f "reranker_service.main:app" 2>/dev/null || true
   pkill -f "uvicorn app.main:app" 2>/dev/null || true
-  pkill -f "app.modules.report.worker" 2>/dev/null || true
-  pkill -f "app.modules.interpretation.worker" 2>/dev/null || true
-  pkill -f "app.modules.report.extract_worker" 2>/dev/null || true
+  pkill -f "from app.modules.report.worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
+  pkill -f "from app.modules.interpretation.worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
+  pkill -f "from app.modules.report.extract_worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
   log "Done. Docker 中间件保持运行（如需停止：cd $INFRA_DIR && docker compose down）"
   exit 0
 }
@@ -287,39 +312,28 @@ else
   done
 fi
 
-# ── 7. RabbitMQ Workers ─────────────────────────────────────────
-if pgrep -f "app.modules.report.worker" >/dev/null 2>&1; then
-  log "报告解析 Worker 已运行"
-else
-  log "启动报告解析 Worker..."
-  cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.report.worker import start_worker; start_worker()" > /data/logs/worker-parsing.stdout.log 2>&1 &
-  echo $! > /tmp/start-sh-worker-parsing.pid
-  cd "$ROOT_DIR"
-  log "  报告解析 Worker 已启动 (log: /data/logs/worker-parsing.stdout.log)"
-fi
+# 确保某类 worker 起够 N 个(不足则补足;带 WORKER_TAG 标记精确匹配本 checkout)
+ensure_workers() {
+  local module="$1" label="$2" want="$3" lname="$4" have i
+  have=$(pgrep -f "from app.modules.$module import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null | wc -l || true)
+  have=${have:-0}
+  log "  $label:目标 $want,当前 $have"
+  i=$((have + 1))
+  while [ "$i" -le "$want" ]; do
+    cd "$BACKEND_DIR"
+    nohup $VENV/python -u -c "from app.modules.$module import start_worker; start_worker() # $WORKER_TAG" \
+      > "/data/logs/$lname.$i.stdout.log" 2>&1 &
+    echo $! > "/tmp/start-sh-$lname.$i.pid"
+    cd "$ROOT_DIR"
+    log "  $label Worker[$i] 已启动 (pid $!, log: /data/logs/$lname.$i.stdout.log)"
+    i=$((i + 1))
+  done
+}
 
-if pgrep -f "app.modules.interpretation.worker" >/dev/null 2>&1; then
-  log "解读 Worker 已运行"
-else
-  log "启动解读 Worker..."
-  cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.interpretation.worker import start_worker; start_worker()" > /data/logs/worker-interpretation.stdout.log 2>&1 &
-  echo $! > /tmp/start-sh-worker-interpretation.pid
-  cd "$ROOT_DIR"
-  log "  解读 Worker 已启动 (log: /data/logs/worker-interpretation.stdout.log)"
-fi
-
-if pgrep -f "app.modules.report.extract_worker" >/dev/null 2>&1; then
-  log "批量解压 Worker 已运行"
-else
-  log "启动批量解压 Worker..."
-  cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.report.extract_worker import start_worker; start_worker()" > /data/logs/worker-extract.stdout.log 2>&1 &
-  echo $! > /tmp/start-sh-worker-extract.pid
-  cd "$ROOT_DIR"
-  log "  批量解压 Worker 已启动 (log: /data/logs/worker-extract.stdout.log)"
-fi
+# ── 7. RabbitMQ Workers(每类按 WORKER_* 并发补足)────────────
+ensure_workers report.worker            "报告解析"  "$WORKER_PARSE"    worker-parsing
+ensure_workers interpretation.worker    "解读"      "$WORKER_INTERP"   worker-interpretation
+ensure_workers report.extract_worker    "批量解压"  "$WORKER_EXTRACT"   worker-extract
 
 # ── 8. 创建测试用户（如不存在）──────────────────────────────────
 log "确保测试用户存在..."

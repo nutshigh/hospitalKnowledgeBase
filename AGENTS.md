@@ -251,6 +251,16 @@ per spec 决策:workers (report/worker.py / interpretation/worker.py / extract_w
 
 ---
 
+## 批量并行 worker(2026-09-03 起)
+
+**事实**: `start.sh` 每类 worker 起多个进程,默认并发 parse=2 / interp=3 / extract=1,可经 `WORKER_PARSE` / `WORKER_INTERP` / `WORKER_EXTRACT` 环境变量覆盖(`ensure_workers()` 按 pgrep 现有数补足差额)。
+
+- 每个 worker 的 stdout 日志**带序号后缀**:`/data/logs/worker-parsing.<i>.stdout.log`(worker-interpretation.<i> / worker-extract.<i> 同理)。**旧单文件日志 `worker-parsing.stdout.log` 重启后不再出现**,新名字一律带序号。
+- 每个 worker 的 pidfile 同样带序号:`/tmp/start-sh-worker-<name>.<i>.pid`。
+- worker cmdline 拼 `# $BACKEND_DIR`(WORKER_TAG)标记,`pgrep`/`pkill`/`cleanup()` 只精确匹配**本 checkout** 起的 worker,不误杀其它 checkout(如 `/home/wjyy2/hospitalKnowledgeBase`)。
+
+---
+
 ## RabbitMQ vhost 统一到 `/`(2026-08-30)
 
 **事实**: `backend/app/config.py` 有 `RABBITMQ_VHOST: str = "/"` 字段,`app/core/rabbitmq.py` 的 `_connect()` 通过 `virtual_host=settings.RABBITMQ_VHOST` 连接。`backend/.env` 显式 `RABBITMQ_VHOST=/`。

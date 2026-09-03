@@ -193,12 +193,24 @@ class BatchService:
             _log.warning("increment_progress batch_not_found batch=%s fid=%s field=%s",
                           batch_id, file_id, field)
             return
-        before = getattr(b, field) or 0
-        setattr(b, field, before + 1)
-        b.updated_at = datetime.now(timezone.utc)
+        # 批次计数走 SQL 层自增(同一事务内,先锁 file 行、再锁 batch 行,顺序固定无死锁;
+        # 并发 worker 收尾同批次不同文件时由 DB 行锁串行化,不丢计数)。
+        col = BatchImport.__table__.c[field]
+        db.execute(
+            BatchImport.__table__.update()
+            .where(BatchImport.__table__.c.id == batch_id)
+            .values({col: col + 1,
+                     BatchImport.__table__.c.updated_at: datetime.now(timezone.utc)})
+        )
+        b = db.query(BatchImport).get(batch_id)
         db.commit()
-        _log.info("increment_progress batch=%s fid=%s field=%s stage=%s count=%d->%d",
-                   batch_id, file_id, field, stage or "-", before, before + 1)
+        if b is None:
+            _log.warning("increment_progress batch_not_found batch=%s fid=%s field=%s",
+                          batch_id, file_id, field)
+            return
+        db.refresh(b)
+        _log.info("increment_progress batch=%s fid=%s field=%s stage=%s count=%s",
+                   batch_id, file_id, field, stage or "-", getattr(b, field) or 0)
         BatchService._maybe_advance_status(db, b)
 
     @staticmethod

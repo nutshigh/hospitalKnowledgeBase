@@ -333,3 +333,64 @@ def test_retry_failed_skips_hospital_not_found(db):
         assert b.failed == 1
     finally:
         patcher.stop()
+
+
+def test_increment_counter_uses_db_side_self_increment(db):
+    """批次计数必须是 SQL 层自增(SET col = col + 1),而不是 ORM 先读后写。
+
+    多 worker 并发收尾同批次不同文件时,读-改-写会丢计数使批次卡 interpreting;
+    此断言防止未来回退成 ORM setattr 写法。
+    """
+    import re
+    from sqlalchemy import event
+
+    db.add(BatchImport(id="b1", hospital_id="H", user_id="u",
+                       filename="x", archive_path="/x"))
+    db.add(BatchImportFile(id="f1", batch_id="b1", file_path="a",
+                           file_size=1, crc32="abc12345"))
+    db.commit()
+
+    stmts = []
+    engine = db.get_bind()
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        stmts.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        BatchService.increment_progress(db, "b1", "f1", "parsed_ok")
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+    batch_updates = [s for s in stmts
+                     if "batch_import" in s.lower() and "set" in s.lower()]
+    assert batch_updates, "expected at least one UPDATE on batch_import"
+    assert re.search(r"parsed_ok\s*=\s*\(?\s*(?:batch_import\.)?parsed_ok\s*\+\s*\?\s*\)?",
+                     batch_updates[-1]), f"expected self-increment, got: {batch_updates[-1]}"
+
+
+def test_increment_two_files_in_separate_sessions_no_lost_update(db):
+    """两个文件分属不同会话各 increment 一次,计数应为 2(不被后者覆盖)。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = db.get_bind()
+    Session = sessionmaker(bind=engine)
+
+    db.add(BatchImport(id="b1", hospital_id="H", user_id="u",
+                       filename="x", archive_path="/x"))
+    db.add(BatchImportFile(id="f1", batch_id="b1", file_path="a",
+                           file_size=1, crc32="abc12345"))
+    db.add(BatchImportFile(id="f2", batch_id="b1", file_path="b",
+                           file_size=1, crc32="def45678"))
+    db.commit()
+
+    s1 = Session(); s2 = Session()
+    try:
+        BatchService.increment_progress(s1, "b1", "f1", "interp_ok")
+        BatchService.increment_progress(s2, "b1", "f2", "interp_ok")
+    finally:
+        s1.close(); s2.close()
+
+    db.expire_all()
+    assert db.query(BatchImport).get("b1").interp_ok == 2
