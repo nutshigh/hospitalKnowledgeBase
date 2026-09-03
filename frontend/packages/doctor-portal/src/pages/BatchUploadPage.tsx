@@ -125,8 +125,8 @@ export default function BatchUploadPage() {
         )}
 
         {active.map((b) => {
-          const done = (b.parsed_ok ?? 0) + (b.interp_ok ?? 0) + (b.failed ?? 0);
-          const pct = b.total ? Math.round((done / b.total) * 100) : 0;
+          const done = (b.interp_ok ?? 0) + (b.failed ?? 0);
+          const pct = b.total ? Math.min(100, Math.round((done / b.total) * 100)) : 0;
           return (
             <div key={b.id} style={{
               border: '1px solid var(--color-border)', borderRadius: 8,
