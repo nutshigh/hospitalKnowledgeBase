@@ -20,6 +20,46 @@ def test_T13_batch_route_registered_in_main_app():
     assert "/api/v1/reports/batches" in paths
 
 
+def test_T13_batch_list_route_not_shadowed_by_report_detail(_admin_user, tmp_path):
+    """GET /api/v1/reports/batches 必须命中 batch_router,而不是被 report_router 的
+    GET /{report_id}(int 参数)影子匹配成 422(batch_router 需先于 report_router include)。"""
+    import app.main as main_mod
+
+    app = main_mod.app
+    app.dependency_overrides[get_current_user] = lambda: _admin_user
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.models.base import Base
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    def _fake_get_hospital_db(hospital_id):
+        s = SessionLocal()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    with patch("app.modules.report.batch_router.get_hospital_db",
+               side_effect=_fake_get_hospital_db), \
+         patch("app.modules.report.batch_router.rabbitmq"):
+        client = TestClient(app)
+        r = client.get("/api/v1/reports/batches")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["items"] == [] and body["total"] == 0
+
+    app.dependency_overrides.pop(get_current_user, None)
+
+
 def test_T13_batch_post_returns_200(_admin_user, tmp_path):
     """Round-trip through app.main: POST /api/v1/reports/batches — no startup events."""
     import app.main as main_mod
