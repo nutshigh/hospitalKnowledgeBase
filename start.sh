@@ -7,7 +7,8 @@ set -euo pipefail
 #   模型服务（MedGo/BGE-M3/Reranker/PaddleOCR-VL）
 #   后端 API + RabbitMQ Workers
 # 用法：
-#   bash start.sh              # 启动全部
+#   bash start.sh              # 启动全部后返回 shell(服务后台常驻)
+#   bash start.sh --stop       # 停止应用层全部服务(Docker 中间件保持运行)
 #   bash start.sh --no-models  # 跳过模型服务（仅中间件+后端）
 #   bash start.sh --no-ocr     # 跳过 PaddleOCR
 #   bash start.sh --no-medgo   # 跳过 MedGo
@@ -43,8 +44,10 @@ err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # 解析参数
 SKIP_MODELS=0; SKIP_OCR=0; SKIP_MEDGO=0; SKIP_EMBED=0; SKIP_RERANKER=0
+STOP=0
 for arg in "$@"; do
   case "$arg" in
+    --stop)        STOP=1 ;;
     --no-models)   SKIP_MODELS=1; SKIP_OCR=1; SKIP_MEDGO=1; SKIP_EMBED=1; SKIP_RERANKER=1 ;;
     --no-ocr)      SKIP_OCR=1 ;;
     --no-medgo)    SKIP_MEDGO=1 ;;
@@ -88,7 +91,11 @@ cleanup() {
   log "Done. Docker 中间件保持运行（如需停止：cd $INFRA_DIR && docker compose down）"
   exit 0
 }
-trap cleanup SIGINT SIGTERM
+
+# --stop:显式停服(cleanup 内部含 exit 0;Docker 中间件保持运行)
+if [[ "$STOP" == "1" ]]; then
+  cleanup
+fi
 
 # ── 1. Docker 中间件 ────────────────────────────────────────────
 log "Starting Docker middleware (MySQL/RabbitMQ/Milvus/Neo4j)..."
@@ -364,8 +371,6 @@ echo ""
 echo "  测试用户: admin1/123456 (管理员), doctor1/123456 (医生), user1/123456 (用户)"
 echo ""
 echo "  启动前端:  bash start_front.sh"
-echo "  停止全部:  Ctrl+C  (Docker 中间件需手动 docker compose down)"
+echo "  停止服务:  bash start.sh --stop   (Docker 中间件保持运行)"
 echo "=============================================="
 echo ""
-
-wait

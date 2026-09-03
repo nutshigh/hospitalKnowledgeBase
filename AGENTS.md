@@ -261,6 +261,18 @@ per spec 决策:workers (report/worker.py / interpretation/worker.py / extract_w
 
 ---
 
+## start.sh 启动模式(2026-09-03 起)
+
+**事实**: `start.sh` 已从「前台阻塞 + Ctrl+C 全杀」改为「**启动即返回 shell + 独立 `--stop`**」。
+
+- `bash start.sh` = 启动 Docker 中间件 + 模型 + 后端 + workers,打印完成横幅后**返回 shell**(服务 nohup 后台常驻)。不再有末尾 `wait`,不再前台阻塞。
+- `bash start.sh --stop` = 停应用层全部服务(模型/后端/workers,worker 按 `WORKER_TAG` 只停本 checkout);**Docker 中间件保持运行**(需停: `cd infra && docker compose down`)。
+- 不再 `trap cleanup SIGINT SIGTERM`:启动途中 Ctrl+C 只中断脚本本身,nohup 子进程不受影响;停服一律用 `--stop`。
+- `start_front.sh` 同构:`bash start_front.sh` 启动返回、`bash start_front.sh --stop` 停前端三门户。
+- 模型/后端/worker 的启动逻辑与 GPU 分配未变,见上文各节。
+
+---
+
 ## RabbitMQ vhost 统一到 `/`(2026-08-30)
 
 **事实**: `backend/app/config.py` 有 `RABBITMQ_VHOST: str = "/"` 字段,`app/core/rabbitmq.py` 的 `_connect()` 通过 `virtual_host=settings.RABBITMQ_VHOST` 连接。`backend/.env` 显式 `RABBITMQ_VHOST=/`。

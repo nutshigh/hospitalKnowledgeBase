@@ -4,6 +4,7 @@ MedGo 基于 Qwen3-32B 微调，即使 chat_template 不开启 thinking，模型
 产出空的 ``...`` 包裹。这些标签不是合法 Markdown，前端会渲染成空白或
 多余换行。本模块提供流式与非流式两种剥离方式。
 """
+import json
 import re
 
 # 匹配完整的 <think>...</think> 块（含内容，DOTALL 跨行）
@@ -14,11 +15,27 @@ _THINK_OPEN = re.compile(r"<think>")
 _THINK_CLOSE = re.compile(r"</think>")
 
 
-def strip_think_tags(text: str) -> str:
+def _as_text(value):
+    """把模型可能返回的非字符串字段统一成文本。
+
+    MedGo 结构化输出偶尔不守 schema，把本应为 str 的字段输出成 list/dict/数字。
+    这里不做静默丢弃：数组/对象用 JSON 序列化保留内容，标量直接 str()。
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def strip_think_tags(text) -> str:
     """剥离完整 think 块与孤立 think 标签，并清理多余前导空白。
 
     用于非流式完整文本（如最终回复、结构化输出前的纯文本字段）。
     """
+    if text is None:
+        return None
+    text = _as_text(text)
     if not text:
         return text
     text = _THINK_BLOCK.sub("", text)
