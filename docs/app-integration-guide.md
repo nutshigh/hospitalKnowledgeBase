@@ -158,7 +158,7 @@ Query：`page`(≥1)、`page_size`(1–100)。
 |------|------|------|
 | id | int | 报告 ID |
 | task_id | int\|null | 解析任务 ID |
-| name | string\|null | 姓名 |
+| name | string\|null | 展示姓名(PDF 解析出的真实姓名;为空回退归属锚定名) |
 | gender | string\|null | 性别 |
 | age | int\|null | 年龄 |
 | report_date | date\|null | 报告日期 |

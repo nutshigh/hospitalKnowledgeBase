@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -22,21 +23,40 @@ STATUS_STABLE_PCT = 5
 
 
 def _auto_select_baseline(db: Session, user_id: str, name: str, report_id: int) -> Optional[ReportInfo]:
-    """选 report_date 早于本报告且最接近的那一份,fallback created_at。"""
+    """选基线报告。优先取 report_date 早于当前报告且最接近的一份;fallback created_at。
+
+    2026-09-02 起允许选任意报告:当前报告为该用户最早一份(无更早 report_date)时,
+    不再返回 None(否则前端对比卡片整卡隐藏、连下拉框都看不到),而是退化为该用户
+    report_date 与该报告日期最接近的另一份报告作默认基线。全部无日期则取最近创建。
+    """
     current = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
     if not current:
         return None
-    q = db.query(ReportInfo).filter(
+    others = db.query(ReportInfo).filter(
         ReportInfo.user_id == user_id,
         ReportInfo.name == name,
         ReportInfo.id != report_id,
-    )
-    if current.report_date:
-        q = q.filter(ReportInfo.report_date < current.report_date)
-        q = q.order_by(ReportInfo.report_date.desc())
-    else:
-        q = q.order_by(ReportInfo.created_at.desc())
-    return q.first()
+    ).all()
+    if not others:
+        return None
+
+    def _ct(o: ReportInfo):
+        return o.created_at or datetime.min
+
+    if current.report_date is None:
+        return max(others, key=_ct)
+
+    dated = [o for o in others if o.report_date]
+    if not dated:
+        return max(others, key=_ct)
+
+    earlier = [o for o in dated if o.report_date < current.report_date]
+    if earlier:
+        return max(earlier, key=lambda o: (o.report_date, _ct(o)))
+
+    min_days = min(abs((o.report_date - current.report_date).days) for o in dated)
+    nearest = [o for o in dated if abs((o.report_date - current.report_date).days) == min_days]
+    return max(nearest, key=_ct)
 
 
 def get_overview(db: Session, user_id: str, name: str) -> dict:

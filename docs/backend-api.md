@@ -245,6 +245,7 @@ Query 参数:
 Query 参数:`page`(≥1,默认 1)、`page_size`(1–100,默认 20)。
 
 > 角色为 `user` 时仅返回本人报告;`doctor`/`admin` 返回全院报告。
+> 列表 items 的 `name` = 展示姓名(解析真实姓名,见 §6.4);归属过滤按 `user_id == 后六位 AND name == 登录锚定名` 双条件,展示与归属解耦。
 
 响应:`{ items, total, page, page_size }`。
 
@@ -255,7 +256,7 @@ Query 参数:`page`(≥1,默认 1)、`page_size`(1–100,默认 20)。
 |------|------|------|
 | id | int | 报告 ID |
 | task_id | int\|null | 关联任务 |
-| name | string\|null | 姓名 |
+| name | string\|null | 展示姓名(优先 `parsed_name`——PDF 解析出的真实姓名;为空时回退归属锚定名) |
 | gender | string\|null | 性别 |
 | age | int\|null | 年龄 |
 | report_date | date\|null | 报告日期 |

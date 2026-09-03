@@ -309,3 +309,75 @@ def test_get_ai_summary_raises_validation_when_baseline_not_owned(db):
 
     with pytest.raises(ValidationException):
         get_ai_summary(db, user_id="123456", name="张三", report_id=1, baseline_id=99)
+
+
+# ============================================================
+# _auto_select_baseline 退化策略(2026-09-02):
+# 当前报告为该用户最早一份(无更早 report_date)时,不再返回 None 导致对比卡片整体隐藏;
+# 改为退化为该用户 report_date 日期最接近的另一份报告,使“最早一份”也能进入对比 UI。
+# ============================================================
+
+
+def test_auto_baseline_falls_back_to_later_report_when_current_is_earliest(db):
+    """当前是最早一份(report 9 场景)→ 基线退化为日期最接近的另一份(允许选任意报告)。"""
+    from datetime import datetime
+    from app.modules.user_profile.service import _auto_select_baseline
+
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 6, 20),
+                      created_at=datetime(2026, 9, 2, 22, 23)))
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2025, 6, 24),
+                      created_at=datetime(2026, 9, 2, 13, 22)))
+    db.add(ReportInfo(id=3, user_id="123456", name="张三", report_date=date(2026, 8, 30),
+                      created_at=datetime(2026, 9, 2, 21, 38)))
+    db.commit()
+
+    baseline = _auto_select_baseline(db, "123456", "张三", report_id=1)
+    assert baseline is not None
+    assert baseline.id == 2  # |日期差| 最小(2025-06-24),不是日期最晚的 3
+
+
+def test_auto_baseline_prefers_closest_earlier_report(db):
+    """有更早报告时行为不变:取严格早于当前、日期最接近的那份。"""
+    from app.modules.user_profile.service import _auto_select_baseline
+
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 6, 20)))
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2025, 11, 2)))
+    db.add(ReportInfo(id=3, user_id="123456", name="张三", report_date=date(2026, 6, 15)))
+    db.commit()
+
+    baseline = _auto_select_baseline(db, "123456", "张三", report_id=3)
+    assert baseline is not None
+    assert baseline.id == 2  # 早于 2026-06-15 且最近(2025-11-02 > 2025-06-20)
+
+
+def test_auto_baseline_none_when_only_one_report(db):
+    """用户只有 1 份报告时仍返回 None(没有可比的其它报告,卡片继续隐藏)。"""
+    from app.modules.user_profile.service import _auto_select_baseline
+
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 6, 20)))
+    db.commit()
+
+    assert _auto_select_baseline(db, "123456", "张三", report_id=1) is None
+
+
+def test_get_comparison_earliest_report_returns_baseline_and_diff(db):
+    """get_comparison 对“最早一份”报告不再返回 baseline:None,而是给出基线与指标差异。"""
+    from datetime import datetime
+    from app.modules.user_profile.service import get_comparison
+
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 6, 20),
+                      created_at=datetime(2026, 9, 2, 22, 23)))
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2025, 6, 24),
+                      created_at=datetime(2026, 9, 2, 13, 22)))
+    db.add(ReportIndicator(report_id=1, item_name="血糖", item_name_standard="空腹血糖",
+                           result_value="7.2", unit="mmol/L"))
+    db.add(ReportIndicator(report_id=2, item_name="血糖", item_name_standard="空腹血糖",
+                           result_value="6.8", unit="mmol/L"))
+    db.commit()
+
+    result = get_comparison(db, user_id="123456", name="张三", report_id=1, baseline_id=None)
+    assert result["baseline"] is not None
+    assert result["baseline"]["report_id"] == 2
+    assert len(result["indicators"]) == 1
+    assert result["indicators"][0]["current_value"] == "7.2"
+    assert result["indicators"][0]["baseline_value"] == "6.8"

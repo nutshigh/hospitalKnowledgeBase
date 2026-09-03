@@ -68,7 +68,7 @@ def upload_report(
         db=db, hospital_id=current_user.hospital_id,
         user_id=current_user.id_card_suffix if current_user.role == "user"
         else str(current_user.user_id),
-        name=None,
+        name=current_user.name if current_user.role == "user" else None,
         file_path=file_path, filename=file.filename, file_type=file_type,
         file_size=size,
     )
@@ -118,9 +118,21 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
     if not report:
         raise NotFoundException(detail="Report not found")
     indicators = service.get_report_indicators(db, report_id)
+    # 展示名:与列表一致——解析出真实姓名优先;解析中(未完成)不泄露账号锚定名;
+    # 已完成但未抽出姓名→回退归属锚定名。
+    task_status = None
+    if report.task_id:
+        task = service.get_task_status(db, report.task_id)
+        task_status = task.status if task else None
+    if report.parsed_name:
+        display_name = report.parsed_name
+    elif task_status in ("queued", "parsing"):
+        display_name = None
+    else:
+        display_name = report.name
     return {
         "id": report.id, "task_id": report.task_id,
-        "name": report.name, "gender": report.gender, "age": report.age,
+        "name": display_name, "gender": report.gender, "age": report.age,
         "report_date": report.report_date, "check_type": report.check_type,
         "unit_name": report.unit_name,
         "indicators": [

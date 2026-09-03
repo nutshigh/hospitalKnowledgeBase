@@ -197,7 +197,8 @@ def test_list_reports_filters_by_name_when_user_id_set(db):
         ("123456", "张三"), ("123456", "张三"), ("123456", "李四"),
     ]):
         t = ReportTask(id=1000 + i, user_id=uid, original_file_path=f"/x/{i}.pdf",
-                       original_filename=f"{i}.pdf", file_type="pdf", file_size=1)
+                       original_filename=f"{i}.pdf", file_type="pdf", file_size=1,
+                       status="completed")
         db.add(t)
         db.flush()
         db.add(ReportInfo(id=2000 + i, task_id=t.id, user_id=uid, name=nm,
@@ -221,3 +222,44 @@ def test_list_reports_filters_by_name_when_user_id_set(db):
     # 未命中 user_id 时不按 name 过滤(保持向后兼容)
     items, total = report_service.list_reports(db, "H001", user_id=None, name="张三")
     assert total == 3
+
+
+def _override_user(app, **kw):
+    """覆盖 get_current_user 为指定 user。"""
+    defaults = dict(user_id=1, role="user", hospital_id="H001",
+                    id_card_suffix="123456")
+    defaults.update(kw)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(**defaults)
+
+
+def test_upload_for_user_uses_login_name_anchor(env):
+    """user 单份上传:create_task 必须带 name=登录账号锚定名(而非 None)。
+
+    双锚定列表按 user_id==后六位 AND name==登录名 过滤;若 name=None 由 PDF 解析
+    回填真实姓名(如"步新宇"),会与登录名不一致导致上传者看不到自己的报告。
+    """
+    _override_user(env["app"], name="测试1", id_card_suffix="100001")
+    with patch("app.modules.report.router.service.create_task",
+               return_value=_mock_task()) as mock_ct:
+        r = env["client"].post(
+            "/api/v1/reports/upload",
+            files={"file": ("test.pdf", io.BytesIO(b"X" * 1024), "application/pdf")},
+        )
+    assert r.status_code == 200, r.text
+    _, kwargs = mock_ct.call_args
+    assert kwargs["user_id"] == "100001"
+    assert kwargs["name"] == "测试1"
+
+
+def test_upload_for_user_without_name_passes_none(env):
+    """user 无登录姓名(存量残余)时 name 仍传 None,不因 name 缺失 500。"""
+    _override_user(env["app"], name=None, id_card_suffix="123456")
+    with patch("app.modules.report.router.service.create_task",
+               return_value=_mock_task()) as mock_ct:
+        r = env["client"].post(
+            "/api/v1/reports/upload",
+            files={"file": ("t.pdf", io.BytesIO(b"X" * 1024), "application/pdf")},
+        )
+    assert r.status_code == 200, r.text
+    _, kwargs = mock_ct.call_args
+    assert kwargs["name"] is None

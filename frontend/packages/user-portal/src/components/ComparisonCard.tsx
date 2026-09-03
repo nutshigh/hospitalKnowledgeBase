@@ -91,17 +91,26 @@ export default function ComparisonCard({ reportId, baselineId: initialBaseline }
   if (loading) return <div style={{ textAlign: 'center', padding: 16 }}><Spin /></div>;
   if (!data || !data.baseline) return null;
 
-  const histOptions = history
-    .filter(h => h.id !== reportId && (!data.baseline || h.id !== data.baseline.report_id))
-    .map(h => ({
-      value: h.id,
-      label: h.report_date ? `${h.report_date}${h.name ? ' · ' + h.name : ''}` : `报告 ${h.id}`,
-    }));
+  const others = history.filter(h => h.id !== reportId);
+  const _time = (h: HistoryItem) => (h.created_at || '').replace('T', ' ').slice(0, 16);
+  const _key = (h: HistoryItem) => `${h.name ?? ''}\u0001${_time(h)}`;
+  const freq = new Map<string, number>();
+  others.forEach(h => freq.set(_key(h), (freq.get(_key(h)) ?? 0) + 1));
+  // 标签 = 姓名 + 上传时间(created_at 恒有值,不像 report_date 会缺,避免"报告 3"这类认不出人的项);
+  // 同姓名同时刻(批量同秒上传)才追加 #id 去歧义。
+  const optLabel = (h: HistoryItem) => {
+    const t = _time(h);
+    const dup = (freq.get(_key(h)) ?? 0) > 1 ? ` #${h.id}` : '';
+    const head = h.name ? h.name : (h.report_date || `报告 ${h.id}`);
+    return t ? `${head} · ${t}${dup}` : `${head}${dup}`;
+  };
+  const histOptions = others
+    .filter(h => h.id !== data.baseline!.report_id)
+    .map(h => ({ value: h.id, label: optLabel(h) }));
+  const baseHist = data.baseline ? others.find(h => h.id === data.baseline!.report_id) : undefined;
   const baseOpt = data.baseline ? [{
-    value: data.baseline.report_id,
-    label: data.baseline.report_date
-      ? `${data.baseline.report_date}${data.baseline.overall_level ? ' · ' + data.baseline.overall_level : ''}`
-      : `报告 ${data.baseline.report_id}`,
+    value: data.baseline!.report_id,
+    label: baseHist ? optLabel(baseHist) : `报告 ${data.baseline!.report_id}`,
   }] : [];
   const allOptions = [...baseOpt, ...histOptions];
 
@@ -114,7 +123,7 @@ export default function ComparisonCard({ reportId, baselineId: initialBaseline }
       marginBottom: 20,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>📊 与上次报告对比</span>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>📊 与历史报告对比</span>
         <Select
           size="small" value={currentBaseline} style={{ width: 180 }}
           onChange={switchBaseline} options={allOptions} loading={summaryLoading}

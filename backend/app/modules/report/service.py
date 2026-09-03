@@ -111,8 +111,11 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         if not report:
             report = ReportInfo(task_id=task.id, user_id=task.user_id)
             db.add(report)
+        # 归属锚定名:name 仅在空时回填(单份上传已写入登录账号锚定名,不覆盖)
         if not report.name:
             report.name = personal_info.get("name")
+        # 展示名:parsed_name 始终取 PDF 解析出的真实姓名
+        report.parsed_name = personal_info.get("name")
         report.gender = personal_info.get("gender")
         report.age = personal_info.get("age")
         report.report_date = personal_info.get("check_date")
@@ -304,10 +307,18 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[str] = None,
     for r in items:
         task = tasks.get(r.task_id)
         interp = interps.get(r.id)
+        # 展示名:解析出真实姓名优先;解析中(未完成)不泄露账号锚定名→空;
+        # 已完成但未抽出姓名(旧数据/无姓名 PDF)→回退归属锚定名。
+        if r.parsed_name:
+            display_name = r.parsed_name
+        elif task and task.status in ("queued", "parsing"):
+            display_name = None
+        else:
+            display_name = r.name
         results.append({
             "id": r.id,
             "task_id": r.task_id,
-            "name": r.name,
+            "name": display_name,
             "gender": r.gender,
             "age": r.age,
             "report_date": r.report_date,

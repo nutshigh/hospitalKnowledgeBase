@@ -28,6 +28,7 @@ class ReportInfo(Base):
     task_id = Column(BigInteger, ForeignKey("report_task.id"), nullable=True)
     user_id = Column(String(16), nullable=False)
     name = Column(String(50), nullable=True)
+    parsed_name = Column(String(50), nullable=True)
     gender = Column(String(5), nullable=True)
     age = Column(Integer, nullable=True)
     report_date = Column(Date, nullable=True)

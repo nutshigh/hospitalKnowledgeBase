@@ -135,6 +135,7 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 
 - 命名:`<姓名>_<身份证后六位>.<ext>`,后六位 = 5 位数字 + 末位数字或 X(校验位)。
 - 用户锚定 = **姓名 + 后六位(双锚定)**:`report_info.name` / `chat_session.name` 存 `name`(姓名,VARCHAR(50)),各表存 `user_id`(后六位字符串,VARCHAR(16));`report_task` 只有 `user_id`(无 `name` 列)。报告列表/档案/chat 一律按 **`user_id == 后六位 AND name == 姓名`** 双条件匹配。
+- **展示名与归属分离(2026-09-02)**:`report_info` 另有 `parsed_name` 列,存 PDF 解析出的**报告真实姓名**(仅展示)。`name` 存归属锚定名(批量=文件名姓名段;单份上传=登录账号锚定名 `current_user.name`,见 `report_router.upload_report`)。列表/详情的 `name` 字段返回 `parsed_name or name`(展示真实姓名),归属过滤仍按 `name` 双锚定不动。加字段/迁移需对**每个** tenant 库执行:`ALTER TABLE report_info ADD COLUMN parsed_name VARCHAR(50) NULL`(2026-09-02 已在 hospital_H001-H004/hospital_1 执行;新建 tenant 需在 DDL/存储过程补齐)。
 - `platform_user.id_card_suffix` / `platform_user.name` 存登录用户双锚定,登录后经 JWT 带出(CurrentUser 有 `id_card_suffix` / `name` 字段)。
 - 注册唯一性:`platform_user` 上 (hospital_id, name, id_card_suffix) 三元组唯一,`/auth/register` 对重复组合返回 400。
 - `chat_session.name` 列:create_session 时落 `name`,list/get/delete/update 会话按双条件过滤。
@@ -171,6 +172,20 @@ EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
 - 错误码:key 错误 / resolver 无匹配 → 401;name 空 / 后六位非法 → 400;resolver 宕机 → 503。
 - app_key 用 `secrets.compare_digest` 常量时间比较。
 - 存量 `platform_user` 必须先跑 `003_user_id_suffix.sql` 迁移,否则新列不存在会 500。
+
+---
+
+## 报告对比默认基线退化策略(2026-09-02 起)
+
+**事实**: `backend/app/modules/user_profile/service.py::_auto_select_baseline` 现在**允许选任意其它报告**。
+选择逻辑(该用户锚定 user_id 后六位 + name 内、排除当前报告):
+1. 优先取 `report_date` **严格早于**当前报告且最接近的一份(原行为,保存「与上次报告对比」语义);
+2. 若无更早(当前即该用户最早一份报告,如首页按 `created_at` 倒序把日期最早的报告排在最上)→ **退化**为该用户 `report_date` 与当前报告 `|日期差|` 最小的一份(不再返回 None);
+3. 全部无 `report_date` → 取最近 `created_at` 的另一份;用户仅 1 份报告仍返回 None。
+
+**原因**: 退化前返回 None 会让前端 `frontend/packages/user-portal/src/components/ComparisonCard.tsx`(`if (!data || !data.baseline) return null`)整卡不渲染,用户连「选择历史报告」下拉都看不到。现 UI 标题为「📊 与历史报告对比」;`GET /profile/compare?baseline_id=` 对任意属于该锚定的报告都放行(不限早于当前),AI 小结 `/profile/ai-summary` 同理。
+
+**测试**: `backend/tests/user_profile/test_service.py` 新增 4 条(最早一份→退化到日期最近 / 有更早→仍取更早且最近 / 单份报告→None / `get_comparison` 返回基线)。改回「最早一份无基线」前先看这些测试。
 
 ---
 
