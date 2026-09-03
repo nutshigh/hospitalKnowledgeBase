@@ -12,6 +12,8 @@ export function useBatchTracker(api: ApiClient, onSettled?: (b: BatchSummary) =>
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
   const activeRef = useRef<BatchSummary[]>([]);
   const onSettledRef = useRef(onSettled);
   onSettledRef.current = onSettled;
@@ -29,8 +31,11 @@ export function useBatchTracker(api: ApiClient, onSettled?: (b: BatchSummary) =>
   }, [stop]);
 
   const fetchActive = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       const { data } = await api.get(ACTIVE_QUERY);
+      if (!mountedRef.current) return;
       const items: BatchSummary[] = data.items || [];
       const prev = activeRef.current;
       const nextIds = new Set(items.map((b) => b.id));
@@ -49,24 +54,35 @@ export function useBatchTracker(api: ApiClient, onSettled?: (b: BatchSummary) =>
               return b;
             }
           }));
-          for (const f of finals) onSettledRef.current?.(f);
+          if (mountedRef.current) {
+            for (const f of finals) onSettledRef.current?.(f);
+          }
         })();
       }
       if (items.length > 0) schedule(() => { void fetchActive(); });
     } catch {
-      setError(true);
-      setLoading(false);
-      if (activeRef.current.length > 0) schedule(() => { void fetchActive(); });
+      if (mountedRef.current) {
+        setError(true);
+        setLoading(false);
+        if (activeRef.current.length > 0) schedule(() => { void fetchActive(); });
+      }
+    } finally {
+      inFlightRef.current = false;
     }
   }, [api, schedule]);
 
   const wake = useCallback(() => {
-    schedule(() => { void fetchActive(); });
-  }, [fetchActive, schedule]);
+    stop();
+    void fetchActive();
+  }, [fetchActive, stop]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void fetchActive();
-    return stop;
+    return () => {
+      stop();
+      mountedRef.current = false;
+    };
   }, [fetchActive, stop]);
 
   return { active, loading, error, wake };
