@@ -113,6 +113,10 @@ export default function ReportDetailPage() {
     }).catch(() => {});
   }, [id]);
 
+  useEffect(() => {
+    setOpenModules([]);
+  }, [id]);
+
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
   if (!report) return <Layout title="报告详情"><p>报告不存在</p></Layout>;
 
