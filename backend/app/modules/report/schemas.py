@@ -12,6 +12,7 @@ class ReportIndicatorSchema(BaseModel):
     ref_range_low: Optional[str] = None
     ref_range_high: Optional[str] = None
     category: Optional[str] = None
+    group: Optional[str] = None
 
 
 class ReportInfoSchema(BaseModel):
@@ -49,4 +50,5 @@ class ReportDetailResponse(BaseModel):
     check_type: Optional[str] = None
     unit_name: Optional[str] = None
     indicators: List[ReportIndicatorSchema] = []
+    module_order: List[str] = []
     created_at: datetime
