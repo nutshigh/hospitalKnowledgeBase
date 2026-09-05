@@ -13,6 +13,7 @@ class IndicatorJudgmentSchema(BaseModel):
     ref_range_high: Optional[str] = None
     deviation: Optional[str] = None
     color_level: Optional[str] = None
+    group: Optional[str] = None
 
 
 class InterpretationReportSchema(BaseModel):
@@ -42,6 +43,7 @@ class InterpretationResponse(BaseModel):
     references: List[CitationSchema] = []
     quality_note: Optional[str] = None
     indicators: List[IndicatorJudgmentSchema] = []
+    module_order: List[str] = []
     created_at: datetime
     completed_at: Optional[datetime] = None
 

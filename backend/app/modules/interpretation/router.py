@@ -69,9 +69,11 @@ def get_interpretation(report_id: int, db: Session = Depends(_get_db)):
     if not interp:
         raise NotFoundException(detail="Interpretation not found")
     rows = service.get_judgments_with_indicator_detail(db, interp.id)
+    from app.core.indicator_groups import group_indicators
+    grouped, module_order = group_indicators(rows)
     summaries = parse_summary_text(interp.summary_text)
     references = [CitationSchema(**r).model_dump() for r in (interp.summary_refs or [])]
-    indicators = [IndicatorJudgmentSchema(**r) for r in rows]
+    indicators = [IndicatorJudgmentSchema(**r) for r in grouped]
     return {
         "id": interp.id, "report_id": interp.report_id,
         "overall_level": interp.overall_level,
@@ -82,6 +84,7 @@ def get_interpretation(report_id: int, db: Session = Depends(_get_db)):
         "references": references,
         "quality_note": interp.quality_note,
         "indicators": indicators,
+        "module_order": module_order,
         "created_at": interp.created_at, "completed_at": interp.completed_at,
     }
 
