@@ -71,12 +71,14 @@ def _norm(name: str) -> str:
 PANEL_HINTS: Tuple[str, ...] = tuple(m for m in MODULE_ORDER if m in _RULES)
 
 
+_PANEL_LOOKUP: Dict[str, str] = {_norm(m): m for m in PANEL_HINTS}
+
+
 def normalize_panel(raw: Optional[str]) -> Optional[str]:
-    """清洗模型输出的栏目:去空白;命中 PANEL_HINTS 才返回,否则 None。"""
+    """清洗模型输出的栏目:去空白后按归一化键回查 PANEL_HINTS,返回规范名(保留原始空白);未命中返回 None。"""
     if not raw:
         return None
-    v = _norm(str(raw))
-    return v if v in PANEL_HINTS else None
+    return _PANEL_LOOKUP.get(_norm(str(raw)))
 
 
 def classify(item_name: str) -> Optional[str]:

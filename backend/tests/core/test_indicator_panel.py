@@ -12,6 +12,13 @@ def test_normalize_panel_valid_and_whitespace():
     assert normalize_panel("血常规,糖化血红蛋白") is None  # 非白名单整串不进
 
 
+def test_normalize_panel_returns_canonical_name_for_spaced_panel():
+    # PANEL_HINTS 含带空格的模块名:归一化命中后必须回规范名(带空格),而非去空格的串
+    assert normalize_panel("鳞状细胞癌相关抗原 (SCC)") == "鳞状细胞癌相关抗原 (SCC)"
+    assert normalize_panel("鳞状细胞癌相关抗原(SCC)") == "鳞状细胞癌相关抗原 (SCC)"  # 模型漏打空格也要命中
+    assert normalize_panel("液基细胞学检查（女）") == "液基细胞学检查（女）"
+
+
 def test_group_stored_category_wins_over_name():
     rows, order = group_indicators([
         {"item_name": "葡萄糖", "category": "尿常规"},

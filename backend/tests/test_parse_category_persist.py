@@ -105,3 +105,33 @@ def test_build_parse_prompt_has_category_and_hints():
     assert '"category"' in p
     assert "尿常规" in p and "血常规" in p
     assert "null" in p
+
+
+def test_image_branch_category_stays_null(db):
+    from app.modules.report.service import process_task
+    t = ReportTask(user_id="100001", original_file_path="/tmp/img.pdf",
+                   original_filename="img.pdf", file_type="pdf", file_size=1,
+                   status="queued", priority=0)
+    db.add(t); db.commit(); db.refresh(t)
+    db.add(ReportInfo(task_id=t.id, user_id="100001", name="测试"))
+    db.commit()
+    patchers = [
+        patch("app.modules.report.service._pdf_has_text", return_value=False),
+        patch("app.modules.report.service._file_to_base64_list", return_value=["aGk="]),
+        patch("app.modules.report.service.vlm_client.extract_from_images", return_value={
+            "personal_info": {"name": "测试"},
+            "indicators": [{"item_name": "血红蛋白", "result": "144", "unit": "g/L"}],
+        }),
+        patch("app.modules.report.service.rabbitmq.publish"),
+    ]
+    for p in patchers:
+        p.start()
+    try:
+        process_task(db, t.id, "1")
+    finally:
+        for p in patchers:
+            p.stop()
+    db.expire_all()
+    row = db.query(ReportIndicator).first()
+    assert row.item_name == "血红蛋白"
+    assert row.category is None
