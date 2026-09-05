@@ -101,6 +101,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     "unit": ind.get("unit", ""),
                     "ref_low": ind.get("ref_low"),
                     "ref_high": ind.get("ref_high"),
+                    "category": ind.get("category"),
                 }
                 for ind in raw_indicators
             ])
@@ -128,6 +129,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         db.commit()
         db.refresh(report)
 
+        from app.core.indicator_groups import normalize_panel
         for ind in indicators:
             db.add(ReportIndicator(
                 report_id=report.id,
@@ -138,6 +140,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 unit=ind.get("unit"),
                 ref_range_low=ind.get("ref_low"),
                 ref_range_high=ind.get("ref_high"),
+                category=normalize_panel(ind.get("category")),
                 raw_text=ind.get("raw_text"),
             ))
         db.commit()
@@ -217,6 +220,8 @@ async def _parse_text_with_llm_async(text: str) -> dict:
 
 
 def _build_parse_prompt(text: str) -> str:
+    from app.core.indicator_groups import PANEL_HINTS
+    allowed = "\n   - ".join(["", *PANEL_HINTS])
     return f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
 
 {{
@@ -225,7 +230,7 @@ def _build_parse_prompt(text: str) -> str:
   "age": 年龄数字或null,
   "report_date": "YYYY-MM-DD或null",
   "indicators": [
-    {{"item_name": "指标名称", "result": "检测结果", "unit": "单位", "ref_low": "参考下限", "ref_high": "参考上限"}}
+    {{"item_name": "指标名称", "result": "检测结果", "unit": "单位", "ref_low": "参考下限", "ref_high": "参考上限", "category": "所属栏目"}}
   ]
 }}
 
@@ -235,7 +240,10 @@ def _build_parse_prompt(text: str) -> str:
 3. 年龄：从"XX岁"提取数字
 4. 参考范围如"3.5-9.5"→ref_low="3.5", ref_high="9.5"；如"<5.0"→ref_low="", ref_high="5.0"
 5. 只提取化验指标数据（血常规、生化、免疫等），不提取问卷、个人信息
-6. 没有的字段填 null
+6. 每条指标必须给 category：该指标所属栏目，只能取下面列出的取值中最接近的一项，不能自创、不能附加说明文字：
+{allowed}
+   表格上方的栏目标题通常已给出栏目，如"尿常规"、"血常规（体检）,糖化血红蛋白"（一个标题含多个栏目时按各指标归属拆标：血常规行→血常规，全血糖化血红蛋白测定→糖化血红蛋白）；找不到任何合适栏目时 category 填 null
+7. 没有的字段填 null
 
 体检报告文本：
 {text[:24000]}
