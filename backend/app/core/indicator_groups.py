@@ -67,6 +67,18 @@ def _norm(name: str) -> str:
     return re.sub(r"[\s\u3000]+", "", name)
 
 
+# 可作落库/分组栏目的合法取值 = 能折叠的模块(有分类规则的子集),按 Excel 顺序
+PANEL_HINTS: Tuple[str, ...] = tuple(m for m in MODULE_ORDER if m in _RULES)
+
+
+def normalize_panel(raw: Optional[str]) -> Optional[str]:
+    """清洗模型输出的栏目:去空白;命中 PANEL_HINTS 才返回,否则 None。"""
+    if not raw:
+        return None
+    v = _norm(str(raw))
+    return v if v in PANEL_HINTS else None
+
+
 def classify(item_name: str) -> Optional[str]:
     if not item_name:
         return None
@@ -87,7 +99,8 @@ def classify(item_name: str) -> Optional[str]:
 def group_indicators(rows: List[dict]) -> Tuple[List[dict], List[str]]:
     present: List[str] = []
     for row in rows:
-        g = classify(str(row.get("item_name") or ""))
+        stored = normalize_panel(row.get("category") or "")
+        g = stored if stored else classify(str(row.get("item_name") or ""))
         row["group"] = g
         if g and g not in present:
             present.append(g)
