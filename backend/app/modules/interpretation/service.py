@@ -72,12 +72,12 @@ def get_judgments(db: Session, interpretation_id: int) -> List[IndicatorJudgment
 def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> list[dict]:
     """join indicator_judgment 与 report_indicator，返回前端展示所需字段
 
-    含 deviation/color_level（来自 judgment）+ unit/ref_range_low/ref_range_high（来自 indicator）
+    含 deviation/color_level（来自 judgment）+ unit/ref_range_low/ref_range_high/category（来自 indicator）
     """
     from sqlalchemy import text
     rows = db.execute(text(
         "SELECT j.indicator_id, j.item_name, j.result_value, j.deviation, j.color_level, "
-        "i.unit, i.ref_range_low, i.ref_range_high "
+        "i.unit, i.ref_range_low, i.ref_range_high, i.category "
         "FROM indicator_judgment j "
         "LEFT JOIN report_indicator i ON i.id = j.indicator_id "
         "WHERE j.interpretation_id = :iid ORDER BY j.id"
@@ -85,7 +85,7 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
     return [
         {"indicator_id": r[0], "item_name": r[1], "result_value": r[2],
          "deviation": r[3], "color_level": r[4], "unit": r[5],
-         "ref_range_low": r[6], "ref_range_high": r[7]}
+         "ref_range_low": r[6], "ref_range_high": r[7], "category": r[8]}
         for r in rows
     ]
 
