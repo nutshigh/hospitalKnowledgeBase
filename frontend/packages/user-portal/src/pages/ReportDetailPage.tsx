@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Spin, Button, Popconfirm, message } from 'antd';
+import { Spin, Button, Popconfirm, message, Collapse } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
@@ -14,6 +14,43 @@ import { InterpretationReportCard } from '@hospital/shared';
 
 const COLOR_ORDER: Record<string, number> = { red: 0, yellow: 1, green: 2 };
 
+function sortByColor(items: any[]): any[] {
+  return [...items].sort((a, b) =>
+    (COLOR_ORDER[a.color_level] ?? 3) - (COLOR_ORDER[b.color_level] ?? 3));
+}
+
+function toGroups(indicators: any[], moduleOrder?: string[]) {
+  const hasOrder = Array.isArray(moduleOrder) && moduleOrder.length > 0;
+  if (!hasOrder) {
+    // 旧后端无 module_order → 退化为今天的整体平铺(红黄绿优先)
+    return { groups: [], flat: sortByColor(indicators) };
+  }
+  const groups = new Map<string, any[]>();
+  const flat: any[] = [];
+  for (const ind of indicators) {
+    if (ind.group && moduleOrder.includes(ind.group)) {
+      if (!groups.has(ind.group)) groups.set(ind.group, []);
+      groups.get(ind.group)!.push(ind);
+    } else {
+      flat.push(ind);
+    }
+  }
+  return {
+    groups: moduleOrder.filter((g: string) => groups.has(g))
+      .map((name) => ({ name, items: sortByColor(groups.get(name)!) })),
+    flat: sortByColor(flat),
+  };
+}
+
+function countLevels(items: any[]): { red: number; yellow: number; green: number } {
+  const c = { red: 0, yellow: 0, green: 0 };
+  for (const it of items) {
+    const l: string = it.color_level;
+    if (l === 'red' || l === 'yellow' || l === 'green') c[l] += 1;
+  }
+  return c;
+}
+
 export default function ReportDetailPage() {
   const { id } = useParams();
   const { api } = useUserStore();
@@ -24,6 +61,7 @@ export default function ReportDetailPage() {
   const chatStore = useChatStore();
   const [chatSessionId, setChatSessionId] = useState<number | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
+  const [openModules, setOpenModules] = useState<string[]>([]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -75,6 +113,10 @@ export default function ReportDetailPage() {
     }).catch(() => {});
   }, [id]);
 
+  useEffect(() => {
+    setOpenModules([]);
+  }, [id]);
+
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
   if (!report) return <Layout title="报告详情"><p>报告不存在</p></Layout>;
 
@@ -108,11 +150,10 @@ export default function ReportDetailPage() {
   }
 
   const overallLevel = interpretation?.overall_level;
-  // 优先用 interpretation.indicators（含 color_level + unit + ref_range，已 Task 6 join），
-  // 旧数据/未生成时退化为 report.indicators（无 color_level）
   const rawIndicators = interpretation?.indicators?.length ? interpretation.indicators : (report?.indicators || []);
-  const sortedIndicators = [...rawIndicators].sort((a, b) =>
-    (COLOR_ORDER[a.color_level] ?? 3) - (COLOR_ORDER[b.color_level] ?? 3));
+  const moduleOrder = interpretation?.module_order ?? report?.module_order;
+  const { groups, flat } = toGroups(rawIndicators, moduleOrder);
+  const totalCount = rawIndicators.length;
 
   return (
     <Layout title={report.name || '报告详情'}>
@@ -169,18 +210,61 @@ export default function ReportDetailPage() {
       )}
 
       <div style={{ background: 'var(--color-surface)', borderRadius: 'var(--radius-md)', padding: '0 20px', boxShadow: 'var(--shadow-sm)', border: '1px solid var(--color-border-light)' }}>
-        {sortedIndicators.map((ind: any, idx: number) => (
-          <IndicatorRow
-            key={idx}
-            item_name={ind.item_name}
-            result_value={ind.result_value}
-            unit={ind.unit}
-            ref_range_low={ind.ref_range_low}
-            ref_range_high={ind.ref_range_high}
-            color_level={ind.color_level}
+        {groups.length > 0 && (
+          <Collapse
+            bordered={false}
+            ghost
+            expandIconPosition="end"
+            activeKey={openModules}
+            onChange={(keys) => setOpenModules((Array.isArray(keys) ? keys : [keys]) as string[])}
+            items={groups.map(({ name, items }) => {
+              const cnt = countLevels(items);
+              return {
+                key: name,
+                label: (
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingRight: 8 }}>
+                    <span style={{ fontSize: 14, fontWeight: 600 }}>{name}</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>{items.length}项</span>
+                      {cnt.red > 0 && <span style={{ color: 'var(--color-red)', fontWeight: 600 }}>红区 {cnt.red}</span>}
+                      {cnt.yellow > 0 && <span style={{ color: 'var(--color-yellow)', fontWeight: 600 }}>黄区 {cnt.yellow}</span>}
+                      {cnt.green > 0 && <span style={{ color: 'var(--color-green)', fontWeight: 600 }}>绿区 {cnt.green}</span>}
+                    </span>
+                  </span>
+                ),
+                children: items.map((ind: any, idx: number) => (
+                  <IndicatorRow
+                    key={idx}
+                    item_name={ind.item_name}
+                    result_value={ind.result_value}
+                    unit={ind.unit}
+                    ref_range_low={ind.ref_range_low}
+                    ref_range_high={ind.ref_range_high}
+                    color_level={ind.color_level}
+                  />
+                )),
+              };
+            })}
           />
-        ))}
-        {sortedIndicators.length === 0 && (
+        )}
+
+        {flat.length > 0 && (
+          <div style={{ borderTop: groups.length > 0 ? '1px solid var(--color-border-light)' : 'none', marginTop: groups.length > 0 ? 8 : 0 }}>
+            {flat.map((ind: any, idx: number) => (
+              <IndicatorRow
+                key={idx}
+                item_name={ind.item_name}
+                result_value={ind.result_value}
+                unit={ind.unit}
+                ref_range_low={ind.ref_range_low}
+                ref_range_high={ind.ref_range_high}
+                color_level={ind.color_level}
+              />
+            ))}
+          </div>
+        )}
+
+        {totalCount === 0 && (
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-secondary)', fontSize: 13 }}>暂无指标数据</div>
         )}
       </div>

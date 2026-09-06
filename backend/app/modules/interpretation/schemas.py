@@ -13,6 +13,7 @@ class IndicatorJudgmentSchema(BaseModel):
     ref_range_high: Optional[str] = None
     deviation: Optional[str] = None
     color_level: Optional[str] = None
+    group: Optional[str] = None
 
 
 class InterpretationReportSchema(BaseModel):
@@ -42,6 +43,7 @@ class InterpretationResponse(BaseModel):
     references: List[CitationSchema] = []
     quality_note: Optional[str] = None
     indicators: List[IndicatorJudgmentSchema] = []
+    module_order: List[str] = []
     created_at: datetime
     completed_at: Optional[datetime] = None
 
@@ -57,7 +59,7 @@ def parse_summary_text(summary_text: Optional[str]) -> InterpretationReportSchem
 
 
 class HighRiskItem(BaseModel):
-    user_id: int
+    user_id: str
     report_id: int
     name: Optional[str] = None
     unit_name: Optional[str] = None

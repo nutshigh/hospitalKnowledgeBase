@@ -68,7 +68,8 @@ async def run_planner(
     history_msgs: list,
     user_message: str,
     report_id: Optional[int],
-    user_id: Optional[int],
+    user_id: Optional[str],
+    name: Optional[str] = None,
 ) -> ChatPlan:
     """运行 planner：用结构化输出决定调用哪些工具（不执行工具）。
 
@@ -136,31 +137,44 @@ def _execute_get_report_summary(ctx: AgentContext) -> tuple[list, str]:
     db = get_session(f"hospital_{ctx.hospital_id}")
     try:
         row = db.execute(
-            text("SELECT r.report_date, r.name, i.overall_level, i.red_count, i.yellow_count, i.green_count "
+            text("SELECT r.report_date, r.name, i.overall_level, i.red_count, i.yellow_count, i.green_count, "
+                 "i.id AS interp_id "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
                  "WHERE r.id = :rid"),
             {"rid": report_id},
         ).fetchone()
+        if not row:
+            return [], "（无报告概况）"
+        # 附加异常指标明细(非 green 项),保证 LLM 拿到具体指标名/数值
+        abnormal = []
+        if row[6]:
+            abnormal = db.execute(
+                text("SELECT item_name, result_value, deviation, color_level "
+                     "FROM indicator_judgment WHERE interpretation_id = :iid "
+                     "AND color_level != 'green' ORDER BY color_level, item_name"),
+                {"iid": row[6]},
+            ).fetchall()
     finally:
         db.close()
-    if not row:
-        return [], "（无报告概况）"
     entries = [f"报告日期: {row[0]}", f"名称: {row[1]}", f"整体判定: {row[2]}",
                f"红区: {row[3]}", f"黄区: {row[4]}", f"绿区: {row[5]}"]
+    for r in abnormal:
+        entries.append(f"异常指标: {r[0]} 结果 {r[1]} (偏移 {r[2]}, {r[3]})")
     return [], "\n".join(entries)
 
 
 def _execute_get_user_history_reports(ctx: AgentContext, limit: int = 5) -> tuple[list, str]:
     user_id = ctx.user_id
-    if not user_id:
+    name = ctx.name
+    if not user_id or not name:
         return [], "（无法识别用户）"
     db = get_session(f"hospital_{ctx.hospital_id}")
     try:
         rows = db.execute(
             text("SELECT r.id, r.report_date, i.overall_level "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
-                 "WHERE r.user_id = :uid ORDER BY r.report_date DESC LIMIT :lim"),
-            {"uid": user_id, "lim": limit},
+                 "WHERE r.user_id = :uid AND r.name = :nm ORDER BY r.report_date DESC LIMIT :lim"),
+            {"uid": user_id, "nm": name, "lim": limit},
         ).fetchall()
     finally:
         db.close()
@@ -170,15 +184,17 @@ def _execute_get_user_history_reports(ctx: AgentContext, limit: int = 5) -> tupl
 
 def _execute_get_indicator_history(ctx: AgentContext, item_name: str) -> tuple[list, str]:
     user_id = ctx.user_id
-    if not user_id:
+    name = ctx.name
+    if not user_id or not name:
         return [], "（无法识别用户）"
     db = get_session(f"hospital_{ctx.hospital_id}")
     try:
         rows = db.execute(
             text("SELECT ri.report_date, ind.result_value, ind.unit "
                  "FROM report_indicator ind JOIN report_info ri ON ind.report_id = ri.id "
-                 "WHERE ri.user_id = :uid AND ind.item_name = :name ORDER BY ri.report_date ASC"),
-            {"uid": user_id, "name": item_name},
+                 "WHERE ri.user_id = :uid AND ri.name = :nm AND ind.item_name = :name "
+                 "ORDER BY ri.report_date ASC"),
+            {"uid": user_id, "nm": name, "name": item_name},
         ).fetchall()
     finally:
         db.close()

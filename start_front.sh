@@ -5,7 +5,8 @@ set -euo pipefail
 # start_front.sh — 一键启动前端三门户
 #   用户端 :3001 / 医生端 :3002 / 管理后台 :3003
 # 用法：
-#   bash start_front.sh              # 启动全部三个
+#   bash start_front.sh              # 启动全部三个后返回 shell
+#   bash start_front.sh --stop       # 停止前端三门户
 #   bash start_front.sh --user       # 仅用户端
 #   bash start_front.sh --doctor     # 仅医生端
 #   bash start_front.sh --admin      # 仅管理后台
@@ -21,13 +22,31 @@ warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 # 解析参数：默认全部启动
 START_USER=1; START_DOCTOR=1; START_ADMIN=1
 HAS_FILTER=0
+STOP=0
 for arg in "$@"; do
   case "$arg" in
+    --stop)   STOP=1 ;;
     --user)   HAS_FILTER=1; START_USER=1;   START_DOCTOR=0; START_ADMIN=0 ;;
     --doctor) HAS_FILTER=1; START_USER=0;   START_DOCTOR=1; START_ADMIN=0 ;;
     --admin)  HAS_FILTER=1; START_USER=0;   START_DOCTOR=0; START_ADMIN=1 ;;
   esac
 done
+
+# cleanup
+cleanup() {
+  log "Stopping frontends..."
+  for pidfile in /tmp/start-front-*.pid; do
+    [[ -f "$pidfile" ]] && kill "$(cat $pidfile)" 2>/dev/null || true
+    rm -f "$pidfile"
+  done
+  log "Done."
+  exit 0
+}
+
+# --stop:显式停服(cleanup 内部含 exit 0)
+if [[ "$STOP" == "1" ]]; then
+  cleanup
+fi
 
 # 提高 inotify 限制（Vite 需要）
 CURRENT_WATCHES=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)
@@ -43,18 +62,6 @@ if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   npm install --silent 2>&1 | sed 's/^/  /'
   cd "$ROOT_DIR"
 fi
-
-# cleanup
-cleanup() {
-  log "Stopping frontends..."
-  for pidfile in /tmp/start-front-*.pid; do
-    [[ -f "$pidfile" ]] && kill "$(cat $pidfile)" 2>/dev/null || true
-    rm -f "$pidfile"
-  done
-  log "Done."
-  exit 0
-}
-trap cleanup SIGINT SIGTERM
 
 log "Starting frontend services..."
 
@@ -111,8 +118,6 @@ echo "  Backend API:  http://localhost:8000"
 echo "  Test users:   doctor1/123456 (医生), user1/123456 (用户)"
 echo ""
 echo "  Logs: /tmp/fe-user.log, /tmp/fe-doctor.log, /tmp/fe-admin.log"
-echo "  Stop: Ctrl+C"
+echo "  Stop: bash start_front.sh --stop"
 echo "=============================================="
 echo ""
-
-wait

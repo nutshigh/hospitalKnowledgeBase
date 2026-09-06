@@ -9,7 +9,7 @@ class CreateSessionRequest(BaseModel):
 
 class SessionResponse(BaseModel):
     id: int
-    user_id: int
+    user_id: str
     report_id: Optional[int] = None
     title: Optional[str] = None
     created_at: datetime

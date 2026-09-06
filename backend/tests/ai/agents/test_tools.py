@@ -35,14 +35,16 @@ def test_interp_tools_contains_two_names():
 
 
 def test_agent_context_dataclass():
-    """AgentContext 包含 hospital_id/report_id/user_id"""
+    """AgentContext 包含 hospital_id/report_id/user_id/name"""
     from app.ai.agents.tools import AgentContext
     ctx = AgentContext(hospital_id="H001")
     assert ctx.hospital_id == "H001"
     assert ctx.report_id is None
     assert ctx.user_id is None
-    ctx2 = AgentContext(hospital_id="H001", report_id=5, user_id=2)
-    assert ctx2.report_id == 5 and ctx2.user_id == 2
+    assert ctx.name is None
+    ctx2 = AgentContext(hospital_id="H001", report_id=5, user_id="123456", name="张三")
+    assert ctx2.report_id == 5 and ctx2.user_id == "123456"
+    assert ctx2.name == "张三"
 
 
 def test_search_knowledge_uses_context_hospital_id():
@@ -102,3 +104,69 @@ def test_make_tools_removed():
     """make_tools 函数已删除"""
     import app.ai.agents.tools as tools_mod
     assert not hasattr(tools_mod, "make_tools")
+
+
+def test_get_user_history_reports_dual_filter():
+    """get_user_history_reports 按 user_id + name 双条件过滤"""
+    from app.ai.agents.tools import get_user_history_reports, AgentContext
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.fetchall.return_value = []
+    ctx = AgentContext(hospital_id="H001", user_id="123456", name="张三")
+    runtime = _make_runtime(ctx)
+
+    with patch("app.ai.agents.tools.get_session", return_value=mock_db):
+        result = get_user_history_reports.invoke({"runtime": runtime, "limit": 5})
+
+    assert result == []
+    args, kwargs = mock_db.execute.call_args
+    sql = args[0].text
+    assert "r.user_id = :uid" in sql
+    assert "r.name = :nm" in sql
+    params = kwargs.get("params") if "params" in kwargs else (args[1] if len(args) > 1 else None)
+    assert params == {"uid": "123456", "nm": "张三", "lim": 5}
+
+
+def test_get_user_history_reports_missing_name_returns_error():
+    """缺少 name 时返回错误而非查询"""
+    from app.ai.agents.tools import get_user_history_reports, AgentContext
+
+    ctx = AgentContext(hospital_id="H001", user_id="123456")
+    runtime = _make_runtime(ctx)
+
+    result = get_user_history_reports.invoke({"runtime": runtime})
+
+    assert result == [{"error": "无法识别当前用户"}]
+
+
+def test_get_indicator_history_dual_filter():
+    """get_indicator_history 按 user_id + name 双条件过滤"""
+    from app.ai.agents.tools import get_indicator_history, AgentContext
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.fetchall.return_value = []
+    ctx = AgentContext(hospital_id="H001", user_id="123456", name="张三")
+    runtime = _make_runtime(ctx)
+
+    with patch("app.ai.agents.tools.get_session", return_value=mock_db):
+        result = get_indicator_history.invoke({"item_name": "血糖", "runtime": runtime})
+
+    assert result == []
+    args, kwargs = mock_db.execute.call_args
+    sql = args[0].text
+    assert "ri.user_id = :uid" in sql
+    assert "ri.name = :nm" in sql
+    params = kwargs.get("params") if "params" in kwargs else (args[1] if len(args) > 1 else None)
+    assert params == {"uid": "123456", "nm": "张三", "name": "血糖"}
+
+
+def test_get_indicator_history_missing_name_returns_error():
+    """缺少 name 时返回错误而非查询"""
+    from app.ai.agents.tools import get_indicator_history, AgentContext
+
+    ctx = AgentContext(hospital_id="H001", user_id="123456")
+    runtime = _make_runtime(ctx)
+
+    result = get_indicator_history.invoke({"item_name": "血糖", "runtime": runtime})
+
+    assert result == [{"error": "无法识别当前用户"}]

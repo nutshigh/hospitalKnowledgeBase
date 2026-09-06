@@ -60,8 +60,15 @@ def upload_report(
                 raise ValidationException(detail="File too large (max 20MB)")
             out.write(buf)
 
+    if current_user.role == "user" and not current_user.id_card_suffix:
+        raise ValidationException(
+            detail="存量用户无身份证后六位,无法上传报告,请联系管理员补齐身份信息"
+        )
     task = service.create_task(
-        db=db, hospital_id=current_user.hospital_id, user_id=current_user.user_id,
+        db=db, hospital_id=current_user.hospital_id,
+        user_id=current_user.id_card_suffix if current_user.role == "user"
+        else str(current_user.user_id),
+        name=current_user.name if current_user.role == "user" else None,
         file_path=file_path, filename=file.filename, file_type=file_type,
         file_size=size,
     )
@@ -92,8 +99,16 @@ def list_reports(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    user_id = None if current_user.role != "user" else current_user.user_id
-    items, total = service.list_reports(db, current_user.hospital_id, user_id, page, page_size)
+    if current_user.role != "user":
+        user_id = None
+        name = None
+    elif current_user.id_card_suffix:
+        user_id = current_user.id_card_suffix
+        name = current_user.name
+    else:
+        # 存量用户无后六位:不泄露他人报告,返回空
+        return {"items": [], "total": 0, "page": page, "page_size": page_size}
+    items, total = service.list_reports(db, current_user.hospital_id, user_id, name, page, page_size)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -102,19 +117,35 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
     report = service.get_report_detail(db, report_id)
     if not report:
         raise NotFoundException(detail="Report not found")
-    indicators = service.get_report_indicators(db, report_id)
+    indicators_rows = service.get_report_indicators(db, report_id)
+    # 展示名:与列表一致——解析出真实姓名优先;解析中(未完成)不泄露账号锚定名;
+    # 已完成但未抽出姓名→回退归属锚定名。
+    task_status = None
+    if report.task_id:
+        task = service.get_task_status(db, report.task_id)
+        task_status = task.status if task else None
+    if report.parsed_name:
+        display_name = report.parsed_name
+    elif task_status in ("queued", "parsing"):
+        display_name = None
+    else:
+        display_name = report.name
+    from app.core.indicator_groups import group_indicators
+    indicator_dicts = [
+        {"item_name": i.item_name, "item_name_standard": i.item_name_standard,
+         "item_code": i.item_code, "result_value": i.result_value,
+         "unit": i.unit, "ref_range_low": i.ref_range_low,
+         "ref_range_high": i.ref_range_high, "category": i.category}
+        for i in indicators_rows
+    ]
+    grouped, module_order = group_indicators(indicator_dicts)
     return {
         "id": report.id, "task_id": report.task_id,
-        "name": report.name, "gender": report.gender, "age": report.age,
+        "name": display_name, "gender": report.gender, "age": report.age,
         "report_date": report.report_date, "check_type": report.check_type,
         "unit_name": report.unit_name,
-        "indicators": [
-            {"item_name": i.item_name, "item_name_standard": i.item_name_standard,
-             "item_code": i.item_code, "result_value": i.result_value,
-             "unit": i.unit, "ref_range_low": i.ref_range_low,
-             "ref_range_high": i.ref_range_high, "category": i.category}
-            for i in indicators
-        ],
+        "indicators": grouped,
+        "module_order": module_order,
         "created_at": report.created_at,
     }
 

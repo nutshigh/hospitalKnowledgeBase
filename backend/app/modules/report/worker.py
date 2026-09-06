@@ -23,6 +23,7 @@ def handle_parsing_task(message: dict):
     hospital_id = payload.get("hospital_id")
     batch_id = payload.get("batch_id")
     file_id = payload.get("file_id")
+    batch_hospital_id = payload.get("batch_hospital_id")
 
     db = next(get_hospital_db(hospital_id))
     try:
@@ -32,15 +33,17 @@ def handle_parsing_task(message: dict):
             return
         t_start = time.time()
         try:
-            process_task(db, task_id, hospital_id, batch_id=batch_id, file_id=file_id)
+            process_task(db, task_id, hospital_id, batch_id=batch_id, file_id=file_id,
+                         batch_hospital_id=batch_hospital_id)
             latency_ms = int((time.time() - t_start) * 1000)
             _log.info(
                 "parsing ok task=%s hospital=%s batch=%s file=%s latency_ms=%d",
                 task_id, hospital_id, batch_id, file_id, latency_ms,
             )
-            # 成功 → 计 batch file 进度(parsed_ok)
+            # 成功 → 计 batch file 进度(parsed_ok),落在批次所属库
             if batch_id and file_id:
-                BatchService.increment_progress(db, batch_id, file_id, "parsed_ok")
+                BatchService.update_batch_progress(
+                    batch_hospital_id, hospital_id, db, batch_id, file_id, "parsed_ok")
         except Exception:
             latency_ms = int((time.time() - t_start) * 1000)
             _log.warning(
@@ -54,7 +57,9 @@ def handle_parsing_task(message: dict):
                 # 走 DLQ;同时回写 file failed
                 if batch_id and file_id:
                     try:
-                        BatchService.increment_progress(db, batch_id, file_id, "failed", stage="parsing")
+                        BatchService.update_batch_progress(
+                            batch_hospital_id, hospital_id, db, batch_id, file_id,
+                            "failed", stage="parsing")
                     except Exception:
                         pass
                 raise  # 让 _callback nack(requeue=False) → DLQ

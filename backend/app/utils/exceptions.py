@@ -25,3 +25,9 @@ class ForbiddenException(AppException):
 class ValidationException(AppException):
     def __init__(self, detail: str = "Validation error"):
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail, code="VALIDATION_ERROR")
+
+
+class ServiceUnavailableException(AppException):
+    def __init__(self, detail: str = "Service unavailable"):
+        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                         detail=detail, code="SERVICE_UNAVAILABLE")

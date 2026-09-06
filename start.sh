@@ -7,7 +7,8 @@ set -euo pipefail
 #   模型服务（MedGo/BGE-M3/Reranker/PaddleOCR-VL）
 #   后端 API + RabbitMQ Workers
 # 用法：
-#   bash start.sh              # 启动全部
+#   bash start.sh              # 启动全部后返回 shell(服务后台常驻)
+#   bash start.sh --stop       # 停止应用层全部服务(Docker 中间件保持运行)
 #   bash start.sh --no-models  # 跳过模型服务（仅中间件+后端）
 #   bash start.sh --no-ocr     # 跳过 PaddleOCR
 #   bash start.sh --no-medgo   # 跳过 MedGo
@@ -25,6 +26,15 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PATH="$VENV:$PATH"
 
 export LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+# 批量处理 worker 并发(每类进程数;默认 parse=2 / interp=3 / extract=1,可环境变量覆盖)
+export WORKER_PARSE="${WORKER_PARSE:-2}"
+export WORKER_INTERP="${WORKER_INTERP:-3}"
+export WORKER_EXTRACT="${WORKER_EXTRACT:-1}"
+# 本 checkout 唯一标记:拼进 worker cmdline,保证 pgrep/pkill 只命中本目录起的 worker,
+# 不误杀其它 checkout(如 /home/wjyy2/hospitalKnowledgeBase)隔离运行的旧 worker。
+export WORKER_TAG="$BACKEND_DIR"
+
 mkdir -p /data/logs
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -34,8 +44,10 @@ err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # 解析参数
 SKIP_MODELS=0; SKIP_OCR=0; SKIP_MEDGO=0; SKIP_EMBED=0; SKIP_RERANKER=0
+STOP=0
 for arg in "$@"; do
   case "$arg" in
+    --stop)        STOP=1 ;;
     --no-models)   SKIP_MODELS=1; SKIP_OCR=1; SKIP_MEDGO=1; SKIP_EMBED=1; SKIP_RERANKER=1 ;;
     --no-ocr)      SKIP_OCR=1 ;;
     --no-medgo)    SKIP_MEDGO=1 ;;
@@ -49,21 +61,41 @@ PIDS=()
 cleanup() {
   log "Stopping all services..."
   for pidfile in /tmp/start-sh-*.pid; do
-    [[ -f "$pidfile" ]] && kill "$(cat $pidfile)" 2>/dev/null || true
-    rm -f "$pidfile"
+    [[ -f "$pidfile" ]] || continue
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    # 仅 worker pidfile 需校验 cmdline 带本 checkout 的 WORKER_TAG:
+    # 其它 checkout(如 /home/wjyy2)同前缀的旧 pidfile 不应被本 start.sh 误杀。
+    case "$pidfile" in
+      */start-sh-worker-*.pid)
+        if [[ -n "$pid" ]] && ps -p "$pid" -o args= 2>/dev/null | grep -q "# $WORKER_TAG"; then
+          kill "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+        ;;
+      *)
+        if [[ -n "$pid" ]]; then
+          kill "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+        ;;
+    esac
   done
   pkill -f "vllm serve /data/models/MedGo" 2>/dev/null || true
   pkill -f "vllm serve /data/models/bge-m3" 2>/dev/null || true
   pkill -f "paddle_ocr_service.main:app" 2>/dev/null || true
   pkill -f "reranker_service.main:app" 2>/dev/null || true
   pkill -f "uvicorn app.main:app" 2>/dev/null || true
-  pkill -f "app.modules.report.worker" 2>/dev/null || true
-  pkill -f "app.modules.interpretation.worker" 2>/dev/null || true
-  pkill -f "app.modules.report.extract_worker" 2>/dev/null || true
+  pkill -f "from app.modules.report.worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
+  pkill -f "from app.modules.interpretation.worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
+  pkill -f "from app.modules.report.extract_worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
   log "Done. Docker 中间件保持运行（如需停止：cd $INFRA_DIR && docker compose down）"
   exit 0
 }
-trap cleanup SIGINT SIGTERM
+
+# --stop:显式停服(cleanup 内部含 exit 0;Docker 中间件保持运行)
+if [[ "$STOP" == "1" ]]; then
+  cleanup
+fi
 
 # ── 1. Docker 中间件 ────────────────────────────────────────────
 log "Starting Docker middleware (MySQL/RabbitMQ/Milvus/Neo4j)..."
@@ -111,8 +143,8 @@ if [[ "$TABLE_COUNT" == "0" ]]; then
 CREATE TABLE IF NOT EXISTS hospital_user (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(50), phone VARCHAR(20), gender VARCHAR(5), age INT, unit_name VARCHAR(100), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS knowledge_category (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, parent_id BIGINT DEFAULT NULL, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS knowledge_entry (id BIGINT AUTO_INCREMENT PRIMARY KEY, category_id BIGINT DEFAULT NULL, title VARCHAR(200) NOT NULL, content TEXT NOT NULL, source_type VARCHAR(20) NOT NULL DEFAULT 'manual', source_file VARCHAR(500) DEFAULT NULL, chunk_index INT NOT NULL DEFAULT 0, parent_entry_id BIGINT DEFAULT NULL, vector_id VARCHAR(64) DEFAULT NULL, status TINYINT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS report_task (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, original_file_path VARCHAR(500) NOT NULL, original_filename VARCHAR(200) NOT NULL, file_type VARCHAR(10) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, thumbnail_path VARCHAR(500) DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT 'queued', priority TINYINT NOT NULL DEFAULT 0, retry_count INT NOT NULL DEFAULT 0, error_message TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, completed_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS report_info (id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, name VARCHAR(50), gender VARCHAR(5), age INT, report_date DATE, check_type VARCHAR(20), unit_name VARCHAR(100), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS report_task (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, original_file_path VARCHAR(500) NOT NULL, original_filename VARCHAR(200) NOT NULL, file_type VARCHAR(10) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, thumbnail_path VARCHAR(500) DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT 'queued', priority TINYINT NOT NULL DEFAULT 0, retry_count INT NOT NULL DEFAULT 0, error_message TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, completed_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS report_info (id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id BIGINT DEFAULT NULL, user_id VARCHAR(16) NOT NULL, name VARCHAR(50), parsed_name VARCHAR(50), gender VARCHAR(5), age INT, report_date DATE, check_type VARCHAR(20), unit_name VARCHAR(100), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS report_indicator (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, item_name_standard VARCHAR(100) DEFAULT NULL, item_code VARCHAR(50) DEFAULT NULL, result_value VARCHAR(50) DEFAULT NULL, unit VARCHAR(20) DEFAULT NULL, ref_range_low VARCHAR(50) DEFAULT NULL, ref_range_high VARCHAR(50) DEFAULT NULL, category VARCHAR(50) DEFAULT NULL, raw_text TEXT DEFAULT NULL) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS report_interpretation (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, overall_level VARCHAR(10) DEFAULT NULL, red_count INT NOT NULL DEFAULT 0, yellow_count INT NOT NULL DEFAULT 0, green_count INT NOT NULL DEFAULT 0, summary_text TEXT DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', retry_count INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS indicator_judgment (id BIGINT AUTO_INCREMENT PRIMARY KEY, interpretation_id BIGINT NOT NULL, indicator_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, result_value VARCHAR(50) DEFAULT NULL, deviation VARCHAR(10) DEFAULT NULL, color_level VARCHAR(10) DEFAULT NULL, matched_rule_id BIGINT DEFAULT NULL, explanation TEXT DEFAULT NULL, suggestion TEXT DEFAULT NULL, knowledge_refs JSON DEFAULT NULL, certainty VARCHAR(10) DEFAULT NULL, certainty_reason TEXT DEFAULT NULL) ENGINE=InnoDB;
@@ -121,10 +153,10 @@ CREATE TABLE IF NOT EXISTS report_template (id BIGINT AUTO_INCREMENT PRIMARY KEY
 CREATE TABLE IF NOT EXISTS statistic_cache (id BIGINT AUTO_INCREMENT PRIMARY KEY, stat_type VARCHAR(50) NOT NULL, params_hash VARCHAR(64) NOT NULL, result_json JSON DEFAULT NULL, expired_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS dispatch_config (id BIGINT AUTO_INCREMENT PRIMARY KEY, config_key VARCHAR(50) NOT NULL, config_value VARCHAR(500) NOT NULL, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS resource_metric (id BIGINT AUTO_INCREMENT PRIMARY KEY, metric_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, cpu_percent DECIMAL(5,1) DEFAULT NULL, memory_percent DECIMAL(5,1) DEFAULT NULL, gpu_percent DECIMAL(5,1) DEFAULT NULL, gpu_memory_percent DECIMAL(5,1) DEFAULT NULL, queue_depth INT DEFAULT NULL, active_workers INT DEFAULT NULL) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS chat_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, hospital_id VARCHAR(32) NOT NULL, report_id BIGINT DEFAULT NULL, title VARCHAR(200) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS chat_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, name VARCHAR(50) DEFAULT NULL, hospital_id VARCHAR(32) NOT NULL, report_id BIGINT DEFAULT NULL, title VARCHAR(200) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS chat_message (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_id BIGINT NOT NULL, role VARCHAR(10) NOT NULL, content TEXT NOT NULL, knowledge_refs JSON DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (session_id) REFERENCES chat_session(id)) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS batch_import (id VARCHAR(36) PRIMARY KEY, hospital_id VARCHAR(32) NOT NULL, user_id VARCHAR(64) NOT NULL, filename VARCHAR(255) NOT NULL, archive_path VARCHAR(512) NOT NULL, total BIGINT NOT NULL DEFAULT 0, parsed_ok BIGINT NOT NULL DEFAULT 0, interp_ok BIGINT NOT NULL DEFAULT 0, failed BIGINT NOT NULL DEFAULT 0, status VARCHAR(24) NOT NULL DEFAULT 'uploading', error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, KEY idx_batch_status (status), KEY idx_batch_hospital (hospital_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'queued', failed_stage VARCHAR(24) DEFAULT NULL, report_task_id BIGINT, error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) REFERENCES batch_import(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'queued', failed_stage VARCHAR(24) DEFAULT NULL, dispatch_hospital VARCHAR(24) DEFAULT NULL, report_task_id BIGINT, error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) REFERENCES batch_import(id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 SQL
   docker exec -i hospital-mysql mysql -uroot -proot --default-character-set=utf8mb4 hospital_template <<'SQL' 2>/dev/null || true
 INSERT INTO hospital_tenant (hospital_id, hospital_name, db_name, is_active)
@@ -142,6 +174,26 @@ else
   # 批量导入失败阶段列(增量迁移,兼容旧库 Spec I3)
   docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
     "ALTER TABLE batch_import_file ADD COLUMN IF NOT EXISTS failed_stage VARCHAR(24) DEFAULT NULL;" 2>/dev/null || true
+  # 跨院分发:记录每个文件解析出的目标医院(增量迁移)
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE batch_import_file ADD COLUMN IF NOT EXISTS dispatch_hospital VARCHAR(24) DEFAULT NULL;" 2>/dev/null || true
+  # 批量上传按身份证后六位分发:user_id 列改字符串(兼容旧库)
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE report_task MODIFY user_id VARCHAR(16) NOT NULL;" 2>/dev/null || true
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE report_info MODIFY user_id VARCHAR(16) NOT NULL;" 2>/dev/null || true
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE chat_session MODIFY user_id VARCHAR(16) NOT NULL;" 2>/dev/null || true
+  docker exec hospital-mysql mysql -uroot -proot hospital_template -e \
+    "ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS id_card_suffix VARCHAR(8) NULL;" 2>/dev/null || true
+  # 姓名锚定:platform_user / chat_session 加 name 列(兼容旧库,增量迁移)
+  docker exec hospital-mysql mysql -uroot -proot hospital_template -e \
+    "ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS name VARCHAR(50) NULL COMMENT '登录姓名(与报告文件名姓名段一致)';" 2>/dev/null || true
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE chat_session ADD COLUMN IF NOT EXISTS name VARCHAR(50) NULL;" 2>/dev/null || true
+  # 展示名与归属分离:report_info.parsed_name(PDF 解析真实姓名,仅展示;兼容旧库)
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE report_info ADD COLUMN IF NOT EXISTS parsed_name VARCHAR(50) NULL;" 2>/dev/null || true
 fi
 
 # ── 3. 确保 .env ────────────────────────────────────────────────
@@ -164,7 +216,7 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "MedGo 已运行 (8004)"
     else
       log "启动 MedGo vLLM (8004, GPU 0-3, TP=4, ctx=32K, util=0.6)..."
-      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes" > /data/logs/vllm-medgo.stdout.log 2>&1 &
+      nohup bash -c "export HF_ENDPOINT=https://hf-mirror.com; export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; export PATH=$VLLM_VENV:\$PATH; CUDA_VISIBLE_DEVICES=0,1,2,3 $VLLM_VENV/vllm serve /data/models/MedGo --port 8004 --trust-remote-code --tensor-parallel-size 4 --max-model-len 32768 --gpu-memory-utilization 0.6 --disable-custom-all-reduce --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes --override-generation-config '{\"temperature\": 0.2}'" > /data/logs/vllm-medgo.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-medgo.pid
       log "  MedGo 启动中 (PID: $!, log: /data/logs/vllm-medgo.stdout.log)"
     fi
@@ -267,39 +319,28 @@ else
   done
 fi
 
-# ── 7. RabbitMQ Workers ─────────────────────────────────────────
-if pgrep -f "app.modules.report.worker" >/dev/null 2>&1; then
-  log "报告解析 Worker 已运行"
-else
-  log "启动报告解析 Worker..."
-  cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.report.worker import start_worker; start_worker()" > /data/logs/worker-parsing.stdout.log 2>&1 &
-  echo $! > /tmp/start-sh-worker-parsing.pid
-  cd "$ROOT_DIR"
-  log "  报告解析 Worker 已启动 (log: /data/logs/worker-parsing.stdout.log)"
-fi
+# 确保某类 worker 起够 N 个(不足则补足;带 WORKER_TAG 标记精确匹配本 checkout)
+ensure_workers() {
+  local module="$1" label="$2" want="$3" lname="$4" have i
+  have=$(pgrep -f "from app.modules.$module import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null | wc -l || true)
+  have=${have:-0}
+  log "  $label:目标 $want,当前 $have"
+  i=$((have + 1))
+  while [ "$i" -le "$want" ]; do
+    cd "$BACKEND_DIR"
+    nohup $VENV/python -u -c "from app.modules.$module import start_worker; start_worker() # $WORKER_TAG" \
+      > "/data/logs/$lname.$i.stdout.log" 2>&1 &
+    echo $! > "/tmp/start-sh-$lname.$i.pid"
+    cd "$ROOT_DIR"
+    log "  $label Worker[$i] 已启动 (pid $!, log: /data/logs/$lname.$i.stdout.log)"
+    i=$((i + 1))
+  done
+}
 
-if pgrep -f "app.modules.interpretation.worker" >/dev/null 2>&1; then
-  log "解读 Worker 已运行"
-else
-  log "启动解读 Worker..."
-  cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.interpretation.worker import start_worker; start_worker()" > /data/logs/worker-interpretation.stdout.log 2>&1 &
-  echo $! > /tmp/start-sh-worker-interpretation.pid
-  cd "$ROOT_DIR"
-  log "  解读 Worker 已启动 (log: /data/logs/worker-interpretation.stdout.log)"
-fi
-
-if pgrep -f "app.modules.report.extract_worker" >/dev/null 2>&1; then
-  log "批量解压 Worker 已运行"
-else
-  log "启动批量解压 Worker..."
-  cd "$BACKEND_DIR"
-  nohup $VENV/python -c "from app.modules.report.extract_worker import start_worker; start_worker()" > /data/logs/worker-extract.stdout.log 2>&1 &
-  echo $! > /tmp/start-sh-worker-extract.pid
-  cd "$ROOT_DIR"
-  log "  批量解压 Worker 已启动 (log: /data/logs/worker-extract.stdout.log)"
-fi
+# ── 7. RabbitMQ Workers(每类按 WORKER_* 并发补足)────────────
+ensure_workers report.worker            "报告解析"  "$WORKER_PARSE"    worker-parsing
+ensure_workers interpretation.worker    "解读"      "$WORKER_INTERP"   worker-interpretation
+ensure_workers report.extract_worker    "批量解压"  "$WORKER_EXTRACT"   worker-extract
 
 # ── 8. 创建测试用户（如不存在）──────────────────────────────────
 log "确保测试用户存在..."
@@ -330,8 +371,6 @@ echo ""
 echo "  测试用户: admin1/123456 (管理员), doctor1/123456 (医生), user1/123456 (用户)"
 echo ""
 echo "  启动前端:  bash start_front.sh"
-echo "  停止全部:  Ctrl+C  (Docker 中间件需手动 docker compose down)"
+echo "  停止服务:  bash start.sh --stop   (Docker 中间件保持运行)"
 echo "=============================================="
 echo ""
-
-wait

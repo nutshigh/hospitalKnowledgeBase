@@ -54,9 +54,10 @@ class RabbitMQClient:
         import pika
         from app.config import settings
         creds = pika.PlainCredentials(settings.RABBITMQ_USER, settings.RABBITMQ_PASSWORD)
+        vhost = getattr(settings, "RABBITMQ_VHOST", "/")
         params = pika.ConnectionParameters(
             host=settings.RABBITMQ_HOST, port=settings.RABBITMQ_PORT,
-            credentials=creds, heartbeat=0,
+            virtual_host=vhost, credentials=creds, heartbeat=0,
         )
         self.connection = pika.BlockingConnection(params)
         self.channel = self.connection.channel()

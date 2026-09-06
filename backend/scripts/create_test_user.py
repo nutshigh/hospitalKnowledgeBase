@@ -1,8 +1,8 @@
 """创建测试用户脚本。
 
 用途：在 hospital_template.platform_user 表插入一个测试账号（bcrypt 哈希密码）。
-运行：cd backend && uv run python scripts/create_test_user.py [username] [password] [role] [hospital_id]
-默认：username=testuser password=testpass123 role=user hospital_id=NULL
+运行：cd backend && uv run python scripts/create_test_user.py [username] [password] [role] [hospital_id] [id_card_suffix] [name]
+默认：username=testuser password=testpass123 role=user hospital_id=NULL id_card_suffix=NULL name=NULL
 role 取值：user / doctor / admin
 """
 import sys
@@ -25,6 +25,8 @@ def main() -> int:
     password = sys.argv[2] if len(sys.argv) > 2 else "testpass123"
     role = sys.argv[3] if len(sys.argv) > 3 else "user"
     hospital_id = sys.argv[4] if len(sys.argv) > 4 else None
+    id_card_suffix = sys.argv[5] if len(sys.argv) > 5 else None
+    name = sys.argv[6] if len(sys.argv) > 6 else None
 
     if role not in VALID_ROLES:
         print(f"Invalid role: {role}. Must be one of {VALID_ROLES}")
@@ -42,28 +44,32 @@ def main() -> int:
 
         db.execute(
             text(
-                "INSERT INTO platform_user (username, password_hash, role, hospital_id) "
-                "VALUES (:un, :ph, :r, :hid)"
+                "INSERT INTO platform_user (username, password_hash, role, hospital_id, id_card_suffix, name) "
+                "VALUES (:un, :ph, :r, :hid, :suf, :name)"
             ),
             {
                 "un": username,
                 "ph": hash_password(password),
                 "r": role,
                 "hid": hospital_id,
+                "suf": id_card_suffix,
+                "name": name,
             },
         )
         db.commit()
 
         row = db.execute(
-            text("SELECT id, username, role, hospital_id, is_active FROM platform_user WHERE username = :un"),
+            text("SELECT id, username, role, hospital_id, is_active, id_card_suffix, name FROM platform_user WHERE username = :un"),
             {"un": username},
         ).fetchone()
         print("Created test user:")
-        print(f"  id          : {row[0]}")
-        print(f"  username    : {row[1]}")
-        print(f"  role        : {row[2]}")
-        print(f"  hospital_id : {row[3]}")
-        print(f"  is_active   : {row[4]}")
+        print(f"  id            : {row[0]}")
+        print(f"  username      : {row[1]}")
+        print(f"  role          : {row[2]}")
+        print(f"  hospital_id   : {row[3]}")
+        print(f"  is_active     : {row[4]}")
+        print(f"  id_card_suffix: {row[5]}")
+        print(f"  name          : {row[6]}")
         print(f"  password    : {password} (plaintext, only shown here)")
         return 0
     finally:

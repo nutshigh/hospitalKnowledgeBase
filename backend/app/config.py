@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     RABBITMQ_PORT: int = 5672
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"  # 与旧 checkout(/home/wjyy2) 对齐;切换环境时改 .env 即可
 
     # Redis (embedding 向量缓存等)
     REDIS_HOST: str = "localhost"
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
     MEDGO_BASE_URL: str = "http://localhost:8004/v1"
     MEDGO_MODEL: str = "/data/models/MedGo"  # 本地权重路径；也可填 OpenMedZoo/MedGo 让 vLLM 自动拉取
     MEDGO_MAX_TOKENS: int = 4096
-    MEDGO_TEMPERATURE: float = 0.1
+    MEDGO_TEMPERATURE: float = 0.2
     MEDGO_API_KEY: str = "not-required"  # vLLM 本地服务无鉴权
 
     # LLM Provider
@@ -121,6 +122,17 @@ class Settings(BaseSettings):
     BULK_WINDOW_END: int = 8
     BATCH_FILE_MAX_SIZE: int = 52428800        # 50MB
     DEAD_LETTER_TTL: int = 604800              # 7d
+
+    # External hospital resolver (batch upload id-card suffix → hospital)
+    # 存 BaseURL(不含接口路径),接口路径见 hospital_resolver.SEARCH_USER_PATH,运行时拼装
+    # 空 = 未配置,resolve_hospital 一律返回 None(全部 hospital_not_found)
+    EXTERNAL_RESOLVER_URL: str = ""
+    EXTERNAL_RESOLVER_TIMEOUT: float = 10.0
+
+    # External App (app-login: app_key + name + id_card_suffix → user token)
+    # 空 = app-login 一律 401(接口不配置则无法使用)
+    APP_API_KEY: str = ""
+    APP_LOGIN_TOKEN_EXPIRE_MINUTES: int = 10080
 
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"

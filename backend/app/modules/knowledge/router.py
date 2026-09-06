@@ -5,7 +5,7 @@ import os
 import uuid
 
 from app.core.database import get_hospital_db
-from app.middleware.hospital_context import get_current_hospital_id
+from app.core.dependencies import get_current_user, CurrentUser
 from app.utils.exceptions import NotFoundException, ValidationException
 from app.modules.knowledge import schemas, service
 from app.config import settings
@@ -13,15 +13,12 @@ from app.config import settings
 router = APIRouter()
 
 
-def _get_hospital_id() -> str:
-    hid = get_current_hospital_id()
-    if not hid:
+def _get_db(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if not current_user.hospital_id:
         raise ValidationException(detail="Hospital context required")
-    return hid
-
-
-def _get_db(hospital_id: str = Depends(_get_hospital_id)):
-    gen = get_hospital_db(hospital_id)
+    gen = get_hospital_db(current_user.hospital_id)
     db = next(gen)
     try:
         yield db
@@ -68,10 +65,10 @@ def list_entries(
 @router.post("/entries", response_model=schemas.EntryResponse)
 def create_entry(
     data: schemas.EntryCreate,
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(_get_db),
 ):
-    return service.create_entry(db, hospital_id, data.title, data.content, data.category_id)
+    return service.create_entry(db, current_user.hospital_id, data.title, data.content, data.category_id)
 
 
 @router.get("/entries/{entry_id}", response_model=schemas.EntryResponse)
@@ -86,10 +83,10 @@ def get_entry(entry_id: int, db: Session = Depends(_get_db)):
 def update_entry(
     entry_id: int,
     data: schemas.EntryUpdate,
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(_get_db),
 ):
-    entry = service.update_entry(db, hospital_id, entry_id, data.title, data.content, data.category_id)
+    entry = service.update_entry(db, current_user.hospital_id, entry_id, data.title, data.content, data.category_id)
     if not entry:
         raise NotFoundException(detail="Entry not found")
     return entry
@@ -98,10 +95,10 @@ def update_entry(
 @router.delete("/entries/{entry_id}")
 def delete_entry(
     entry_id: int,
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(_get_db),
 ):
-    if not service.delete_entry(db, hospital_id, entry_id):
+    if not service.delete_entry(db, current_user.hospital_id, entry_id):
         raise NotFoundException(detail="Entry not found")
     return {"status": "deleted"}
 
@@ -110,7 +107,7 @@ def delete_entry(
 def import_document(
     file: UploadFile = File(...),
     category_id: Optional[int] = Query(None),
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(_get_db),
 ):
     allowed_exts = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md"}
@@ -118,14 +115,14 @@ def import_document(
     if ext.lower() not in allowed_exts:
         raise ValidationException(detail=f"Unsupported format. Allowed: {allowed_exts}")
 
-    storage_dir = os.path.join(settings.FILE_STORAGE_ROOT, hospital_id, "knowledge")
+    storage_dir = os.path.join(settings.FILE_STORAGE_ROOT, current_user.hospital_id, "knowledge")
     os.makedirs(storage_dir, exist_ok=True)
     tmp_path = os.path.join(storage_dir, f"{uuid.uuid4().hex}{ext}")
     with open(tmp_path, "wb") as f:
         f.write(file.file.read())
 
     try:
-        count = service.import_from_file(db, hospital_id, tmp_path, file.filename, category_id)
+        count = service.import_from_file(db, current_user.hospital_id, tmp_path, file.filename, category_id)
         return {"imported": count, "filename": file.filename}
     except Exception as e:
         raise ValidationException(detail=f"Import failed: {str(e)}")
@@ -134,7 +131,7 @@ def import_document(
 @router.post("/reindex/{category_id}")
 def reindex_category(
     category_id: int,
-    hospital_id: str = Depends(_get_hospital_id),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    service.reindex_category(hospital_id, category_id)
+    service.reindex_category(current_user.hospital_id, category_id)
     return {"status": "reindexed", "category_id": category_id}

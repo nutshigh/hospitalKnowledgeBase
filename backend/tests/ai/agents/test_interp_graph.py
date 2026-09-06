@@ -200,8 +200,8 @@ def test_merge_citations_dedup_renumber():
 def test_generate_report_empty_abnormal_returns_empty_report():
     """无异常指标时返回空 5 节报告 + 空引用"""
     from app.ai.agents.interp_graph import _generate_report
-    state = {"abnormal_indicators": [], "knowledge_results": {}, "user_id": 1,
-             "hospital_id": "H001", "report_id": 1, "overall_level": "green",
+    state = {"abnormal_indicators": [], "knowledge_results": {}, "user_id": "123456",
+             "name": "张三", "hospital_id": "H001", "report_id": 1, "overall_level": "green",
              "red_count": 0, "yellow_count": 0, "green_count": 5}
     result = _generate_report(state, MagicMock())
     assert result["report"].overall_summary == ""
@@ -221,7 +221,7 @@ def test_generate_report_with_abnormal_calls_llm_and_injects():
                                  "deviation": "high", "color_level": "yellow"}],
         "knowledge_results": {12: {"entry_id": 12, "title": "ALT 知识", "source": "document",
                                     "content": "ALT 升高常见于脂肪肝"}},
-        "user_id": 1, "hospital_id": "H001", "report_id": 1,
+        "user_id": "123456", "name": "张三", "hospital_id": "H001", "report_id": 1,
         "overall_level": "yellow", "red_count": 0, "yellow_count": 1, "green_count": 10,
     }
 
@@ -250,7 +250,7 @@ def test_generate_report_increments_judge_retry_count_on_abnormal_branch():
                                  "deviation": "high", "color_level": "yellow"}],
         "knowledge_results": {12: {"entry_id": 12, "title": "ALT 知识", "source": "document",
                                     "content": "ALT 升高"}},
-        "user_id": 1, "hospital_id": "H001", "report_id": 1,
+        "user_id": "123456", "name": "张三", "hospital_id": "H001", "report_id": 1,
         "overall_level": "yellow", "red_count": 0, "yellow_count": 1, "green_count": 10,
         "judge_retry_count": 0,
     }

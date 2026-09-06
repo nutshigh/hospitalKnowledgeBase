@@ -6,7 +6,8 @@ class ChatSession(Base):
     __tablename__ = "chat_session"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=False)
+    user_id = Column(String(16), nullable=False)
+    name = Column(String(50), nullable=True)
     hospital_id = Column(String(32), nullable=False)
     report_id = Column(BigInteger, nullable=True)
     title = Column(String(200), nullable=True)

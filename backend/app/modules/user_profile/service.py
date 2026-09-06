@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -21,27 +22,48 @@ TOP_ABNORMAL_FOR_PROMPT = 5
 STATUS_STABLE_PCT = 5
 
 
-def _auto_select_baseline(db: Session, user_id: int, report_id: int) -> Optional[ReportInfo]:
-    """选 report_date 早于本报告且最接近的那一份,fallback created_at。"""
+def _auto_select_baseline(db: Session, user_id: str, name: str, report_id: int) -> Optional[ReportInfo]:
+    """选基线报告。优先取 report_date 早于当前报告且最接近的一份;fallback created_at。
+
+    2026-09-02 起允许选任意报告:当前报告为该用户最早一份(无更早 report_date)时,
+    不再返回 None(否则前端对比卡片整卡隐藏、连下拉框都看不到),而是退化为该用户
+    report_date 与该报告日期最接近的另一份报告作默认基线。全部无日期则取最近创建。
+    """
     current = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
     if not current:
         return None
-    q = db.query(ReportInfo).filter(
+    others = db.query(ReportInfo).filter(
         ReportInfo.user_id == user_id,
+        ReportInfo.name == name,
         ReportInfo.id != report_id,
-    )
-    if current.report_date:
-        q = q.filter(ReportInfo.report_date < current.report_date)
-        q = q.order_by(ReportInfo.report_date.desc())
-    else:
-        q = q.order_by(ReportInfo.created_at.desc())
-    return q.first()
+    ).all()
+    if not others:
+        return None
+
+    def _ct(o: ReportInfo):
+        return o.created_at or datetime.min
+
+    if current.report_date is None:
+        return max(others, key=_ct)
+
+    dated = [o for o in others if o.report_date]
+    if not dated:
+        return max(others, key=_ct)
+
+    earlier = [o for o in dated if o.report_date < current.report_date]
+    if earlier:
+        return max(earlier, key=lambda o: (o.report_date, _ct(o)))
+
+    min_days = min(abs((o.report_date - current.report_date).days) for o in dated)
+    nearest = [o for o in dated if abs((o.report_date - current.report_date).days) == min_days]
+    return max(nearest, key=_ct)
 
 
-def get_overview(db: Session, user_id: int) -> dict:
+def get_overview(db: Session, user_id: str, name: str) -> dict:
     """档案页主数据:总览 + 指标走势 + 异常分布。"""
     reports = db.query(ReportInfo).filter(
         ReportInfo.user_id == user_id,
+        ReportInfo.name == name,
     ).order_by(ReportInfo.report_date.asc()).all()
     if not reports:
         return {"user_summary": None, "indicator_trends": [], "abnormal_distribution": []}
@@ -94,10 +116,10 @@ def get_overview(db: Session, user_id: int) -> dict:
         JOIN report_interpretation ri2 ON ij.interpretation_id = ri2.id
         JOIN report_info ri ON ri2.report_id = ri.id
         JOIN report_indicator rind ON ij.indicator_id = rind.id
-        WHERE ri.user_id = :uid AND ij.color_level IN ('red', 'yellow')
+        WHERE ri.user_id = :uid AND ri.name = :name AND ij.color_level IN ('red', 'yellow')
         GROUP BY ij.item_name, rind.item_name_standard, ij.color_level
     """)
-    rows = db.execute(abnormal_dist_q, {"uid": user_id}).fetchall()
+    rows = db.execute(abnormal_dist_q, {"uid": user_id, "name": name}).fetchall()
     grouped = {}
     for r in rows:
         key = r.item_name_standard or r.item_name
@@ -129,7 +151,7 @@ def get_overview(db: Session, user_id: int) -> dict:
         "latest_green": latest_interp.green_count if latest_interp else 0,
         "baseline_date": None,
     }
-    baseline = _auto_select_baseline(db, user_id, latest.id)
+    baseline = _auto_select_baseline(db, user_id, name, latest.id)
     if baseline:
         summary["baseline_date"] = baseline.report_date.isoformat() if baseline.report_date else None
 
@@ -273,25 +295,25 @@ def _filter_abnormal_top(diff_result: dict) -> list[dict]:
     return sorted(indicators, key=sort_key)[:TOP_ABNORMAL_FOR_PROMPT]
 
 
-def get_comparison(db: Session, user_id: int, report_id: int,
+def get_comparison(db: Session, user_id: str, name: str, report_id: int,
                    baseline_id: Optional[int] = None) -> dict:
     """对比接口主入口。附带 ai_summary(走缓存命中逻辑)。
 
     Raises:
-        NotFoundException: 当前报告 user_id+report_id 不匹配
+        NotFoundException: 当前报告 user_id+name+report_id 不匹配
         ValidationException: 指定 baseline_id 但非该 user 历史报告
     """
-    current = db.query(ReportInfo).filter_by(id=report_id, user_id=user_id).first()
+    current = db.query(ReportInfo).filter_by(id=report_id, user_id=user_id, name=name).first()
     if not current:
         from app.utils.exceptions import NotFoundException
         raise NotFoundException(detail="Report not found")
     if baseline_id:
-        baseline = db.query(ReportInfo).filter_by(id=baseline_id, user_id=user_id).first()
+        baseline = db.query(ReportInfo).filter_by(id=baseline_id, user_id=user_id, name=name).first()
         if not baseline:
             from app.utils.exceptions import ValidationException
             raise ValidationException(detail="Baseline report not found or not owned by user")
     else:
-        baseline = _auto_select_baseline(db, user_id, report_id)
+        baseline = _auto_select_baseline(db, user_id, name, report_id)
         if not baseline:
             return {
                 "current": {
@@ -323,18 +345,18 @@ def get_comparison(db: Session, user_id: int, report_id: int,
     return diff_out
 
 
-def get_ai_summary(db: Session, user_id: int, report_id: int, baseline_id: int) -> tuple[str, bool]:
+def get_ai_summary(db: Session, user_id: str, name: str, report_id: int, baseline_id: int) -> tuple[str, bool]:
     """读缓存或调 LLM 实时生成。实时生成不写回缓存。
 
     Raises:
         NotFoundException: 当前报告不存在或不属于该用户
         ValidationException: baseline_id 非该用户历史报告
     """
-    current = db.query(ReportInfo).filter_by(id=report_id, user_id=user_id).first()
+    current = db.query(ReportInfo).filter_by(id=report_id, user_id=user_id, name=name).first()
     if not current:
         from app.utils.exceptions import NotFoundException
         raise NotFoundException(detail="Report not found")
-    baseline = db.query(ReportInfo).filter_by(id=baseline_id, user_id=user_id).first()
+    baseline = db.query(ReportInfo).filter_by(id=baseline_id, user_id=user_id, name=name).first()
     if not baseline:
         from app.utils.exceptions import ValidationException
         raise ValidationException(detail="Baseline report not found or not owned by user")
@@ -378,7 +400,7 @@ def try_generate_comparison_summary(db: Session, report_id: int) -> None:
     if interp.comparison_summary and interp.comparison_baseline_id:
         return
 
-    baseline = _auto_select_baseline(db, current.user_id, report_id)
+    baseline = _auto_select_baseline(db, current.user_id, current.name, report_id)
     if not baseline:
         return
 

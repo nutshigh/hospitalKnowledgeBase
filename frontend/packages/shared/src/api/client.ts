@@ -27,3 +27,5 @@ export const createApiClient = (getToken: () => string | null): AxiosInstance =>
 
   return client;
 };
+
+export type ApiClient = AxiosInstance;

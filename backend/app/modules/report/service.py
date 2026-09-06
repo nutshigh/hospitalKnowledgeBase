@@ -13,12 +13,14 @@ from app.core.image_preprocess import preprocess
 from app.core.rabbitmq import rabbitmq, TaskMessage
 
 
-def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
+def create_task(db: Session, hospital_id: str, user_id: str, file_path: str,
                 filename: str, file_type: str, file_size: int,
+                name: Optional[str] = None,
                 thumbnail_path: Optional[str] = None,
                 priority: str = "normal",
                 batch_id: Optional[str] = None,
-                file_id: Optional[str] = None) -> ReportTask:
+                file_id: Optional[str] = None,
+                batch_hospital_id: Optional[str] = None) -> ReportTask:
     # 向后兼容: legacy int priority(0=normal, 1=urgent)
     if isinstance(priority, int):
         priority = "urgent" if priority else "normal"
@@ -34,7 +36,7 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
     db.refresh(task)
 
     # Create report_info immediately so it appears on home page
-    report = ReportInfo(task_id=task.id, user_id=user_id)
+    report = ReportInfo(task_id=task.id, user_id=user_id, name=name)
     db.add(report)
     db.commit()
 
@@ -43,6 +45,8 @@ def create_task(db: Session, hospital_id: str, user_id: int, file_path: str,
         payload["batch_id"] = batch_id
     if file_id is not None:
         payload["file_id"] = file_id
+    if batch_hospital_id is not None:
+        payload["batch_hospital_id"] = batch_hospital_id
     rabbitmq.publish(TaskMessage(
         task_type="parsing", hospital_id=hospital_id, priority=priority,
         payload=payload,
@@ -56,7 +60,8 @@ def get_task_status(db: Session, task_id: int) -> Optional[ReportTask]:
 
 def process_task(db: Session, task_id: int, hospital_id: str,
                  batch_id: Optional[str] = None,
-                 file_id: Optional[str] = None):
+                 file_id: Optional[str] = None,
+                 batch_hospital_id: Optional[str] = None):
     task = get_task_status(db, task_id)
     if not task:
         return
@@ -96,6 +101,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     "unit": ind.get("unit", ""),
                     "ref_low": ind.get("ref_low"),
                     "ref_high": ind.get("ref_high"),
+                    "category": ind.get("category"),
                 }
                 for ind in raw_indicators
             ])
@@ -110,7 +116,11 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         if not report:
             report = ReportInfo(task_id=task.id, user_id=task.user_id)
             db.add(report)
-        report.name = personal_info.get("name")
+        # 归属锚定名:name 仅在空时回填(单份上传已写入登录账号锚定名,不覆盖)
+        if not report.name:
+            report.name = personal_info.get("name")
+        # 展示名:parsed_name 始终取 PDF 解析出的真实姓名
+        report.parsed_name = personal_info.get("name")
         report.gender = personal_info.get("gender")
         report.age = personal_info.get("age")
         report.report_date = personal_info.get("check_date")
@@ -119,6 +129,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         db.commit()
         db.refresh(report)
 
+        from app.core.indicator_groups import normalize_panel
         for ind in indicators:
             db.add(ReportIndicator(
                 report_id=report.id,
@@ -129,6 +140,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 unit=ind.get("unit"),
                 ref_range_low=ind.get("ref_low"),
                 ref_range_high=ind.get("ref_high"),
+                category=normalize_panel(ind.get("category")),
                 raw_text=ind.get("raw_text"),
             ))
         db.commit()
@@ -144,6 +156,8 @@ def process_task(db: Session, task_id: int, hospital_id: str,
             payload["batch_id"] = batch_id
         if file_id is not None:
             payload["file_id"] = file_id
+        if batch_hospital_id is not None:
+            payload["batch_hospital_id"] = batch_hospital_id
         rabbitmq.publish(TaskMessage(
             task_type="interpretation", hospital_id=hospital_id, priority=publish_priority,
             payload=payload,
@@ -206,6 +220,8 @@ async def _parse_text_with_llm_async(text: str) -> dict:
 
 
 def _build_parse_prompt(text: str) -> str:
+    from app.core.indicator_groups import PANEL_HINTS
+    allowed = "\n   - ".join(["", *PANEL_HINTS])
     return f"""从以下体检报告文本中提取信息，返回 JSON 格式（不要 Markdown 代码块）：
 
 {{
@@ -214,7 +230,7 @@ def _build_parse_prompt(text: str) -> str:
   "age": 年龄数字或null,
   "report_date": "YYYY-MM-DD或null",
   "indicators": [
-    {{"item_name": "指标名称", "result": "检测结果", "unit": "单位", "ref_low": "参考下限", "ref_high": "参考上限"}}
+    {{"item_name": "指标名称", "result": "检测结果", "unit": "单位", "ref_low": "参考下限", "ref_high": "参考上限", "category": "所属栏目"}}
   ]
 }}
 
@@ -224,7 +240,10 @@ def _build_parse_prompt(text: str) -> str:
 3. 年龄：从"XX岁"提取数字
 4. 参考范围如"3.5-9.5"→ref_low="3.5", ref_high="9.5"；如"<5.0"→ref_low="", ref_high="5.0"
 5. 只提取化验指标数据（血常规、生化、免疫等），不提取问卷、个人信息
-6. 没有的字段填 null
+6. 每条指标必须给 category：该指标所属栏目，只能取下面列出的取值中最接近的一项，不能自创、不能附加说明文字：
+{allowed}
+   表格上方的栏目标题通常已给出栏目，如"尿常规"、"血常规（体检）,糖化血红蛋白"（一个标题含多个栏目时按各指标归属拆标：血常规行→血常规，全血糖化血红蛋白测定→糖化血红蛋白）；找不到任何合适栏目时 category 填 null
+7. 没有的字段填 null
 
 体检报告文本：
 {text[:24000]}
@@ -270,12 +289,15 @@ def _file_to_base64_list(file_path: str, file_type: str) -> list[str]:
         raise ValueError(f"Cannot convert file_type={file_type} to images")
 
 
-def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
+def list_reports(db: Session, hospital_id: str, user_id: Optional[str] = None,
+                 name: Optional[str] = None,
                  page: int = 1, page_size: int = 20) -> tuple:
     from sqlalchemy.orm import joinedload
     q = db.query(ReportInfo)
     if user_id:
         q = q.filter(ReportInfo.user_id == user_id)
+        if name:
+            q = q.filter(ReportInfo.name == name)
     total = q.count()
     items = q.order_by(ReportInfo.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     # Attach task status to each report
@@ -299,10 +321,18 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[int] = None,
     for r in items:
         task = tasks.get(r.task_id)
         interp = interps.get(r.id)
+        # 展示名:解析出真实姓名优先;解析中(未完成)不泄露账号锚定名→空;
+        # 已完成但未抽出姓名(旧数据/无姓名 PDF)→回退归属锚定名。
+        if r.parsed_name:
+            display_name = r.parsed_name
+        elif task and task.status in ("queued", "parsing"):
+            display_name = None
+        else:
+            display_name = r.name
         results.append({
             "id": r.id,
             "task_id": r.task_id,
-            "name": r.name,
+            "name": display_name,
             "gender": r.gender,
             "age": r.age,
             "report_date": r.report_date,

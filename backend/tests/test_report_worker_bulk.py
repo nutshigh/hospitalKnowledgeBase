@@ -60,7 +60,7 @@ def env():
 
 def _make_task(db, retry_count=0, status="queued", hospital_id="H001"):
     t = ReportTask(
-        user_id=1, original_file_path="/tmp/x.pdf", original_filename="x.pdf",
+        user_id="123456", original_file_path="/tmp/x.pdf", original_filename="x.pdf",
         file_type="pdf", file_size=10, status=status,
         priority=0, retry_count=retry_count,
     )
@@ -118,7 +118,8 @@ def test_retry_count_1_publish_retry(env):
     t = _make_task(s, retry_count=0)
     _make_batch_file(s)
 
-    def _fail(db, task_id, hospital_id, batch_id=None, file_id=None):
+    def _fail(db, task_id, hospital_id, batch_id=None, file_id=None,
+              batch_hospital_id=None):
         tt = s.query(ReportTask).get(task_id)
         tt.retry_count += 1
         tt.status = "queued"
@@ -153,7 +154,8 @@ def test_retry_count_3_raises_and_failed(env):
     t = _make_task(s, retry_count=2)  # 本次 process 会增到 3
     _make_batch_file(s)
 
-    def _fail(db, task_id, hospital_id, batch_id=None, file_id=None):
+    def _fail(db, task_id, hospital_id, batch_id=None, file_id=None,
+              batch_hospital_id=None):
         tt = s.query(ReportTask).get(task_id)
         tt.retry_count += 1
         tt.status = "failed"

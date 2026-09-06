@@ -20,7 +20,8 @@ class AgentContext:
     """
     hospital_id: str
     report_id: Optional[int] = None
-    user_id: Optional[int] = None
+    user_id: Optional[str] = None
+    name: Optional[str] = None
 
 
 def _db(hospital_id: str) -> Session:
@@ -73,9 +74,9 @@ def get_report_indicators(runtime: ToolRuntime[AgentContext]) -> list[dict]:
 
 @tool
 def get_report_summary(runtime: ToolRuntime[AgentContext]) -> dict:
-    """获取当前会话关联报告的概览信息（报告日期、整体判定、红黄绿计数）。
+    """获取当前会话关联报告的概览信息（报告日期、整体判定、红黄绿计数、异常指标明细）。
     Returns:
-        含 report_date/overall_level/red_count/yellow_count/green_count 的 dict
+        含 report_date/overall_level/red_count/yellow_count/green_count/abnormal_indicators 的 dict
     """
     report_id = runtime.context.report_id
     if not report_id:
@@ -83,18 +84,31 @@ def get_report_summary(runtime: ToolRuntime[AgentContext]) -> dict:
     db = _db(runtime.context.hospital_id)
     try:
         row = db.execute(
-            text("SELECT r.report_date, r.name, i.overall_level, i.red_count, i.yellow_count, i.green_count "
+            text("SELECT r.report_date, r.name, i.overall_level, i.red_count, i.yellow_count, i.green_count, "
+                 "i.id AS interp_id "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
                  "WHERE r.id = :rid"),
             {"rid": report_id},
         ).fetchone()
+        abnormal = []
+        if row and row[6]:
+            abnormal = db.execute(
+                text("SELECT item_name, result_value, deviation, color_level "
+                     "FROM indicator_judgment WHERE interpretation_id = :iid "
+                     "AND color_level != 'green' ORDER BY color_level, item_name"),
+                {"iid": row[6]},
+            ).fetchall()
     finally:
         db.close()
     if not row:
         return {}
     return {"report_date": str(row[0]) if row[0] else None, "name": row[1],
             "overall_level": row[2], "red_count": row[3],
-            "yellow_count": row[4], "green_count": row[5]}
+            "yellow_count": row[4], "green_count": row[5],
+            "abnormal_indicators": [
+                {"item_name": r[0], "result_value": r[1], "deviation": r[2], "color_level": r[3]}
+                for r in abnormal
+            ]}
 
 
 @tool
@@ -106,15 +120,16 @@ def get_user_history_reports(runtime: ToolRuntime[AgentContext], limit: int = 5)
          报告列表，每项含 report_id/report_date/overall_level
     """
     user_id = runtime.context.user_id
-    if not user_id:
+    name = runtime.context.name
+    if not user_id or not name:
         return [{"error": "无法识别当前用户"}]
     db = _db(runtime.context.hospital_id)
     try:
         rows = db.execute(
             text("SELECT r.id, r.report_date, i.overall_level "
                  "FROM report_info r LEFT JOIN report_interpretation i ON i.report_id = r.id "
-                 "WHERE r.user_id = :uid ORDER BY r.report_date DESC LIMIT :lim"),
-            {"uid": user_id, "lim": limit},
+                 "WHERE r.user_id = :uid AND r.name = :nm ORDER BY r.report_date DESC LIMIT :lim"),
+            {"uid": user_id, "nm": name, "lim": limit},
         ).fetchall()
     finally:
         db.close()
@@ -131,7 +146,8 @@ def get_indicator_history(item_name: str, runtime: ToolRuntime[AgentContext]) ->
         历史数值列表，每项含 date/value/unit
     """
     user_id = runtime.context.user_id
-    if not user_id:
+    name = runtime.context.name
+    if not user_id or not name:
         return [{"error": "无法识别当前用户"}]
     db = _db(runtime.context.hospital_id)
     try:
@@ -139,9 +155,9 @@ def get_indicator_history(item_name: str, runtime: ToolRuntime[AgentContext]) ->
             text("SELECT ri.report_date, ind.result_value, ind.unit "
                  "FROM report_indicator ind "
                  "JOIN report_info ri ON ind.report_id = ri.id "
-                 "WHERE ri.user_id = :uid AND ind.item_name = :name "
+                 "WHERE ri.user_id = :uid AND ri.name = :nm AND ind.item_name = :name "
                  "ORDER BY ri.report_date ASC"),
-            {"uid": user_id, "name": item_name},
+            {"uid": user_id, "nm": name, "name": item_name},
         ).fetchall()
     finally:
         db.close()
