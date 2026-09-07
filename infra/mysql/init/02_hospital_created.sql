@@ -189,5 +189,35 @@ BEGIN
         'REFERENCES `', @db_name, '`.batch_import(id)'
         ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.followup ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, '
+        'user_id VARCHAR(16) NOT NULL, name VARCHAR(50), '
+        'overall_level VARCHAR(10) NOT NULL, status VARCHAR(16) NOT NULL DEFAULT ''pending'', '
+        'recheck_indicators_json JSON DEFAULT NULL, template_name VARCHAR(100), '
+        'generated_at DATETIME DEFAULT CURRENT_TIMESTAMP, submitted_at DATETIME DEFAULT NULL, '
+        'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, '
+        'UNIQUE KEY uq_followup_report (report_id), KEY idx_followup_user (user_id, name)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.followup_question ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, followup_id BIGINT NOT NULL, '
+        'question_type VARCHAR(10) NOT NULL, question_text VARCHAR(500) NOT NULL, '
+        'options JSON DEFAULT NULL, is_required TINYINT NOT NULL DEFAULT 1, '
+        'sort_order INT NOT NULL DEFAULT 0, answer TEXT DEFAULT NULL, answered_at DATETIME DEFAULT NULL, '
+        'KEY idx_fq_followup (followup_id)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.user_notification ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, name VARCHAR(50), '
+        'category VARCHAR(24) NOT NULL, title VARCHAR(200) NOT NULL, content JSON NOT NULL, '
+        'ref_report_id BIGINT DEFAULT NULL, ref_followup_id BIGINT DEFAULT NULL, '
+        'is_read TINYINT NOT NULL DEFAULT 0, read_at DATETIME DEFAULT NULL, '
+        'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, '
+        'KEY idx_un_user_created (user_id, name, created_at)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 END//
 DELIMITER ;
