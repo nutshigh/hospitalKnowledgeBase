@@ -1,6 +1,6 @@
 import { Layout, Menu, Button } from 'antd';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { DashboardOutlined, BarChartOutlined, LogoutOutlined } from '@ant-design/icons';
+import { DashboardOutlined, BarChartOutlined, LogoutOutlined, ProfileOutlined } from '@ant-design/icons';
 import { useAdminStore } from '../stores/adminStore';
 
 const { Header, Sider, Content } = Layout;
@@ -9,11 +9,13 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout } = useAdminStore();
-  const currentKey = location.pathname === '/group-analysis' ? 'group-analysis' : 'dashboard';
+  const currentKey = location.pathname === '/group-analysis' ? 'group-analysis'
+    : location.pathname === '/followup-template' ? 'followup-template' : 'dashboard';
 
   const menuItems = [
     { key: 'dashboard', icon: <DashboardOutlined />, label: '已接入医院', onClick: () => navigate('/') },
     { key: 'group-analysis', icon: <BarChartOutlined />, label: '团体分析', onClick: () => navigate('/group-analysis') },
+    { key: 'followup-template', icon: <ProfileOutlined />, label: '随访问卷模板', onClick: () => navigate('/followup-template') },
   ];
 
   return (
