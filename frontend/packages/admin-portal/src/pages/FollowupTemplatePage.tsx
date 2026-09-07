@@ -19,7 +19,8 @@ export default function FollowupTemplatePage() {
     getTemplate().then(t => {
       const base = t.id ? t : { ...t, name: "通用检后随访" };
       setTpl({ ...base, questions: (t.questions || []).length ? t.questions : [] });
-    }).finally(() => setLoading(false));
+    }).catch(() => message.error("模板加载失败,请重试"))
+      .finally(() => setLoading(false));
   }, []);
 
   const patchQ = (idx: number, patch: Partial<TemplateQuestion>) => {

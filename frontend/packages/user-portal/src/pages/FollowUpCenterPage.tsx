@@ -44,10 +44,12 @@ export default function FollowUpCenterPage() {
   useEffect(() => { load(); refreshBadge(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   const readAll = async () => {
-    await api.post('/notifications/read-all');
-    setNotifs(notifs.map(x => ({ ...x, is_read: true })));
-    refreshBadge();
-    message.success('已全部标记为已读');
+    try {
+      await api.post('/notifications/read-all');
+      setNotifs(notifs.map(x => ({ ...x, is_read: true })));
+      refreshBadge();
+      message.success('已全部标记为已读');
+    } catch { message.error('操作失败,请重试'); }
   };
 
   if (loading) return <Layout title="随访"><div style={{ textAlign: 'center', padding: 60 }}><Spin /></div></Layout>;
@@ -115,7 +117,13 @@ export default function FollowUpCenterPage() {
                     borderRadius: 'var(--radius-sm)', marginBottom: 6,
                     cursor: 'pointer',
                   }} onClick={async () => {
-                    if (!n.is_read) { await api.post(`/notifications/${n.id}/read`); refreshBadge(); load(); }
+                    if (!n.is_read) {
+                      try {
+                        await api.post(`/notifications/${n.id}/read`);
+                        refreshBadge();
+                        load();
+                      } catch { message.error('操作失败,请重试'); }
+                    }
                   }}>
                     <span style={{ fontSize: 13 }}>{n.is_read ? '✓' : '●'}</span>
                     <span style={{ fontSize: 13 }}>{n.title}</span>
