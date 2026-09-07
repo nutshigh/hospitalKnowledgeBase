@@ -92,7 +92,7 @@ export default function ReportDetailPage() {
         loading={!interp || interp.status !== 'completed'}
         qualityNote={interp?.quality_note}
       />
-      <FollowupPanel reportId={Number(id)} />
+      {interp?.status === 'completed' && <FollowupPanel reportId={Number(id)} />}
     </DoctorLayout>
   );
 }
