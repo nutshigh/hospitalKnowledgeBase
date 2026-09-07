@@ -5,7 +5,8 @@
 >
 > 核心路径：**app-login 免密登录** —— 外部系统持应用级密钥 `APP_API_KEY`，用
 > `姓名 + 身份证后六位` 为任意用户换一个与普通登录完全一致的 JWT，之后对
-> `/api/v1/reports/*`、`/api/v1/chat/*`、`/api/v1/profile/*`、`/api/v1/interpretations/*`
+> `/api/v1/reports/*`、`/api/v1/chat/*`、`/api/v1/profile/*`、`/api/v1/interpretations/*`、
+> `/api/v1/followup/*`、`/api/v1/notifications/*`
 > 的调用**零改动复用现有 Bearer 认证**。
 >
 > 关联文档：
@@ -181,6 +182,11 @@ GET /api/v1/reports/{report_id}
 `item_name`、`item_name_standard`、`item_code`、`result_value`、`unit`、
 `ref_range_low`、`ref_range_high`、`category`。
 
+> **指标模块分组（2026-09-07 起）**：`indicators[]` 每项另带 `group`（该指标归属的体检
+> 模块名，如「血常规」「肝功能」，未识别模块归 `"其他"`）；响应顶层带 `module_order`
+> （模块有序数组，即 Excel 体检采集模板 row2 顺序）。建议 App 按 `module_order` 分组、
+> 组内再按返回顺序渲染并支持折叠，与 user-portal 报告详情一致。
+
 ### 5.3 单份报告上传
 
 ```
@@ -243,10 +249,15 @@ GET /api/v1/interpretations/{report_id}
 | summaries | object | 见下 |
 | references | list | 引用条目 |
 | quality_note | string\|null | 质控说明 |
-| indicators | list | 指标判定（含 color_level/deviation/explanation/suggestion） |
+| indicators | list | 指标判定（含 color_level/deviation/explanation/suggestion/group） |
+| module_order | list | 指标归属模块有序数组（Excel row2 顺序；`group` 参照） |
 | created_at / completed_at | datetime | 时间 |
 
 `summaries` 字段：`overall_summary`、`abnormal_focus`、`trend_note`、`suggestions`、`risk_alert`。
+
+> **模块分组（2026-09-07 起）**：`indicators[]` 每项带 `group`（体检模块名，未识别归
+> `"其他"`），与 `GET /reports/{id}` 一致；顶层 `module_order` 给出展示顺序。App 可按模块
+> 分组折叠展示异常指标。
 
 ---
 
@@ -350,6 +361,46 @@ GET /api/v1/profile/ai-summary?report_id=<required>&baseline_id=<required>
 
 响应：`{ "ai_summary": "<文本>", "cached": <bool> }`。
 
+### 8.4 检后随访与复查提醒 `followup` / `notifications`
+
+解读完成后，若报告整体风险为**红或黄**（`overall_level ∈ red/yellow`），系统自动为该报告
+生成一份**随访问卷**与一条**复查提醒**（站内通知）。两者**按报告各建各的**，仅在解读完成时
+生成一次；**无后台推送**，App 用下列接口轮询/拉取即可。提示：请结合
+`GET /interpretations/{report_id}` 一起使用（提醒列出需复查的黄/红指标，问卷用于症状/生活
+方式回访）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/followup/center?page=&page_size=` | 我的随访列表（新→旧）。每项含 `id`/`status`(pending/completed)/`overall_level`/`recheck_indicators`(需复查指标快照)/`template_name`/`generated_at`/`submitted_at`；顶层 `has_pending` 供首屏判定 |
+| GET | `/followup/{id}` | 随访问卷表单：逐题 `{id, question_type(single/multiple/text), question_text, options[], is_required, sort_order}`；已完成时带 `answer` |
+| POST | `/followup/{id}/submit` | 提交答卷，body `{answers:[{question_id, answer}]}`。`single` 传选项标签、`multiple` 传标签数组、`text` 传字符串。缺必填/选项非法/重复提交 → **400**（`detail` 中文文案） |
+| GET | `/notifications?page=&page_size=&unread_only=` | 我的通知列表（新→旧），含 `category`/`title`/`content`/`is_read`/`ref_report_id`/`ref_followup_id` |
+| GET | `/notifications/unread-count` | `{unread_count:int}` — 红点/角标轮询（建议 App 存活期每 30s 一次） |
+| POST | `/notifications/{id}/read` | 单条已读，返回 `{status:"ok"}` |
+| POST | `/notifications/read-all` | 全部已读，返回 `{status:"ok"}` |
+
+`content` 结构（App 可直接渲染指标清单）：
+
+```json
+{
+  "report_id": 123,
+  "report_date": "2026-08-30",
+  "overall_level": "yellow",
+  "followup_pending": true,
+  "recheck_indicators": [
+    {"item_name": "甘油三酯", "result_value": "2.8", "unit": "mmol/L",
+     "ref_range": "0.4-1.7", "color_level": "yellow"}
+  ]
+}
+```
+
+行为要点：
+- 均为 `role='user'` + 双锚定接口，app-login JWT **零改动可用**；医院取 JWT，勿传。
+- 生成时把平台激活模板问题与黄/红指标**快照**进问卷，之后改模板不影响已生成问卷。
+- 重复调用/同报告重复提交会 400；问卷提交后置 `completed`，不可再次提交。
+- 存量无后六位用户：`/followup/center` 返回空、`/notifications/unread-count` 返回 0。
+- 删除报告（`DELETE /reports/{id}`）会级联清理其随访/答卷与提醒。
+
 ---
 
 ## 9. 其它
@@ -375,6 +426,10 @@ GET /api/v1/auth/me
 | ReportDetailPage | `GET /reports/{id}`、`GET /interpretations/{id}`、`GET /reports/tasks/{id}`、`DELETE /reports/{id}`、会话创建/消息 |
 | ChatPage / ChatPanel | `GET /chat/sessions`、`POST /chat/sessions`、`GET /chat/sessions/{id}/messages`、`POST /chat/sessions/{id}/messages`(SSE) |
 | ProfilePage | `GET /profile/overview`、`GET /profile/compare`、`GET /profile/ai-summary` |
+| 报告详情指标折叠展示 | `GET /reports/{id}` / `GET /interpretations/{id}` 按 `module_order`+`indicators[].group` 分组折叠渲染 |
+| 随访中心 / 问卷填写 | `GET /followup/center`、`GET /followup/{id}`、`POST /followup/{id}/submit` |
+| 随访 tab 未读红点 | `GET /notifications/unread-count`（每 30s 轮询） |
+| 提醒通知列表 / 已读 | `GET /notifications`、`POST /notifications/{id}/read`、`POST /notifications/read-all` |
 
 ---
 
@@ -383,10 +438,10 @@ GET /api/v1/auth/me
 | 状态码 | 含义 | App 处理建议 |
 |--------|------|-------------|
 | 200 | 成功 | — |
-| 400 | 参数错误 / 存量用户无后六位 | 提示用户/修正入参 |
+| 400 | 参数错误 / 存量用户无后六位 / 问卷重复提交或必填缺失 | 提示用户/修正入参 |
 | 401 | key 错、token 失效、resolver 无匹配 | 重调 app-login 换 token |
 | 403 | 角色不允许（不应发生，app-login 固定 user） | 联系医院方 |
-| 404 | 报告/会话不存在 | 提示后刷新列表 |
+| 404 | 报告/会话/随访不存在 | 提示后刷新列表 |
 | 503 | resolver/后端临时不可用 | 退避重试 |
 
 ---
@@ -397,13 +452,17 @@ GET /api/v1/auth/me
 - [ ] 存量库迁移 `003_user_id_suffix.sql` 已执行
 - [ ] baUser 各 orgId 已在本地注册租户（`hospital_id == str(orgId)`）
 - [ ] `backend/.env` 已配置 `APP_API_KEY` + `EXTERNAL_RESOLVER_URL`
-- [ ] backend + 三个 worker 已重启为新代码，`/health` 全 UP
+- [ ] 检后随访存量库迁移 `006_followup.sql` 已执行（平台库 + hospital_H001-H004/hospital_1）
+- [ ] 平台管理员已在 admin-portal「随访问卷模板」配好激活模板（后续新解读才套用）
+- [ ] backend + worker 已重启为新代码，`/health` 全 UP
 
 ### App 方
 - [ ] `POST /auth/app-login` 用正确 key + 姓名 + 后六位换到 token
 - [ ] 错误 key → 401；非法后六位 → 400
 - [ ] `GET /reports` 返回该用户本人报告
 - [ ] 上传报告 → 轮询任务 → 轮询解读 → 详情可见
+- [ ] 黄/红报告解读完成后：`GET /followup/center` 有 `pending` 随访 + `GET /notifications/unread-count>0`；绿报告不产生
+- [ ] 填问卷 `POST /followup/{id}/submit` 成功 → 该随访 `status=completed`；重复提交 → 400
 - [ ] 建会话 → SSE 发消息 → 收到 token/done 事件
 - [ ] `GET /profile/overview` 返回画像
 - [ ] token 到期后重调 app-login 幂等换新
