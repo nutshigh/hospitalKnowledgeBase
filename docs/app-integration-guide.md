@@ -371,7 +371,7 @@ GET /api/v1/profile/ai-summary?report_id=<required>&baseline_id=<required>
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/followup/center?page=&page_size=` | 我的随访列表（新→旧）。每项含 `id`/`status`(pending/completed)/`overall_level`/`recheck_indicators`(需复查指标快照)/`template_name`/`generated_at`/`submitted_at`；顶层 `has_pending` 供首屏判定 |
+| GET | `/followup/center?page=&page_size=` | 我的随访列表（新→旧）。每项含 `id`/`report_id`/`status`(pending/completed)/`overall_level`/`report_date`(报告日期)/`recheck_indicators`(需复查指标快照)/`template_name`/`generated_at`/`submitted_at`；顶层 `has_pending` 供首屏判定 |
 | GET | `/followup/{id}` | 随访问卷表单：逐题 `{id, question_type(single/multiple/text), question_text, options[], is_required, sort_order}`；已完成时带 `answer` |
 | POST | `/followup/{id}/submit` | 提交答卷，body `{answers:[{question_id, answer}]}`。`single` 传选项标签、`multiple` 传标签数组、`text` 传字符串。缺必填/选项非法/重复提交 → **400**（`detail` 中文文案） |
 | GET | `/notifications?page=&page_size=&unread_only=` | 我的通知列表（新→旧），含 `category`/`title`/`content`/`is_read`/`ref_report_id`/`ref_followup_id` |

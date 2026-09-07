@@ -195,9 +195,14 @@ def list_my_followups(db: Session, uid: str, nm: Optional[str],
     q = db.query(Followup).filter(Followup.user_id == uid, Followup.name == nm)
     total = q.count()
     rows = q.order_by(Followup.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    report_dates: dict = {}
+    if rows:
+        rids = [f.report_id for f in rows]
+        for r in db.query(ReportInfo).filter(ReportInfo.id.in_(rids)).all():
+            report_dates[r.id] = (r.report_date.isoformat() if r.report_date else None)
     items = [{
         "id": f.id, "report_id": f.report_id, "status": f.status,
-        "overall_level": f.overall_level,
+        "overall_level": f.overall_level, "report_date": report_dates.get(f.report_id),
         "recheck_indicators": f.recheck_indicators_json or [],
         "template_name": f.template_name,
         "generated_at": _fmt(f.generated_at), "submitted_at": _fmt(f.submitted_at),
