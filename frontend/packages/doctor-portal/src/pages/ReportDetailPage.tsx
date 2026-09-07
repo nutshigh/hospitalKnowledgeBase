@@ -4,6 +4,7 @@ import { Spin, Card, Tag, Table } from 'antd';
 import { useDoctorStore } from '../stores/doctorStore';
 import DoctorLayout from '../components/DoctorLayout';
 import { InterpretationReportCard } from '@hospital/shared';
+import FollowupPanel from '../components/FollowupPanel';
 
 const COLORS: any = { red: 'red', yellow: 'gold', green: 'green' };
 const DEVIATION_TXT: any = { high: '↑ 偏高', low: '↓ 偏低', normal: '正常' };
@@ -91,6 +92,7 @@ export default function ReportDetailPage() {
         loading={!interp || interp.status !== 'completed'}
         qualityNote={interp?.quality_note}
       />
+      <FollowupPanel reportId={Number(id)} />
     </DoctorLayout>
   );
 }
