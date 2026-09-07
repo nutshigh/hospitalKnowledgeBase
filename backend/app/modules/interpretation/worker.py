@@ -53,6 +53,12 @@ def handle_interpretation_task(message: dict):
                 "interp ok report=%s hospital=%s batch=%s file=%s latency_ms=%d",
                 report_id, hospital_id, batch_id, file_id, latency_ms,
             )
+            # register followup questionnaire + recheck reminder(failures don't affect interp completion)
+            try:
+                from app.modules.followup.service import try_generate_followup
+                try_generate_followup(db, report_id)
+            except Exception as e:
+                print(f"Followup generation failed for report {report_id}: {e}", flush=True)
             # register comparison summary(failures don't affect interp completion)
             try:
                 from app.modules.user_profile.service import (
@@ -64,12 +70,6 @@ def handle_interpretation_task(message: dict):
                     f"Comparison summary failed for report {report_id}: {e}",
                     flush=True,
                 )
-            # register followup questionnaire + recheck reminder(failures don't affect interp completion)
-            try:
-                from app.modules.followup.service import try_generate_followup
-                try_generate_followup(db, report_id)
-            except Exception as e:
-                print(f"Followup generation failed for report {report_id}: {e}", flush=True)
             # 成功 → 计 batch file 进度(interp_ok),落在批次所属库
             if batch_id and file_id:
                 BatchService.update_batch_progress(
