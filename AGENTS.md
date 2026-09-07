@@ -132,6 +132,23 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 - `hospital_not_found`:文件名格式合法,但外部接口(`EXTERNAL_RESOLVER_URL`,baUser searchUser)按 `realName+idCardLast6` 无精确匹配、解析出 orgId 本地未注册、或匹配歧义。**不可重试**。
 - 后端 `retry_failed` 把这三类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
 
+## 检后随访表(2026-09-07 起)
+
+新表 5 张,同样须在三处 DDL 源保持一致:`infra/mysql/init/01_template_db.sql`(平台库
+`followup_template` / `followup_template_question`,平台统一维护单套激活模板)、
+`start.sh` DDL 块与 `infra/mysql/init/02_hospital_created.sql` 存储过程(租户库
+`followup` / `followup_question` / `user_notification`)。存量 5 库迁移见
+`backend/scripts/manual_migrations/006_followup.sql`。
+
+- 触发:解读 worker(`interpretation/worker.py`)在 `run_interpretation_agent` 成功后同步调
+  `try_generate_followup`;仅 `overall_level in (red,yellow)` 且此前无该 report_id 随访时生成。
+- 生成把平台激活模板问题 + 黄/红指标(`indicator_judgment.color_level`)快照进租户库
+  `followup_question` / `followup.recheck_indicators_json`,并写一条 `user_notification`
+  (`category=recheck_reminder`),同事务;无激活模板时跳过(记 `app.followup`)。
+- 用户侧接口在 `backend/app/modules/followup/router.py`,前缀 `/api/v1/followup` 与
+  `/api/v1/notifications`;全部 `role='user'` + 双锚定,App(app-login)直接可用,无真推送。
+- 删除报告时 `report/router.py::delete_report` 调 `delete_report_followup` 清理三张关联表。
+
 ## 批量上传跨院分发:进度与重试跨库定位(2026-09-03 起)
 
 **事实**:批量上传时 `BatchImport`/`BatchImportFile`/进度计数器写在上传方(批次)库,而 `report_task`/`report`/解读跑在**文件名解析出的目标医院库**(可 ≠ 上传方)。若 worker 用目标库记批次进度,会 `file_not_found` 让批次永远卡 `parsing`(2026-09-03 真实故障)。
