@@ -176,3 +176,196 @@ def _do_generate_followup(db: Session, report_id: int) -> bool:
         ref_report_id=report_id, ref_followup_id=fup.id, is_read=0))
     db.commit()
     return True
+
+
+# --------------------------------------------------------------------------
+# 用户侧查询/提交(role='user',双锚定 uid/nm 由路由传入)
+# --------------------------------------------------------------------------
+def _answer_out(q) -> object:
+    if q.question_type == "multiple" and q.answer:
+        try:
+            return json.loads(q.answer)
+        except Exception:
+            return q.answer
+    return q.answer
+
+
+def list_my_followups(db: Session, uid: str, nm: Optional[str],
+                      page: int = 1, page_size: int = 20) -> dict:
+    q = db.query(Followup).filter(Followup.user_id == uid, Followup.name == nm)
+    total = q.count()
+    rows = q.order_by(Followup.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = [{
+        "id": f.id, "report_id": f.report_id, "status": f.status,
+        "overall_level": f.overall_level,
+        "recheck_indicators": f.recheck_indicators_json or [],
+        "template_name": f.template_name,
+        "generated_at": _fmt(f.generated_at), "submitted_at": _fmt(f.submitted_at),
+    } for f in rows]
+    has_pending = (db.query(Followup.id)
+                   .filter(Followup.user_id == uid, Followup.name == nm,
+                           Followup.status == "pending").first() is not None)
+    return {"items": items, "total": total, "page": page,
+            "page_size": page_size, "has_pending": has_pending}
+
+
+def get_followup_detail(db: Session, uid: str, nm: Optional[str], followup_id: int):
+    f = (db.query(Followup).filter(Followup.id == followup_id,
+                                   Followup.user_id == uid, Followup.name == nm).first())
+    if not f:
+        return None
+    qs = (db.query(FollowupQuestion).filter(FollowupQuestion.followup_id == f.id)
+          .order_by(FollowupQuestion.sort_order, FollowupQuestion.id).all())
+    return {
+        "id": f.id, "report_id": f.report_id, "status": f.status,
+        "overall_level": f.overall_level, "template_name": f.template_name,
+        "recheck_indicators": f.recheck_indicators_json or [],
+        "generated_at": _fmt(f.generated_at), "submitted_at": _fmt(f.submitted_at),
+        "questions": [{
+            "id": q.id, "question_type": q.question_type,
+            "question_text": q.question_text, "options": q.options or [],
+            "is_required": bool(q.is_required), "sort_order": q.sort_order,
+            "answer": _answer_out(q),
+        } for q in qs],
+    }
+
+
+def submit_followup(db: Session, uid: str, nm: Optional[str],
+                    followup_id: int, answers: list) -> dict:
+    f = (db.query(Followup).filter(Followup.id == followup_id,
+                                   Followup.user_id == uid, Followup.name == nm).first())
+    if not f:
+        raise NotFoundException(detail="随访问卷不存在")
+    if f.status == "completed":
+        raise ValidationException(detail="问卷已提交,不能重复提交")
+    if not isinstance(answers, list):
+        raise ValidationException(detail="answers 必须是数组")
+    qs = (db.query(FollowupQuestion).filter(FollowupQuestion.followup_id == f.id)
+          .order_by(FollowupQuestion.sort_order, FollowupQuestion.id).all())
+    if not qs:
+        raise ValidationException(detail="问卷无题目")
+    by_qid: dict = {}
+    for it in answers:
+        if not isinstance(it, dict) or it.get("question_id") is None:
+            raise ValidationException(detail="answers 每项需含 question_id")
+        qid = int(it["question_id"])
+        if qid in by_qid:
+            raise ValidationException(detail=f"题目 {qid} 重复提交")
+        by_qid[qid] = it.get("answer")
+    now = datetime.utcnow()
+    for q in qs:
+        ans = by_qid.get(q.id)
+        if isinstance(ans, str):
+            ans = ans.strip()
+        if q.is_required and ans in (None, ""):
+            raise ValidationException(detail=f"题目「{q.question_text}」为必填")
+        if q.question_type in ("single", "multiple"):
+            allowed = list(q.options or [])
+            if ans in (None, ""):
+                ans = None
+            elif q.question_type == "single":
+                if not isinstance(ans, str) or ans not in allowed:
+                    raise ValidationException(detail=f"题目「{q.question_text}」选项不合法")
+            else:
+                lst = ans if isinstance(ans, list) else [ans]
+                if not all(x in allowed for x in lst):
+                    raise ValidationException(detail=f"题目「{q.question_text}」选项不合法")
+                ans = lst
+        elif q.question_type == "text":
+            if ans is not None and not isinstance(ans, str):
+                raise ValidationException(detail=f"题目「{q.question_text}」需文本回答")
+            if ans is not None and len(ans) > 2000:
+                raise ValidationException(detail=f"题目「{q.question_text}」回答过长")
+        q.answer = json.dumps(ans, ensure_ascii=False) if isinstance(ans, list) else ans
+        q.answered_at = now
+    f.status = "completed"
+    f.submitted_at = now
+    db.commit()
+    return get_followup_detail(db, uid, nm, followup_id)
+
+
+# --------------------------------------------------------------------------
+# 通知(role='user')
+# --------------------------------------------------------------------------
+def list_my_notifications(db: Session, uid: str, nm: Optional[str],
+                          page: int = 1, page_size: int = 20,
+                          unread_only: bool = False) -> dict:
+    q = db.query(UserNotification).filter(UserNotification.user_id == uid,
+                                          UserNotification.name == nm)
+    if unread_only:
+        q = q.filter(UserNotification.is_read == 0)
+    total = q.count()
+    rows = q.order_by(UserNotification.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = [{
+        "id": n.id, "category": n.category, "title": n.title,
+        "content": n.content, "is_read": bool(n.is_read),
+        "ref_report_id": n.ref_report_id, "ref_followup_id": n.ref_followup_id,
+        "created_at": _fmt(n.created_at),
+    } for n in rows]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+def count_unread(db: Session, uid: str, nm: Optional[str]) -> int:
+    return (db.query(UserNotification.id)
+            .filter(UserNotification.user_id == uid, UserNotification.name == nm,
+                    UserNotification.is_read == 0).count())
+
+
+def mark_notification_read(db: Session, uid: str, nm: Optional[str], nid: int) -> bool:
+    n = (db.query(UserNotification).filter(UserNotification.id == nid,
+                                          UserNotification.user_id == uid,
+                                          UserNotification.name == nm).first())
+    if not n:
+        return False
+    n.is_read = 1
+    n.read_at = datetime.utcnow()
+    db.commit()
+    return True
+
+
+def mark_all_notifications_read(db: Session, uid: str, nm: Optional[str]) -> int:
+    now = datetime.utcnow()
+    n = (db.query(UserNotification)
+         .filter(UserNotification.user_id == uid, UserNotification.name == nm,
+                 UserNotification.is_read == 0)
+         .update({UserNotification.is_read: 1, UserNotification.read_at: now},
+                 synchronize_session=False))
+    db.commit()
+    return n
+
+
+# --------------------------------------------------------------------------
+# 医生按报告查看(doctor/admin,医院库内 report 维度)
+# --------------------------------------------------------------------------
+def get_followup_by_report(db: Session, report_id: int):
+    f = db.query(Followup).filter(Followup.report_id == report_id).first()
+    if not f:
+        return None
+    qs = (db.query(FollowupQuestion).filter(FollowupQuestion.followup_id == f.id)
+          .order_by(FollowupQuestion.sort_order, FollowupQuestion.id).all())
+    return {
+        "id": f.id, "report_id": f.report_id, "user_id": f.user_id, "name": f.name,
+        "status": f.status, "overall_level": f.overall_level,
+        "template_name": f.template_name,
+        "recheck_indicators": f.recheck_indicators_json or [],
+        "generated_at": _fmt(f.generated_at), "submitted_at": _fmt(f.submitted_at),
+        "questions": [{
+            "id": q.id, "question_type": q.question_type,
+            "question_text": q.question_text, "options": q.options or [],
+            "is_required": bool(q.is_required), "sort_order": q.sort_order,
+            "answer": _answer_out(q),
+        } for q in qs],
+    }
+
+
+# --------------------------------------------------------------------------
+# 删除报告联动(report/router.py delete_report 调用)
+# --------------------------------------------------------------------------
+def delete_report_followup(db: Session, report_id: int) -> None:
+    ids = [r[0] for r in db.query(Followup.id).filter(Followup.report_id == report_id).all()]
+    if ids:
+        db.query(FollowupQuestion).filter(
+            FollowupQuestion.followup_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Followup).filter(Followup.id.in_(ids)).delete(synchronize_session=False)
+    db.query(UserNotification).filter(
+        UserNotification.ref_report_id == report_id).delete(synchronize_session=False)
