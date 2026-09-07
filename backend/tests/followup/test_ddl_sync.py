@@ -10,7 +10,7 @@ TENANT_TABLES = ["followup", "followup_question", "user_notification"]
 def test_platform_tables_in_01_template_db():
     txt = (ROOT / "infra/mysql/init/01_template_db.sql").read_text(encoding="utf-8")
     for t in TEMPLATE_TABLES:
-        assert f"CREATE TABLE IF NOT EXISTS {t}" in txt
+        assert f"CREATE TABLE IF NOT EXISTS {t} " in txt
 
 
 def test_tenant_tables_in_startsh_and_proc():
