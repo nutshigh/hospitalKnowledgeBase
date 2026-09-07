@@ -1,5 +1,5 @@
 """try_generate_followup:触发 / 跳过 / 幂等 / 快照 / 吞错。"""
-from datetime import date, datetime
+from datetime import date
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -160,8 +160,7 @@ def test_failure_swallowed_and_rolled_back(db):
     rid = _seed_red_report(db)
     _seed_template(db)
     with _patch_tdb(db):
-        with patch.object(service, "_load_active_template",
-                          side_effect=RuntimeError("boom")):
+        with patch.object(service, "UserNotification", side_effect=RuntimeError("boom")):
             assert service.try_generate_followup(db, rid) is False
     assert db.query(Followup).count() == 0
     assert db.query(UserNotification).count() == 0

@@ -252,16 +252,20 @@ def submit_followup(db: Session, uid: str, nm: Optional[str],
         if qid in by_qid:
             raise ValidationException(detail=f"题目 {qid} 重复提交")
         by_qid[qid] = it.get("answer")
+    unknown = set(by_qid.keys()) - {q.id for q in qs}
+    if unknown:
+        raise ValidationException(detail="包含不存在的题目")
     now = datetime.utcnow()
     for q in qs:
         ans = by_qid.get(q.id)
         if isinstance(ans, str):
             ans = ans.strip()
-        if q.is_required and ans in (None, ""):
+        unanswered = ans is None or ans == "" or ans == []
+        if q.is_required and unanswered:
             raise ValidationException(detail=f"题目「{q.question_text}」为必填")
         if q.question_type in ("single", "multiple"):
             allowed = list(q.options or [])
-            if ans in (None, ""):
+            if unanswered:
                 ans = None
             elif q.question_type == "single":
                 if not isinstance(ans, str) or ans not in allowed:
@@ -272,9 +276,11 @@ def submit_followup(db: Session, uid: str, nm: Optional[str],
                     raise ValidationException(detail=f"题目「{q.question_text}」选项不合法")
                 ans = lst
         elif q.question_type == "text":
-            if ans is not None and not isinstance(ans, str):
+            if unanswered:
+                ans = None
+            elif not isinstance(ans, str):
                 raise ValidationException(detail=f"题目「{q.question_text}」需文本回答")
-            if ans is not None and len(ans) > 2000:
+            elif len(ans) > 2000:
                 raise ValidationException(detail=f"题目「{q.question_text}」回答过长")
         q.answer = json.dumps(ans, ensure_ascii=False) if isinstance(ans, list) else ans
         q.answered_at = now

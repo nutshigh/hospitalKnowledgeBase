@@ -1,5 +1,4 @@
 """用户侧查询/提交 + 通知已读 + 医生 by-report。"""
-from datetime import date, datetime
 import json
 import pytest
 from sqlalchemy import create_engine
@@ -27,7 +26,7 @@ def db():
         s.close()
 
 
-def _mk_followup(db, fid=1, uid="123456", nm="张三", status="pending"):
+def _mk_followup(db, fid=1, uid="123456", nm="张三", status="pending", q2_required=0):
     db.add(ReportInfo(id=fid, user_id=uid, name=nm))
     db.add(ReportInterpretation(report_id=fid, status="completed", overall_level="yellow"))
     f = Followup(id=fid, report_id=fid, user_id=uid, name=nm,
@@ -41,7 +40,7 @@ def _mk_followup(db, fid=1, uid="123456", nm="张三", status="pending"):
                             is_required=1, sort_order=1))
     db.add(FollowupQuestion(followup_id=fid, question_type="multiple",
                             question_text="有哪些症状？", options=["头痛", "心悸"],
-                            is_required=0, sort_order=2))
+                            is_required=q2_required, sort_order=2))
     db.add(FollowupQuestion(followup_id=fid, question_type="text",
                             question_text="补充", options=None,
                             is_required=0, sort_order=3))
@@ -73,7 +72,26 @@ def test_submit_requires_required(db):
 def test_submit_rejects_unknown_question(db):
     _mk_followup(db, fid=1)
     with pytest.raises(ValidationException):
-        service.submit_followup(db, "123456", "张三", 1, [{"question_id": 99, "answer": "x"}])
+        service.submit_followup(db, "123456", "张三", 1, [
+            {"question_id": 1, "answer": "是"},
+            {"question_id": 3, "answer": "x"},
+            {"question_id": 99, "answer": "BOGEY"},
+        ])
+
+
+def test_required_multiple_empty_list_rejected(db):
+    _mk_followup(db, fid=1, q2_required=1)
+    with pytest.raises(ValidationException):
+        service.submit_followup(db, "123456", "张三", 1, [
+            {"question_id": 1, "answer": "是"},
+            {"question_id": 2, "answer": []},
+        ])
+    service.submit_followup(db, "123456", "张三", 1, [
+        {"question_id": 1, "answer": "是"},
+        {"question_id": 2, "answer": ["头痛"]},
+    ])
+    f = db.query(Followup).filter_by(id=1).first()
+    assert f.status == "completed"
 
 
 def test_submit_rejects_invalid_option(db):
@@ -107,6 +125,10 @@ def test_submit_success_marks_completed(db):
     qs = {q.id: q for q in db.query(FollowupQuestion).filter_by(followup_id=1).all()}
     assert qs[1].answer == "是"
     assert json.loads(qs[2].answer) == ["头痛", "心悸"]
+    assert qs[3].answer == "暂无"
+    assert qs[1].answered_at is not None
+    assert qs[2].answered_at is not None
+    assert qs[3].answered_at is not None
     with pytest.raises(ValidationException):
         service.submit_followup(db, "123456", "张三", 1, [])
 
