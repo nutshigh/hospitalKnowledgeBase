@@ -45,6 +45,10 @@ def _seed(db):
     # (a) 失败任务 + 全空
     tid = task("failed")
     db.add(ReportInfo(task_id=tid, user_id="2"))
+    # (e) 失败任务但有内容(单靠空壳过滤藏不住它 → 隔离 failed 过滤)
+    tid = task("failed")
+    db.add(ReportInfo(task_id=tid, user_id="2", name="王五", gender="男",
+                      report_date=date(2025, 3, 1)))
     # (b) completed 但全空壳
     tid = task("completed")
     db.add(ReportInfo(task_id=tid, user_id="2"))
