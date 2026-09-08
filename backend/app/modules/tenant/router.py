@@ -17,7 +17,7 @@ def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
 
 @router.get("", response_model=schemas.TenantListResponse)
 def list_tenants(
-    _admin: None = Depends(require_role("admin")),
+    _staff: None = Depends(require_role("admin", "doctor")),
     active_only: bool = True,
     db: Session = Depends(get_template_db),
 ):
