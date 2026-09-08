@@ -180,12 +180,14 @@ GET /api/v1/reports/{report_id}
 
 响应 `ReportDetailResponse`（字段见 `docs/backend-api.md §6.4`），含 `indicators` 数组：
 `item_name`、`item_name_standard`、`item_code`、`result_value`、`unit`、
-`ref_range_low`、`ref_range_high`、`category`。
+`ref_range_low`、`ref_range_high`、`category`、`group`，顶层另带 `module_order`。
 
 > **指标模块分组（2026-09-07 起）**：`indicators[]` 每项另带 `group`（该指标归属的体检
-> 模块名，如「血常规」「肝功能」，未识别模块归 `"其他"`）；响应顶层带 `module_order`
-> （模块有序数组，即 Excel 体检采集模板 row2 顺序）。建议 App 按 `module_order` 分组、
-> 组内再按返回顺序渲染并支持折叠，与 user-portal 报告详情一致。
+> 模块名，如「血常规」「肝功能」；无法归类到任何 Excel 模块的指标 `group` 为 `null`，
+> **不会**落在 `module_order` 里）；响应顶层带 `module_order`（**仅本报告实际出现**的模块
+> 名，按 Excel 体检采集模板 row2 顺序排列，并非固定全量模板列表）。建议 App 按
+> `module_order` 分组渲染、组内保持返回顺序；`group` 为 `null` 的指标排在折叠区**之后
+> 平铺**展示（默认全折叠，与 user-portal 报告详情一致）。
 
 ### 5.3 单份报告上传
 
@@ -223,7 +225,7 @@ GET /api/v1/reports/tasks/{task_id}
 DELETE /api/v1/reports/{report_id}
 ```
 
-响应 `{ "status": "deleted" }`。级联删除关联解读/指标/会话/消息。
+响应 `{ "status": "deleted" }`。级联删除关联解读/指标/会话/消息/随访与提醒。
 
 ---
 
@@ -249,15 +251,16 @@ GET /api/v1/interpretations/{report_id}
 | summaries | object | 见下 |
 | references | list | 引用条目 |
 | quality_note | string\|null | 质控说明 |
-| indicators | list | 指标判定（含 color_level/deviation/explanation/suggestion/group） |
-| module_order | list | 指标归属模块有序数组（Excel row2 顺序；`group` 参照） |
+| indicators | list | 指标判定。每项含 `indicator_id`、`item_name`、`result_value`、`unit`、`ref_range_low`、`ref_range_high`、`deviation`、`color_level`、`group` |
+| module_order | list | 指标归属模块有序数组（仅本报告出现；`group` 参照） |
 | created_at / completed_at | datetime | 时间 |
 
 `summaries` 字段：`overall_summary`、`abnormal_focus`、`trend_note`、`suggestions`、`risk_alert`。
 
-> **模块分组（2026-09-07 起）**：`indicators[]` 每项带 `group`（体检模块名，未识别归
-> `"其他"`），与 `GET /reports/{id}` 一致；顶层 `module_order` 给出展示顺序。App 可按模块
-> 分组折叠展示异常指标。
+> **模块分组（2026-09-07 起）**：`indicators[]` 每项带 `group`（体检模块名；无法归类者
+> 为 `null`，**不会**落在 `module_order` 里），与 `GET /reports/{id}` 一致；顶层
+> `module_order` 仅含本报告实际出现的模块、按 Excel row2 顺序排列。App 可按模块分组折叠
+> 展示异常指标，`group` 为 `null` 的指标平铺在折叠区之后。
 
 ---
 
@@ -362,6 +365,9 @@ GET /api/v1/profile/ai-summary?report_id=<required>&baseline_id=<required>
 响应：`{ "ai_summary": "<文本>", "cached": <bool> }`。
 
 ### 8.4 检后随访与复查提醒 `followup` / `notifications`
+
+> **专项展开版**（含完整字段/校验/轮询约定/前端参考实现/注意点）见
+> `docs/followup-app-integration.md`，App 接入优先读那份。
 
 解读完成后，若报告整体风险为**红或黄**（`overall_level ∈ red/yellow`），系统自动为该报告
 生成一份**随访问卷**与一条**复查提醒**（站内通知）。两者**按报告各建各的**，仅在解读完成时
