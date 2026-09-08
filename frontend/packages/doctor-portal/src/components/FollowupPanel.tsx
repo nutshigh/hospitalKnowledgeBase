@@ -18,9 +18,21 @@ export default function FollowupPanel({ reportId }: { reportId: number }) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setLoaded(false);
-    api.get(`/followup/by-report/${reportId}`).then(r => setData(r.data)).catch(() => setData(null))
-      .finally(() => setLoaded(true));
+    let stopped = false;
+    let first = true;
+    const load = async () => {
+      try {
+        const r = await api.get(`/followup/by-report/${reportId}`);
+        if (!stopped) setData(r.data);
+      } catch {
+        // 404 或无记录:保留已有数据;从未成功则保持 null(不占版面)
+      } finally {
+        if (!stopped && first) { first = false; setLoaded(true); }
+      }
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => { stopped = true; clearInterval(timer); };
   }, [reportId, api]);
 
   if (!loaded) return <Card title="随访问卷" loading style={{ marginBottom: 16 }} />;
