@@ -322,3 +322,20 @@ curl -s http://localhost:8004/v1/chat/completions -H 'Content-Type: application/
 
 **重跑受影响报告的方法**: `/tmp/reparse.py <task_id...>`(删除旧指标+解读 → 重跑 `process_task` → 自动投解读)。注意 MedGo 生成 70+ 项 JSON 每份约 2~3 分钟,`setsid nohup` 后台跑。
 
+## 医生工作台跨院查看(X-Hospital-Id)(2026-09-08 起)
+
+**事实**: doctor-portal 是单医院视图,靠 `get_current_user` 从 JWT 取 `hospital_id` 选库。
+2026-09-08 起支持**请求头 `X-Hospital-Id` 覆盖**:
+
+- 契约:doctor/admin 角色带 `X-Hospital-Id: <hospital_id>` 且该院在 `hospital_tenant.is_active=1`
+  时,后端用请求头医院覆盖 JWT 医院(一处改动在 `dependencies.py::get_current_user`,
+  报告/解读/高危/随访/统计等院级查询自动跟随);未知/停用医院静默回退 JWT 医院;
+  `role='user'`(患者端/App)一律忽略该头,绝不跨院。
+- 医生端(`doctor-portal`)Header 顶部有医院切换器:选项来自 `GET /api/v1/tenants`
+  (该接口已对 doctor 开放),选择后写 `localStorage['doctor_active_hospital']` 并经
+  axios 拦截器自动带头,页面重载切库。患者端(3001)不发该头。
+- 报告管理列表(doctor/admin 全量视图)过滤 `task_status='failed'` 与
+  `parsed_name/name/report_date 全 NULL` 的空壳残留行(演示库白行来源);
+  患者按锚点查询不受影响。
+- 历史演示库(hospital_H001,3056 条)含大量空壳/失败残留行,列表已隐藏,未批量清理。
+
