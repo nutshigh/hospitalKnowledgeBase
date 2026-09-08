@@ -21,6 +21,7 @@ class CurrentUser:
 
 async def get_current_user(
     authorization: str = Header(..., description="Bearer <token>"),
+    x_hospital_id: Optional[str] = Header(default=None),
     db: Session = Depends(get_template_db),
 ) -> CurrentUser:
     if not authorization.startswith("Bearer "):
@@ -36,6 +37,12 @@ async def get_current_user(
     name = payload.get("name")
     if not user_id or not role:
         raise UnauthorizedException(detail="Invalid token payload")
+    if (
+        x_hospital_id
+        and role in ("doctor", "admin")
+        and hospital_id_active(db, x_hospital_id)
+    ):
+        hospital_id = x_hospital_id
     if hospital_id:
         set_current_hospital_id(hospital_id)
     return CurrentUser(user_id=user_id, role=role, hospital_id=hospital_id,
@@ -59,3 +66,13 @@ def user_identity(current_user) -> tuple[Optional[str], Optional[str]]:
     if current_user.role == "user":
         return current_user.id_card_suffix, current_user.name
     return str(current_user.user_id), None
+
+
+def hospital_id_active(db: Session, hospital_id: str) -> bool:
+    """hospital_tenant 中 is_active=1 才算可覆盖(模板库会话只读查询)。"""
+    row = db.execute(
+        text("SELECT hospital_id FROM hospital_tenant "
+             "WHERE hospital_id = :hid AND is_active = 1"),
+        {"hid": hospital_id},
+    ).fetchone()
+    return row is not None
