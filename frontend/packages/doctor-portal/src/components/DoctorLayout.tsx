@@ -1,4 +1,5 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect } from 'react';
+import { Select } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDoctorStore } from '../stores/doctorStore';
 
@@ -24,8 +25,13 @@ const ADMIN_MENU = [
 export default function DoctorLayout({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const loc = useLocation();
-  const { logout, sidebarCollapsed, toggleSidebar, role } = useDoctorStore();
+  const { logout, sidebarCollapsed, toggleSidebar, role, activeHospital,
+          hospitals, loadHospitals, setHospital } = useDoctorStore();
   const MENU = role === 'admin' ? [...MENU_BASE.slice(0, MENU_BASE.length - 1), ...ADMIN_MENU, MENU_BASE[MENU_BASE.length - 1]] : MENU_BASE;
+
+  useEffect(() => { if (hospitals.length === 0) loadHospitals(); /* eslint-disable-next-line */ }, []);
+
+  const curName = hospitals.find(h => h.hospital_id === activeHospital)?.hospital_name || activeHospital || '';
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -81,9 +87,24 @@ export default function DoctorLayout({ children }: { children: ReactNode }) {
           borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: 16,
         }}>
           <button onClick={toggleSidebar} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18 }}>☰</button>
-          <span style={{ fontSize: 14, color: 'var(--color-text-secondary)' }}>
+          <span style={{ fontSize: 14, color: 'var(--color-text-secondary)', flex: 1 }}>
             {MENU.find(m => m.key === loc.pathname || (m.key !== '/' && loc.pathname.startsWith(m.key)))?.label || ''}
           </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {curName && <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>🏥 {curName}</span>}
+            {hospitals.length > 1 && (
+              <Select
+                size="small"
+                value={activeHospital || undefined}
+                style={{ width: 160 }}
+                options={hospitals.map(h => ({
+                  value: h.hospital_id,
+                  label: `${h.hospital_name}(${h.hospital_id})`,
+                }))}
+                onChange={(v) => { setHospital(v); window.location.reload(); }}
+              />
+            )}
+          </div>
         </header>
         <main style={{ padding: 24 }}>{children}</main>
       </div>
