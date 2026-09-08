@@ -3,6 +3,7 @@ import base64
 import os
 from datetime import datetime, timezone
 from typing import Optional, List
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -298,6 +299,17 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[str] = None,
         q = q.filter(ReportInfo.user_id == user_id)
         if name:
             q = q.filter(ReportInfo.name == name)
+    if not user_id:
+        # 医生/管理员全量视图:隐藏 parse 失败行与「无任何可展示内容」的空壳残留行。
+        q = (
+            q.outerjoin(ReportTask, ReportTask.id == ReportInfo.task_id)
+            .filter(
+                or_(ReportTask.status.is_(None), ReportTask.status != "failed"),
+                or_(ReportInfo.parsed_name.isnot(None),
+                    ReportInfo.name.isnot(None),
+                    ReportInfo.report_date.isnot(None)),
+            )
+        )
     total = q.count()
     items = q.order_by(ReportInfo.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     # Attach task status to each report
