@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     # File Storage
     FILE_STORAGE_ROOT: str = "./storage"
 
+    # User Profile(用户端 overview):指标走势只纳入最近 N 份报告
+    PROFILE_TREND_REPORT_LIMIT: int = 3
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

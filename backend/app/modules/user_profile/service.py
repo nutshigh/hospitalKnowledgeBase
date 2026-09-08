@@ -13,6 +13,7 @@ from app.modules.user_profile.comparison import (
 )
 from app.ai.llm import get_chat_model, _guarded
 from app.ai.agents.think_filter import strip_think_tags
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,9 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
     if not reports:
         return {"user_summary": None, "indicator_trends": [], "abnormal_distribution": []}
 
-    report_ids = [r.id for r in reports]
+    trend_report_ids = [r.id for r in reports[-settings.PROFILE_TREND_REPORT_LIMIT:]]
     indicators = db.query(ReportIndicator).filter(
-        ReportIndicator.report_id.in_(report_ids),
+        ReportIndicator.report_id.in_(trend_report_ids),
     ).all()
     report_map = {r.id: r for r in reports}
 

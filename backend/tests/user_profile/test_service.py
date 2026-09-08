@@ -381,3 +381,90 @@ def test_get_comparison_earliest_report_returns_baseline_and_diff(db):
     assert len(result["indicators"]) == 1
     assert result["indicators"][0]["current_value"] == "7.2"
     assert result["indicators"][0]["baseline_value"] == "6.8"
+
+# ============================================================
+# get_overview 走势限流(2026-09-08):indicator_trends 只取最近
+# PROFILE_TREND_REPORT_LIMIT(默认3)份报告;user_summary/abnormal_distribution 仍全量
+# ============================================================
+
+
+def test_get_overview_trends_only_include_recent_n_reports(db):
+    """5 份报告(2022..2026)→ 走势只含最近 3 份(2024/2025/2026)。"""
+    from app.modules.user_profile.service import get_overview
+
+    for rid, dt, val in [
+        (1, date(2022, 5, 1), "5.5"),
+        (2, date(2023, 5, 1), "6.0"),
+        (3, date(2024, 5, 1), "6.5"),
+        (4, date(2025, 5, 1), "7.0"),
+        (5, date(2026, 5, 1), "7.4"),
+    ]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+        db.add(ReportIndicator(report_id=rid, item_name="血糖", item_name_standard="空腹血糖",
+                               result_value=val, unit="mmol/L"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "空腹血糖")
+    assert [p["report_date"] for p in trend["points"]] == ["2024-05-01", "2025-05-01", "2026-05-01"]
+    assert result["user_summary"]["total_reports"] == 5
+
+
+def test_get_overview_trends_keep_all_when_fewer_than_limit(db):
+    """只有 2 份(< 默认3)时走势仍含全部,行为与现状一致。"""
+    from app.modules.user_profile.service import get_overview
+
+    db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 5, 1)))
+    db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2026, 5, 1)))
+    db.add(ReportIndicator(report_id=1, item_name="血糖", item_name_standard="空腹血糖",
+                           result_value="6.0", unit="mmol/L"))
+    db.add(ReportIndicator(report_id=2, item_name="血糖", item_name_standard="空腹血糖",
+                           result_value="6.8", unit="mmol/L"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "空腹血糖")
+    assert len(trend["points"]) == 2
+
+
+def test_get_overview_trends_exclude_null_dated_report(db):
+    """6 份(5 有日期 + 1 无日期)→ 走势为最近 3 份有日期的,无日期那份垫最旧被排除。"""
+    from app.modules.user_profile.service import get_overview
+
+    for rid, dt in [(1, date(2022, 5, 1)), (2, date(2023, 5, 1)), (3, date(2024, 5, 1)),
+                    (4, date(2025, 5, 1)), (5, date(2026, 5, 1))]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+    db.add(ReportInfo(id=6, user_id="123456", name="张三", report_date=None))
+    for rid in range(1, 7):
+        db.add(ReportIndicator(report_id=rid, item_name="血糖", item_name_standard="空腹血糖",
+                               result_value="7.0", unit="mmol/L"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "空腹血糖")
+    dates = [p["report_date"] for p in trend["points"]]
+    assert dates == ["2024-05-01", "2025-05-01", "2026-05-01"]
+    assert None not in dates
+
+
+def test_get_overview_abnormal_distribution_includes_outside_trend_window(db):
+    """最旧报告(2023,在走势窗口外)有红判定 → abnormal_distribution 仍计入;走势不含它。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+
+    for rid, dt in [(1, date(2023, 5, 1)), (2, date(2024, 5, 1)),
+                    (3, date(2025, 5, 1)), (4, date(2026, 5, 1))]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+        db.add(ReportIndicator(id=100 + rid, report_id=rid, item_name="血糖",
+                               item_name_standard="空腹血糖", result_value="7.0", unit="mmol/L"))
+    db.commit()
+    db.add(ReportInterpretation(id=1, report_id=1, overall_level="red", status="completed",
+                                red_count=1, yellow_count=0, green_count=0))
+    db.add(IndicatorJudgment(interpretation_id=1, indicator_id=101, item_name="血糖", color_level="red"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    assert any(a["item_name_standard"] == "空腹血糖" and a["red_count"] == 1
+               for a in result["abnormal_distribution"])
+    trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "空腹血糖")
+    assert [p["report_date"] for p in trend["points"]] == ["2024-05-01", "2025-05-01", "2026-05-01"]
