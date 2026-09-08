@@ -44,6 +44,8 @@ export default function ProfilePage() {
   const toggleExpand = (i: number) =>
     setExpanded(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
 
+  useEffect(() => setExpanded([]), [search]);
+
   useEffect(() => {
     api.get('/profile/overview').then(r => setData(r.data)).catch(() => setData(null)).finally(() => setLoading(false));
   }, []);
@@ -124,7 +126,7 @@ export default function ProfilePage() {
           topTrends.map((t, i) => {
             const last = t.points[t.points.length - 1];
             const expandable = t.points.length >= 2;
-            const isOpen = expanded.includes(i);
+            const isOpen = expandable && expanded.includes(i);
             return (
               <div key={i} style={{
                 padding: '10px 0', borderBottom: i !== topTrends.length - 1 ? '1px solid var(--color-border-light)' : 'none',

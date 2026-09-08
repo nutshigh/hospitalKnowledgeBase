@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -138,7 +139,7 @@ class Settings(BaseSettings):
     FILE_STORAGE_ROOT: str = "./storage"
 
     # User Profile(用户端 overview):指标走势只纳入最近 N 份报告
-    PROFILE_TREND_REPORT_LIMIT: int = 3
+    PROFILE_TREND_REPORT_LIMIT: int = Field(default=3, ge=1, description="指标走势只纳入最近 N 份报告")
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -61,7 +61,7 @@ def _auto_select_baseline(db: Session, user_id: str, name: str, report_id: int) 
 
 
 def get_overview(db: Session, user_id: str, name: str) -> dict:
-    """档案页主数据:总览 + 指标走势 + 异常分布。"""
+    """档案页主数据:总览 + 指标走势(仅最近 PROFILE_TREND_REPORT_LIMIT 份报告)+ 异常分布。"""
     reports = db.query(ReportInfo).filter(
         ReportInfo.user_id == user_id,
         ReportInfo.name == name,
