@@ -63,7 +63,7 @@ export const useDoctorStore = create<DoctorState>((set, get) => ({
     if (!token) return;
     try {
       const r = await api.get('/tenants');
-      set({ hospitals: (r.data?.items || []).map((x: any) => ({
+      set({ hospitals: (r.data?.items || []).map((x: { hospital_id: string; hospital_name?: string | null }) => ({
         hospital_id: x.hospital_id, hospital_name: x.hospital_name || x.hospital_id,
       })) });
     } catch { /* 401 由拦截器处理;网络失败保持空,不阻断页面 */ }

@@ -18,6 +18,8 @@ export default function FollowupPanel({ reportId }: { reportId: number }) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    setData(null);
+    setLoaded(false);
     let stopped = false;
     let first = true;
     const load = async () => {

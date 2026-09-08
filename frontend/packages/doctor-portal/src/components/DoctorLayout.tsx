@@ -29,7 +29,9 @@ export default function DoctorLayout({ children }: { children: ReactNode }) {
           hospitals, loadHospitals, setHospital } = useDoctorStore();
   const MENU = role === 'admin' ? [...MENU_BASE.slice(0, MENU_BASE.length - 1), ...ADMIN_MENU, MENU_BASE[MENU_BASE.length - 1]] : MENU_BASE;
 
-  useEffect(() => { if (hospitals.length === 0) loadHospitals(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => {
+    if (hospitals.length === 0) loadHospitals();
+  }, [hospitals.length, loadHospitals]);
 
   const curName = hospitals.find(h => h.hospital_id === activeHospital)?.hospital_name || activeHospital || '';
 

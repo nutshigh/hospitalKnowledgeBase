@@ -328,9 +328,13 @@ curl -s http://localhost:8004/v1/chat/completions -H 'Content-Type: application/
 2026-09-08 起支持**请求头 `X-Hospital-Id` 覆盖**:
 
 - 契约:doctor/admin 角色带 `X-Hospital-Id: <hospital_id>` 且该院在 `hospital_tenant.is_active=1`
-  时,后端用请求头医院覆盖 JWT 医院(一处改动在 `dependencies.py::get_current_user`,
-  报告/解读/高危/随访/统计等院级查询自动跟随);未知/停用医院静默回退 JWT 医院;
-  `role='user'`(患者端/App)一律忽略该头,绝不跨院。
+  时,后端用请求头医院覆盖 JWT 医院(一处改动在 `dependencies.py::get_current_user`);未知/停用
+  医院静默回退 JWT 医院;`role='user'`(患者端/App)一律忽略该头,绝不跨院。
+- 跟随 `X-Hospital-Id` 的:走 `get_current_user`、用 `CurrentUser.hospital_id` 选库的院级查询 ——
+  reports(list/detail/delete/upload)、interpretations(含 high-risk)、followup、chat、profile。
+  **statistics / dispatch 不在此列**:它们不依赖 `get_current_user`,直接读 context var
+  `current_hospital_id`(`app/middleware/hospital_context.py`,仅 `get_current_user` 内 set),
+  无前置鉴权请求会 400,切换医院对它们不生效 —— 既有缺口,另行接线,不在 2026-09-08 改动范围。
 - 医生端(`doctor-portal`)Header 顶部有医院切换器:选项来自 `GET /api/v1/tenants`
   (该接口已对 doctor 开放),选择后写 `localStorage['doctor_active_hospital']` 并经
   axios 拦截器自动带头,页面重载切库。患者端(3001)不发该头。
