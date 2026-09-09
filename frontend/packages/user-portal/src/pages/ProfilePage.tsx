@@ -6,6 +6,7 @@ import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
 import ColorBadge from '../components/ColorBadge';
 import IndicatorTrendChart from '../components/IndicatorTrendChart';
+import ChangeOverviewCard from '../components/ChangeOverviewCard';
 
 interface UserSummary {
   total_reports: number;
@@ -107,6 +108,8 @@ export default function ProfilePage() {
           <span style={{ color: 'var(--color-green)', fontWeight: 600 }}>绿区 {s.latest_green}</span>
         </div>
       </div>
+
+      <ChangeOverviewCard />
 
       <div style={{
         background: 'var(--color-surface)', borderRadius: 'var(--radius-md)',
