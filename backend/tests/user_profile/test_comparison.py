@@ -114,3 +114,26 @@ def test_build_comparison_prompt_contains_key_sections():
     assert "收缩压" in prompt
     assert "红区" in prompt
     assert "建议" in prompt
+
+
+def test_build_change_prompt_contains_window_and_sections():
+    from app.modules.user_profile.comparison import build_change_prompt
+
+    reports = [
+        {"report_date": "2024-05-01", "overall_level": "green",
+         "red_count": 0, "yellow_count": 1, "green_count": 10},
+        {"report_date": "2025-05-01", "overall_level": "yellow",
+         "red_count": 1, "yellow_count": 2, "green_count": 9},
+    ]
+    key_indicators = [
+        {"item_name": "空腹血糖", "unit": "mmol/L", "delta_pct": -11.1,
+         "points": [
+             {"report_date": "2024-05-01", "value": "7.2", "color": "red"},
+             {"report_date": "2025-05-01", "value": "6.4", "color": "green"},
+         ]},
+    ]
+    prompt = build_change_prompt(reports, key_indicators)
+    assert "2024-05-01" in prompt and "2025-05-01" in prompt
+    assert "空腹血糖" in prompt
+    assert "trend_summary" in prompt and "precautions" in prompt
+    assert "conclusion" in prompt and "suggestions" in prompt

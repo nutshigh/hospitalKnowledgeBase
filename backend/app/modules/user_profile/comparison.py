@@ -125,3 +125,62 @@ def build_comparison_prompt(current_report: dict, baseline_report: dict,
 4. 不下诊断,语气同解读模块
 5. 不输出 thinking 标签
 """
+
+
+def build_change_prompt(reports: list[dict], key_indicators: list[dict]) -> str:
+    """拼出给 MedGo 的跨最近 N 份报告总体变化总览 prompt(纯 JSON 四键输出)。
+
+    reports: 升序的报告头(含 overall_level / 红黄绿计数)。
+    key_indicators: 排序后的关键指标(含 delta_pct / points)。
+    """
+    if not reports:
+        return ""
+    report_lines = [
+        "- {date}:总体{level},红区{r} 黄区{y} 绿区{g}".format(
+            date=r.get("report_date") or "未知",
+            level=r.get("overall_level") or "未知",
+            r=r.get("red_count", 0),
+            y=r.get("yellow_count", 0),
+            g=r.get("green_count", 0),
+        )
+        for r in reports
+    ]
+    ind_lines = []
+    for ind in key_indicators[:8]:
+        name = ind.get("item_name") or "?"
+        unit = ind.get("unit") or ""
+        segs = []
+        for p in ind.get("points", []):
+            d = (p.get("report_date") or "?").__str__()[:7]
+            c = p.get("color") or ""
+            segs.append("{d} {v}{suffix}".format(
+                d=d, v=p.get("value", ""),
+                suffix=("(" + c + ")") if c else ""))
+        d = ind.get("delta_pct")
+        delta_txt = ""
+        if d is not None:
+            delta_txt = ",{arrow}{absv}%".format(
+                arrow="↑" if d > 0 else "↓", absv=abs(round(float(d), 1)))
+        ind_lines.append("- {name}{unit}:{segs}{delta}".format(
+            name=name,
+            unit=("(" + unit + ")") if unit else "",
+            segs=" → ".join(segs) if segs else "无连续数值",
+            delta=delta_txt))
+    ind_text = "\n".join(ind_lines) or "  (窗口内无连续可量化的关键指标)"
+
+    return f"""你是体检报告解读助手。下面是该用户最近 {len(reports)} 次体检报告的窗口数据,请给出一份总体性健康变化总览,用通俗中文。
+
+## 各次报告(按日期升序)
+{chr(10).join(report_lines)}
+
+## 关键指标走势(按时间先后列出每次值;red=红区异常,yellow=黄区偏高,green=绿区)
+{ind_text}
+
+## 输出要求
+只输出一个 JSON 对象(不要 markdown 代码块、不要 thinking 标签),键严格为以下四个:
+- "trend_summary": 一段(≤80字)总体变化概述,概括红/黄区数量增减与整体走向
+- "conclusion": (≤120字)提炼窗口内最重要的指标变化结论,落到上面列出的具体指标
+- "suggestions": (≤150字)针对可量化的变化指标(如血糖、血脂)给 1-3 条健康建议
+- "precautions": (≤100字)复查与就医注意事项,异常时提示尽快就医
+要求:不下诊断;不要编造上面未出现的指标或数值;不提绝对数值;内容仅供健康参考。
+"""
