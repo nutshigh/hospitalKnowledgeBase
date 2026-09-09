@@ -203,17 +203,30 @@ EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
 
 ---
 
-## 报告对比默认基线退化策略(2026-09-02 起)
+## 报告跨报告对比 → 我的页健康变化总览(2026-09-09 起)
 
-**事实**: `backend/app/modules/user_profile/service.py::_auto_select_baseline` 现在**允许选任意其它报告**。
-选择逻辑(该用户锚定 user_id 后六位 + name 内、排除当前报告):
-1. 优先取 `report_date` **严格早于**当前报告且最接近的一份(原行为,保存「与上次报告对比」语义);
-2. 若无更早(当前即该用户最早一份报告,如首页按 `created_at` 倒序把日期最早的报告排在最上)→ **退化**为该用户 `report_date` 与当前报告 `|日期差|` 最小的一份(不再返回 None);
-3. 全部无 `report_date` → 取最近 `created_at` 的另一份;用户仅 1 份报告仍返回 None。
+**事实**: 2026-09-09 起报告对比功能从报告详情页挪到用户端「我的」tab,由新增 `GET /api/v1/profile/change-overview` 支撑
+(`backend/app/modules/user_profile/router.py` / `service.py::get_change_overview`)。
 
-**原因**: 退化前返回 None 会让前端 `frontend/packages/user-portal/src/components/ComparisonCard.tsx`(`if (!data || !data.baseline) return null`)整卡不渲染,用户连「选择历史报告」下拉都看不到。现 UI 标题为「📊 与历史报告对比」;`GET /profile/compare?baseline_id=` 对任意属于该锚定的报告都放行(不限早于当前),AI 小结 `/profile/ai-summary` 同理。
+- **窗口选取**: 自动对比该锚定(user_id 后六位 + name)按 `report_date` 升序、仅 `status='completed'`
+  的最近 `PROFILE_TREND_REPORT_LIMIT` 份报告(默认 3,`backend/app/config.py`);`report_date` 为 NULL 视为最旧放前。
+  不足 2 份返回 `reason=insufficient` 降级(不入缓存)。
+- **响应结构**: 自包含,含 `reports`(report_id/report_date/overall_level/红黄绿计数)、
+  `key_indicators`(≤5,排序 最近异常点红 > 黄 > 无、同级按 |delta_pct| 降序;仅保留 ≥2 份窗口报告出现、
+  且曾红/黄或首尾 |delta_pct|≥5 的数值指标)、`summary`(四键 `trend_summary`·`conclusion`·`suggestions`·`precautions`,
+  MedGo 生成,宽容解析失败则返回 None 且不写缓存)。`role='user'` 的 app-login token 可直接调用。
+- **缓存**: 窗口最新一份的 `report_interpretation.comparison_summary` 存 JSON
+  `{signature:[{report_id,interp_id}], payload}`;signature 与当前窗口一致才复用,旧纯文本/签名不符 → 重新生成并写回。
+- **worker 钩子**: 解读 worker(`interpretation/worker.py`)在解读完成后调
+  `service.ensure_change_overview(db, report_id)` 预热缓存,异常吞掉不冒泡。`comparison_baseline_id` 列不再使用(写 NULL)。
 
-**测试**: `backend/tests/user_profile/test_service.py` 新增 4 条(最早一份→退化到日期最近 / 有更早→仍取更早且最近 / 单份报告→None / `get_comparison` 返回基线)。改回「最早一份无基线」前先看这些测试。
+**已退役(勿再引用)**: `GET /profile/compare`、`GET /profile/ai-summary` 两路由与
+`frontend/packages/user-portal/src/components/ComparisonCard.tsx` 均已删除;worker 旧钩子
+`try_generate_comparison_summary` 不存在。`_auto_select_baseline` 仍在(供 `/profile/overview` 的
+`user_summary.baseline_date`)。
+
+**测试**: `backend/tests/user_profile/test_change_overview.py`(窗口/缓存签名命中与失效/降级/LLM 失败不写缓存)、
+`backend/tests/test_interp_worker_bulk.py::test_comparison_summary_failure_doesnt_break`。改回比较式旧功能前先看这些测试。
 
 ---
 
