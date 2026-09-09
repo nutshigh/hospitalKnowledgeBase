@@ -42,7 +42,7 @@ def env():
     p_getdb = patch("app.modules.interpretation.worker.get_hospital_db", lambda hid: _gen(s))
     p_win = patch("app.modules.interpretation.worker.is_bulk_window_now", return_value=True)
     p_agent = patch("app.modules.interpretation.worker.run_interpretation_agent")
-    p_cmp = patch("app.modules.user_profile.service.try_generate_comparison_summary")
+    p_cmp = patch("app.modules.user_profile.service.ensure_change_overview")
     p_batch = patch("app.modules.interpretation.worker.BatchService")
     p_rabbit = patch("app.modules.interpretation.worker.rabbitmq", Mq)
     p_followup = patch("app.modules.followup.service.try_generate_followup")

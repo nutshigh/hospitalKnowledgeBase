@@ -59,15 +59,15 @@ def handle_interpretation_task(message: dict):
                 try_generate_followup(db, report_id)
             except Exception as e:
                 print(f"Followup generation failed for report {report_id}: {e}", flush=True)
-            # register comparison summary(failures don't affect interp completion)
+            # register change overview cache(failures don't affect interp completion)
             try:
                 from app.modules.user_profile.service import (
-                    try_generate_comparison_summary,
+                    ensure_change_overview,
                 )
-                try_generate_comparison_summary(db, report_id)
+                ensure_change_overview(db, report_id)
             except Exception as e:
                 print(
-                    f"Comparison summary failed for report {report_id}: {e}",
+                    f"Change overview generation failed for report {report_id}: {e}",
                     flush=True,
                 )
             # 成功 → 计 batch file 进度(interp_ok),落在批次所属库
