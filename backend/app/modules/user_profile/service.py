@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
-from datetime import datetime
+import re
+from datetime import date, datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -9,7 +11,7 @@ from app.modules.report.models import ReportInfo, ReportIndicator
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 from app.modules.user_profile.comparison import (
     match_indicators, compute_delta, judge_status, trend_direction,
-    build_comparison_prompt,
+    build_comparison_prompt, build_change_prompt, _try_float,
 )
 from app.ai.llm import get_chat_model, _guarded
 from app.ai.agents.think_filter import strip_think_tags
@@ -434,3 +436,244 @@ def try_generate_comparison_summary(db: Session, report_id: int) -> None:
             db.commit()
     except Exception as e:
         logger.warning("comparison summary generation failed: %s", e)
+
+
+# ===========================================================================
+# 跨报告健康变化总览(2026-09-09):自动对比最近 N 份已完成解读的报告
+# ===========================================================================
+
+def empty_change_overview(covered: int) -> dict:
+    """不足 2 份可对比报告时的降级响应。covered = 该锚定已解读报告数。"""
+    return {
+        "reports": [],
+        "covered": covered,
+        "reason": "insufficient",
+        "key_indicators": [],
+        "summary": None,
+        "cached": False,
+    }
+
+
+def _change_window(db: Session, user_id: str, name: str) -> list:
+    """返回 [(ReportInfo, ReportInterpretation), ...] 升序,仅 completed,取最近 N 份。
+
+    report_date 升序,None 视为最旧放最前(与 /overview 口径一致);取末
+    PROFILE_TREND_REPORT_LIMIT 份。
+    """
+    rows = (
+        db.query(ReportInfo, ReportInterpretation)
+        .join(ReportInterpretation, ReportInterpretation.report_id == ReportInfo.id)
+        .filter(
+            ReportInfo.user_id == user_id,
+            ReportInfo.name == name,
+            ReportInterpretation.status == "completed",
+        )
+        .all()
+    )
+    window = []
+    for report, interp in rows:
+        window.append((report, interp))
+
+    def _key(pair):
+        report = pair[0]
+        return (report.report_date is not None, report.report_date or date.min, report.id)
+
+    ordered = sorted(window, key=_key)
+    return ordered[-settings.PROFILE_TREND_REPORT_LIMIT:]
+
+
+def _report_header(pair) -> dict:
+    report, interp = pair
+    return {
+        "report_id": report.id,
+        "report_date": report.report_date.isoformat() if report.report_date else None,
+        "overall_level": interp.overall_level,
+        "red_count": interp.red_count,
+        "yellow_count": interp.yellow_count,
+        "green_count": interp.green_count,
+    }
+
+
+def _read_cached_overview(interp: Optional[ReportInterpretation], window: list) -> Optional[dict]:
+    """列内容为 JSON 且 signature 与当前窗口一致 → 返回 payload;否则 None(含旧纯文本)。"""
+    if not interp or not interp.comparison_summary:
+        return None
+    try:
+        data = json.loads(interp.comparison_summary)
+    except (TypeError, ValueError):
+        return None
+    sig = [{"report_id": pair[0].id, "interp_id": pair[1].id} for pair in window]
+    if data.get("signature") != sig:
+        return None
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _series(db: Session, window: list) -> list[dict]:
+    """按 item_name_standard 聚合窗口内数值指标为 points;value 保留原始字符串。"""
+    report_ids = [pair[0].id for pair in window]
+    rid2date = {pair[0].id: _report_header(pair)["report_date"] for pair in window}
+    inds = db.query(ReportIndicator).filter(ReportIndicator.report_id.in_(report_ids)).all()
+    colors: dict = {}
+    if inds:
+        judgments = (
+            db.query(IndicatorJudgment)
+            .join(ReportInterpretation,
+                  IndicatorJudgment.interpretation_id == ReportInterpretation.id)
+            .filter(ReportInterpretation.report_id.in_(report_ids))
+            .all()
+        )
+        colors = {j.indicator_id: j.color_level for j in judgments}
+
+    by_key: dict = {}
+    for ind in inds:
+        if _try_float(ind.result_value) is None:
+            continue
+        key = ind.item_name_standard or ind.item_name
+        if not key:
+            continue
+        item = by_key.setdefault(key, {
+            "item_name": key,
+            "item_name_standard": ind.item_name_standard,
+            "unit": ind.unit,
+            "points": [],
+        })
+        item["points"].append({
+            "report_id": ind.report_id,
+            "report_date": rid2date.get(ind.report_id),
+            "value": str(ind.result_value).strip(),
+            "color": colors.get(ind.id),
+        })
+    for item in by_key.values():
+        item["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
+    return list(by_key.values())
+
+
+def _severity(points: list[dict]) -> int:
+    """窗口内最近一次红/黄(红=0,黄=1),否则 2。"""
+    for p in reversed(points):
+        if p.get("color") in ("red", "yellow"):
+            return 0 if p["color"] == "red" else 1
+    return 2
+
+
+def _endpoint_pct(points: list[dict]) -> Optional[float]:
+    """最新点相对最旧点的 delta_pct。"""
+    if len(points) < 2:
+        return None
+    pair = compute_delta(points[-1]["value"], points[0]["value"])
+    return pair[1] if pair else None
+
+
+def _rank_key_indicators(db: Session, window: list) -> list[dict]:
+    """关键指标:出现在 ≥2 份窗口报告、且窗口内有过红/黄或首尾 |delta_pct|≥5。
+
+    排序:最近异常点红 > 黄 > 无,同级按 |delta_pct| 降序,再按指标名。
+    """
+    ranked = []
+    for item in _series(db, window):
+        points = item["points"]
+        if len(points) < 2:
+            continue
+        pct = _endpoint_pct(points)
+        sev = _severity(points)
+        if sev >= 2 and (pct is None or abs(pct) < 5):
+            continue
+        ranked.append({
+            "item_name": item["item_name"],
+            "unit": item["unit"],
+            "latest_value": points[-1]["value"],
+            "latest_color": points[-1]["color"],
+            "direction": trend_direction(points),
+            "delta_pct": pct,
+            "points": points,
+            "_sev": sev,
+            "_pct_abs": abs(pct) if pct is not None else 0.0,
+        })
+    ranked.sort(key=lambda x: (x["_sev"], -x["_pct_abs"], x["item_name"]))
+    for x in ranked:
+        x.pop("_sev", None)
+        x.pop("_pct_abs", None)
+    return ranked
+
+
+def _parse_change_json(content: str) -> Optional[dict]:
+    """宽容解析 MedGo 输出的 JSON 四键对象;失败返回 None。"""
+    if not content:
+        return None
+    text0 = content.strip()
+    if text0.startswith("```"):
+        text0 = re.sub(r"^```[A-Za-z]*\n?", "", text0)
+        text0 = re.sub(r"```$", "", text0).strip()
+    try:
+        obj = json.loads(text0)
+    except (TypeError, ValueError):
+        m = re.search(r"\{.*\}", text0, re.S)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(obj, dict):
+        return None
+    keys = ("trend_summary", "conclusion", "suggestions", "precautions")
+    if not all(isinstance(obj.get(k), str) for k in keys):
+        return None
+    return {k: obj.get(k, "").strip() for k in keys}
+
+
+def _call_llm_for_change_overview(prompt: str) -> Optional[dict]:
+    """调 MedGo 生成总览。失败/解析失败返回 None 并记 warning。"""
+    try:
+        model = get_chat_model(streaming=False)
+        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=1024)))
+        return _parse_change_json(strip_think_tags(resp.content or ""))
+    except Exception as e:
+        logger.warning("change overview LLM call failed: %s", e)
+        return None
+
+
+def get_change_overview(db: Session, user_id: str, name: str) -> dict:
+    """GET /profile/change-overview 主入口。不足 2 份降级;否则读缓存或生成并写回。"""
+    window = _change_window(db, user_id, name)
+    if len(window) < 2:
+        return empty_change_overview(len(window))
+    newest_interp = window[-1][1]
+    cached = _read_cached_overview(newest_interp, window)
+    if cached:
+        cached["cached"] = True
+        return cached
+
+    key_indicators = _rank_key_indicators(db, window)
+    reports = [_report_header(pair) for pair in window]
+    payload = {
+        "reports": reports,
+        "covered": len(reports),
+        "key_indicators": key_indicators[:5],
+        "summary": None,
+        "cached": False,
+    }
+    prompt = build_change_prompt(reports, key_indicators)
+    summary = _call_llm_for_change_overview(prompt)
+    payload["summary"] = summary
+    if summary:
+        sig = [{"report_id": pair[0].id, "interp_id": pair[1].id} for pair in window]
+        newest_interp.comparison_summary = json.dumps(
+            {"signature": sig, "payload": payload}, ensure_ascii=False)
+        newest_interp.comparison_baseline_id = None
+        db.commit()
+    return payload
+
+
+def ensure_change_overview(db: Session, report_id: int) -> None:
+    """worker 钩子:解读完成后按锚定重算窗口并预热缓存。任何异常吞掉不冒泡。"""
+    try:
+        report = db.query(ReportInfo).filter_by(id=report_id).first()
+        if not report:
+            return
+        get_change_overview(db, report.user_id, report.name)
+    except Exception as e:
+        logger.warning("change overview pre-generation failed: %s", e)
