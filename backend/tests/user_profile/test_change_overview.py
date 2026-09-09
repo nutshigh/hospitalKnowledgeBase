@@ -281,6 +281,34 @@ def test_key_indicators_exclude_single_report_and_sort_red_first(db):
     assert ki["delta_pct"] == pytest.approx(-11.11, abs=0.1)
 
 
+def test_key_indicators_count_distinct_reports_not_rows(db):
+    """同一报告内同一指标出现两行 → 不算「≥2 份窗口报告」候选;跨报告指标仍入选。"""
+    from app.modules.user_profile.service import get_change_overview
+
+    # 报告1 有血糖两行(6.0/6.8,同一报告重复)与血脂一行;报告2 有血糖一行(6.4)
+    _report(db, 1, rdate=date(2025, 5, 1))
+    _indicator(db, 1, 1, "血糖", "空腹血糖", "6.0")
+    _indicator(db, 2, 1, "血糖", "空腹血糖", "6.8")
+    _indicator(db, 3, 1, "血脂", "血脂", "3.1", "mmol/L")
+    _report(db, 2, rdate=date(2026, 5, 1))
+    _indicator(db, 4, 2, "血糖", "空腹血糖", "6.4")
+    _completed(db, 1, level="red", red=1)
+    _completed(db, 2, level="yellow", yellow=1)
+    _judgment(db, 1, 1, 1, "red")
+    _judgment(db, 2, 1, 2, "red")
+    _judgment(db, 3, 1, 3, "yellow")
+    _judgment(db, 4, 2, 4, "yellow")
+    db.commit()
+
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        result = get_change_overview(db, "123456", "张三")
+
+    names = [k["item_name"] for k in result["key_indicators"]]
+    assert names == ["空腹血糖"]  # 血脂仅在报告1一行、且同报告重复行不算第二份 → 不入选
+
+
+
 # ---------- worker 钩子 ----------
 
 def test_ensure_change_overview_warm_cache_when_enough(db):

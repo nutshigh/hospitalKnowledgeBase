@@ -317,7 +317,7 @@ def _rank_key_indicators(db: Session, window: list) -> list[dict]:
     ranked = []
     for item in _series(db, window):
         points = item["points"]
-        if len(points) < 2:
+        if len({p["report_id"] for p in points}) < 2:
             continue
         pct = _endpoint_pct(points)
         sev = _severity(points)

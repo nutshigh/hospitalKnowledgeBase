@@ -45,12 +45,13 @@ export default function ChangeOverviewCard() {
   const { api } = useUserStore();
   const [data, setData] = useState<ChangeOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     api.get('/profile/change-overview')
-      .then(r => setData(r.data))
-      .catch(() => setData(null))
+      .then(r => { setData(r.data); setFailed(false); })
+      .catch(() => { setData(null); setFailed(true); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -59,6 +60,16 @@ export default function ChangeOverviewCard() {
       <div style={CARD}>
         <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>📈 近期健康变化</div>
         <div style={{ textAlign: 'center', padding: 16 }}><Spin size="small" /> 正在生成跨报告分析...</div>
+      </div>
+    );
+  }
+  if (failed) {
+    return (
+      <div style={CARD}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>📈 近期健康变化</div>
+        <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+          健康变化总览暂时无法获取,请稍后刷新重试。
+        </div>
       </div>
     );
   }
