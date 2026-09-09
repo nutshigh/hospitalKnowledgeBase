@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.core.database import get_hospital_db
 from app.core.dependencies import get_current_user, CurrentUser, user_identity
-from app.utils.exceptions import NotFoundException, ValidationException
+from app.utils.exceptions import ValidationException
 from app.modules.user_profile import service
 
 router = APIRouter()
