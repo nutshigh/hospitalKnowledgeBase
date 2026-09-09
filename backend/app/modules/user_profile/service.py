@@ -111,6 +111,17 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
         v["trend_direction"] = trend_direction(v["points"])
         v["latest_deviation"] = v["points"][-1].get("color") if v["points"] else None
 
+    def _abnormal_sev(points: list[dict]) -> str | None:
+        """最近一次异常(红/黄)点的颜色,用于排序。"""
+        for p in reversed(points):
+            c = p.get("color")
+            if c in ("red", "yellow"):
+                return c
+        return None
+
+    by_key = {k: v for k, v in by_key.items()
+              if any(p.get("color") in ("red", "yellow") for p in v["points"])}
+
     abnormal_dist_q = text("""
         SELECT ij.item_name, rind.item_name_standard, ij.color_level, COUNT(*) as cnt
         FROM indicator_judgment ij
@@ -156,12 +167,15 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
     if baseline:
         summary["baseline_date"] = baseline.report_date.isoformat() if baseline.report_date else None
 
+    _SEV = {"red": 0, "yellow": 1, None: 2}
+
+    def _range(v: dict) -> float:
+        vals = [p["value"] for p in v["points"]]
+        return max(vals) - min(vals) if vals else 0.0
+
     trends_sorted = sorted(
         by_key.values(),
-        key=lambda x: (
-            0 if x.get("latest_deviation") in ("red", "yellow") else 1,
-            -abs(max([p["value"] for p in x["points"]], default=0) - min([p["value"] for p in x["points"]], default=0)),
-        ),
+        key=lambda x: (_SEV.get(_abnormal_sev(x["points"]), 2), -_range(x)),
     )
     return {
         "user_summary": summary,

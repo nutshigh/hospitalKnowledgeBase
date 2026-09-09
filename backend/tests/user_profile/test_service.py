@@ -391,6 +391,7 @@ def test_get_comparison_earliest_report_returns_baseline_and_diff(db):
 def test_get_overview_trends_only_include_recent_n_reports(db):
     """5 份报告(2022..2026)→ 走势只含最近 3 份(2024/2025/2026)。"""
     from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 
     for rid, dt, val in [
         (1, date(2022, 5, 1), "5.5"),
@@ -400,8 +401,10 @@ def test_get_overview_trends_only_include_recent_n_reports(db):
         (5, date(2026, 5, 1), "7.4"),
     ]:
         db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
-        db.add(ReportIndicator(report_id=rid, item_name="血糖", item_name_standard="空腹血糖",
+        db.add(ReportIndicator(id=rid * 100, report_id=rid, item_name="血糖", item_name_standard="空腹血糖",
                                result_value=val, unit="mmol/L"))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=500, item_name="血糖", color_level="red"))
     db.commit()
 
     result = get_overview(db, user_id="123456", name="张三")
@@ -413,13 +416,16 @@ def test_get_overview_trends_only_include_recent_n_reports(db):
 def test_get_overview_trends_keep_all_when_fewer_than_limit(db):
     """只有 2 份(< 默认3)时走势仍含全部,行为与现状一致。"""
     from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 
     db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 5, 1)))
     db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2026, 5, 1)))
-    db.add(ReportIndicator(report_id=1, item_name="血糖", item_name_standard="空腹血糖",
+    db.add(ReportIndicator(id=100, report_id=1, item_name="血糖", item_name_standard="空腹血糖",
                            result_value="6.0", unit="mmol/L"))
-    db.add(ReportIndicator(report_id=2, item_name="血糖", item_name_standard="空腹血糖",
+    db.add(ReportIndicator(id=200, report_id=2, item_name="血糖", item_name_standard="空腹血糖",
                            result_value="6.8", unit="mmol/L"))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=200, item_name="血糖", color_level="red"))
     db.commit()
 
     result = get_overview(db, user_id="123456", name="张三")
@@ -430,14 +436,17 @@ def test_get_overview_trends_keep_all_when_fewer_than_limit(db):
 def test_get_overview_trends_exclude_null_dated_report(db):
     """6 份(5 有日期 + 1 无日期)→ 走势为最近 3 份有日期的,无日期那份垫最旧被排除。"""
     from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 
     for rid, dt in [(1, date(2022, 5, 1)), (2, date(2023, 5, 1)), (3, date(2024, 5, 1)),
                     (4, date(2025, 5, 1)), (5, date(2026, 5, 1))]:
         db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
     db.add(ReportInfo(id=6, user_id="123456", name="张三", report_date=None))
     for rid in range(1, 7):
-        db.add(ReportIndicator(report_id=rid, item_name="血糖", item_name_standard="空腹血糖",
+        db.add(ReportIndicator(id=rid * 100, report_id=rid, item_name="血糖", item_name_standard="空腹血糖",
                                result_value="7.0", unit="mmol/L"))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=500, item_name="血糖", color_level="red"))
     db.commit()
 
     result = get_overview(db, user_id="123456", name="张三")
@@ -461,6 +470,7 @@ def test_get_overview_abnormal_distribution_includes_outside_trend_window(db):
     db.add(ReportInterpretation(id=1, report_id=1, overall_level="red", status="completed",
                                 red_count=1, yellow_count=0, green_count=0))
     db.add(IndicatorJudgment(interpretation_id=1, indicator_id=101, item_name="血糖", color_level="red"))
+    db.add(IndicatorJudgment(interpretation_id=4, indicator_id=104, item_name="血糖", color_level="yellow"))
     db.commit()
 
     result = get_overview(db, user_id="123456", name="张三")
@@ -468,3 +478,63 @@ def test_get_overview_abnormal_distribution_includes_outside_trend_window(db):
                for a in result["abnormal_distribution"])
     trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "空腹血糖")
     assert [p["report_date"] for p in trend["points"]] == ["2024-05-01", "2025-05-01", "2026-05-01"]
+
+
+def test_get_overview_trends_hide_non_abnormal_in_window(db):
+    """窗口(最近3份)内全绿/无判定/仅窗口外红 → 不展示;窗口内黄 → 展示。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+
+    # reports 1..5 = 2022..2026,窗口 = 3,4,5
+    for rid, dt in [(1, date(2022, 5, 1)), (2, date(2023, 5, 1)), (3, date(2024, 5, 1)),
+                    (4, date(2025, 5, 1)), (5, date(2026, 5, 1))]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+    # 收缩压:报告1(窗口外)红,报告3/4/5 绿 → 不应展示
+    for rid in range(1, 6):
+        db.add(ReportIndicator(id=rid * 10 + 1, report_id=rid, item_name="收缩压",
+                               item_name_standard="收缩压", result_value="140", unit="mmHg"))
+    # 空腹血糖:报告4(窗口内)黄,其余无判定 → 应展示
+    for rid in range(1, 6):
+        db.add(ReportIndicator(id=rid * 10 + 2, report_id=rid, item_name="血糖",
+                               item_name_standard="空腹血糖", result_value="6.8", unit="mmol/L"))
+    # 甘油三酯:全无判定 → 不应展示
+    for rid in range(1, 6):
+        db.add(ReportIndicator(id=rid * 10 + 3, report_id=rid, item_name="甘油三酯",
+                               item_name_standard="甘油三酯", result_value="1.5", unit="mmol/L"))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=1, indicator_id=11, item_name="收缩压", color_level="red"))
+    for rid in (3, 4, 5):
+        db.add(IndicatorJudgment(interpretation_id=rid, indicator_id=rid * 10 + 1,
+                                 item_name="收缩压", color_level="green"))
+    db.add(IndicatorJudgment(interpretation_id=4, indicator_id=42, item_name="血糖", color_level="yellow"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    names = [t["item_name_standard"] for t in result["indicator_trends"]]
+    assert names == ["空腹血糖"]  # 收缩压(窗口外红/窗口内绿)、甘油三酯(无判定)都被过滤
+
+
+def test_get_overview_trends_order_red_before_yellow(db):
+    """窗口内最近一次异常:红优先于黄。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import IndicatorJudgment
+
+    for rid, dt in [(1, date(2025, 5, 1)), (2, date(2025, 11, 2)), (3, date(2026, 5, 1))]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+    # 指标 X 最近异常(报告3)黄,指标 Y 最近异常(报告3)红
+    db.add(ReportIndicator(id=1, report_id=3, item_name="X", item_name_standard="X",
+                           result_value="3.0", unit=""))
+    db.add(ReportIndicator(id=2, report_id=2, item_name="X", item_name_standard="X",
+                           result_value="2.0", unit=""))
+    db.add(ReportIndicator(id=3, report_id=3, item_name="Y", item_name_standard="Y",
+                           result_value="9.0", unit=""))
+    db.add(ReportIndicator(id=4, report_id=2, item_name="Y", item_name_standard="Y",
+                           result_value="8.0", unit=""))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=10, indicator_id=1, item_name="X", color_level="yellow"))
+    db.add(IndicatorJudgment(interpretation_id=20, indicator_id=3, item_name="Y", color_level="red"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    names = [t["item_name_standard"] for t in result["indicator_trends"]]
+    assert names == ["Y", "X"]
