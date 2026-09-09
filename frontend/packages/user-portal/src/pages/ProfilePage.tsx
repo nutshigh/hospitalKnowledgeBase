@@ -138,7 +138,10 @@ export default function ProfilePage() {
                     cursor: expandable ? 'pointer' : 'default',
                   }}
                 >
-                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}>
+                  <span style={{
+                    fontSize: 13, fontWeight: 500, flex: '1 1 auto', minWidth: 0,
+                    wordBreak: 'break-word', lineHeight: 1.4,
+                  }}>
                     {t.item_name_standard || t.item_name}
                     {t.trend_direction && (
                       <span style={{
