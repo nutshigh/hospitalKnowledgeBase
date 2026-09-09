@@ -391,7 +391,7 @@ def test_get_comparison_earliest_report_returns_baseline_and_diff(db):
 def test_get_overview_trends_only_include_recent_n_reports(db):
     """5 份报告(2022..2026)→ 走势只含最近 3 份(2024/2025/2026)。"""
     from app.modules.user_profile.service import get_overview
-    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+    from app.modules.interpretation.models import IndicatorJudgment
 
     for rid, dt, val in [
         (1, date(2022, 5, 1), "5.5"),
@@ -416,7 +416,7 @@ def test_get_overview_trends_only_include_recent_n_reports(db):
 def test_get_overview_trends_keep_all_when_fewer_than_limit(db):
     """只有 2 份(< 默认3)时走势仍含全部,行为与现状一致。"""
     from app.modules.user_profile.service import get_overview
-    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+    from app.modules.interpretation.models import IndicatorJudgment
 
     db.add(ReportInfo(id=1, user_id="123456", name="张三", report_date=date(2025, 5, 1)))
     db.add(ReportInfo(id=2, user_id="123456", name="张三", report_date=date(2026, 5, 1)))
@@ -436,7 +436,7 @@ def test_get_overview_trends_keep_all_when_fewer_than_limit(db):
 def test_get_overview_trends_exclude_null_dated_report(db):
     """6 份(5 有日期 + 1 无日期)→ 走势为最近 3 份有日期的,无日期那份垫最旧被排除。"""
     from app.modules.user_profile.service import get_overview
-    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+    from app.modules.interpretation.models import IndicatorJudgment
 
     for rid, dt in [(1, date(2022, 5, 1)), (2, date(2023, 5, 1)), (3, date(2024, 5, 1)),
                     (4, date(2025, 5, 1)), (5, date(2026, 5, 1))]:
@@ -483,7 +483,7 @@ def test_get_overview_abnormal_distribution_includes_outside_trend_window(db):
 def test_get_overview_trends_hide_non_abnormal_in_window(db):
     """窗口(最近3份)内全绿/无判定/仅窗口外红 → 不展示;窗口内黄 → 展示。"""
     from app.modules.user_profile.service import get_overview
-    from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+    from app.modules.interpretation.models import IndicatorJudgment
 
     # reports 1..5 = 2022..2026,窗口 = 3,4,5
     for rid, dt in [(1, date(2022, 5, 1)), (2, date(2023, 5, 1)), (3, date(2024, 5, 1)),
@@ -538,3 +538,32 @@ def test_get_overview_trends_order_red_before_yellow(db):
     result = get_overview(db, user_id="123456", name="张三")
     names = [t["item_name_standard"] for t in result["indicator_trends"]]
     assert names == ["Y", "X"]
+
+
+def test_get_overview_trends_retained_green_newest_sorts_by_abnormal_color(db):
+    """隔离“最近异常点”排序语义:指标最新点转绿但更早已红 → 仍被保留,且其最近异常点(红)
+    优先于“最新点为黄”的指标。若回归成按最新点颜色(latest_deviation)排序,A 会掉到 B 后。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import IndicatorJudgment
+
+    for rid, dt in [(1, date(2024, 5, 1)), (2, date(2025, 5, 1)), (3, date(2026, 5, 1))]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+    # 指标 A:3 份报告都有点,报告2 红、报告3(最新)绿 → 仍须展示且按最近异常点“红”排
+    for rid, val in [(1, "6.0"), (2, "8.0"), (3, "5.8")]:
+        db.add(ReportIndicator(id=100 + rid, report_id=rid, item_name="A", item_name_standard="A",
+                               result_value=val, unit="mmol/L"))
+    # 指标 B:3 份报告都有点,报告3(最新)黄
+    for rid, val in [(1, "6.0"), (2, "6.2"), (3, "7.0")]:
+        db.add(ReportIndicator(id=200 + rid, report_id=rid, item_name="B", item_name_standard="B",
+                               result_value=val, unit="mmol/L"))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=102, item_name="A", color_level="red"))
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=103, item_name="A", color_level="green"))
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=203, item_name="B", color_level="yellow"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    a_trend = next(t for t in result["indicator_trends"] if t["item_name_standard"] == "A")
+    assert a_trend["latest_deviation"] == "green"  # A 最新点确实是绿,测试才具区分度
+    names = [t["item_name_standard"] for t in result["indicator_trends"]]
+    assert names == ["A", "B"]
