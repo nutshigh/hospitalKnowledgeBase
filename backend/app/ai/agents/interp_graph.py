@@ -265,10 +265,21 @@ def _generate_report(state: InterpState, db: Session) -> dict:
     abnormal_text = "\n".join(abnormal_lines)
 
     knowledge_blocks = []
+    # 2026-09-05: 检索知识总量预算, 超限截断尾部, 防 LLM 单次输入超 vllm 上下文导致 400 死循环。
+    # 量化依据: 正常报告引用 ≤34 条(~17K 字, H004/齐鲁 类), 24K 预算在其上留有安全余量,
+    # 仅对极端超长报告(如某份 ~118 条/59K 触发 400)生效, 不影响其它报告解读。
+    _KNOWLEDGE_BUDGET_CHARS = 24000
+    _used = 0
     for k in knowledge:
-        knowledge_blocks.append(
-            f"- [来源] title={k.get('title','')}, source={k.get('source','document')}\n  {k.get('content','')[:500]}"
-        )
+        block = (f"- [来源] title={k.get('title','')}, source={k.get('source','document')}\n"
+                 f"  {k.get('content','')[:500]}")
+        if _used + len(block) > _KNOWLEDGE_BUDGET_CHARS:
+            logger.warning(
+                "generate_report: knowledge_text 超预算截断尾部(knowledge=%d used=%d)",
+                len(knowledge), _used)
+            break
+        knowledge_blocks.append(block)
+        _used += len(block)
     knowledge_text = "\n".join(knowledge_blocks) or "（无知识库结果）"
 
     user_content = f"""请基于以下数据撰写综合解读报告（5 节）：
@@ -354,7 +365,8 @@ def build_interp_graph(hospital_id: str, db: Session):
         user_id = row[1] if row else 0
         rows = db.execute(
             text("SELECT id, item_name, item_name_standard, result_value, unit, "
-                 "ref_range_low, ref_range_high, signal_flag FROM report_indicator WHERE report_id = :rid ORDER BY id"),
+                 "ref_range_low, ref_range_high, signal_flag FROM report_indicator "
+                 "WHERE report_id = :rid AND raw_text IS NULL ORDER BY id"),
             {"rid": report_id},
         ).fetchall()
         indicators = [
@@ -411,10 +423,14 @@ def build_interp_graph(hospital_id: str, db: Session):
                     val = _to_num(ind["result_value"])
                     ref_high = _to_num(ind["ref_range_high"])
                     ref_low = _to_num(ind["ref_range_low"])
-                    if ref_high and ref_low and (val > ref_high or val < ref_low):
-                        deviation = "high" if val > ref_high else "low"
+                    # 2026-09-07: 复核兼容单限(防城港一 HBcAb ref 0-0.15, lo=0 时
+                    # 旧双限判断失效 → 8.19 超上界不判黄)
+                    over_hi = ref_high is not None and val > ref_high
+                    under_lo = ref_low is not None and val < ref_low
+                    if over_hi or under_lo:
+                        deviation = "high" if over_hi else "low"
                         color_level = "yellow"
-                    elif not (ref_high or ref_low):
+                    elif ref_high is None and ref_low is None:
                         color_level = "yellow"
                         if deviation == "normal":
                             deviation = "abnormal"
@@ -422,21 +438,11 @@ def build_interp_graph(hospital_id: str, db: Session):
                     color_level = "yellow"
                     if deviation == "normal":
                         deviation = "abnormal"
-            if deviation == "normal":
-                try:
-                    val = _to_num(ind["result_value"])
-                    ref_high = _to_num(ind["ref_range_high"])
-                    ref_low = _to_num(ind["ref_range_low"])
-                    if ref_high and val > ref_high:
-                        deviation = "high"
-                        if color_level == "green":
-                            color_level = "yellow"
-                    elif ref_low and val < ref_low:
-                        deviation = "low"
-                        if color_level == "green":
-                            color_level = "yellow"
-                except (ValueError, TypeError):
-                    pass
+            # 2026-09-07(口径确认): "仅标志判黄" —— 无任何 signal_flag 的指标不做
+            # 结果 vs 参考范围自动比较判黄(报告方自己会在表格内标记异常, 比较判黄多此一举,
+            # 且 ref 错配时会造成假黄)。黄/红只来自: 业务规则(rule 表)、表格标志
+            # (signal_flag 3/2 强制, 1=红字/异常词样式标记 + ref 复核)。
+            # 回退: 恢复本段即回到"无标志超限自动黄"。
 
             judgments.append({
                 "indicator_id": ind["id"],

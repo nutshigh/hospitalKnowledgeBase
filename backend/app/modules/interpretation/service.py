@@ -90,6 +90,19 @@ def get_judgments(db: Session, interpretation_id: int) -> List[IndicatorJudgment
     return db.query(IndicatorJudgment).filter(IndicatorJudgment.interpretation_id == interpretation_id).all()
 
 
+def _share_prefix5(a: str, b: str) -> bool:
+    """2026-09-05: 同一实体变体 —— 剥 括号注释/结论/测定 后前 5 字相同
+    ("乙肝两对半(第1,2,4,5项阳性)" vs "乙肝两对半结论")。"""
+    import re
+    def norm(s: str) -> str:
+        s = re.sub(r"[（(].*?[)）]", "", s)
+        s = re.sub(r"(结论|测定|检测)", "", s)
+        s = s.replace(" ", "").replace("　", "")
+        return s
+    na, nb = norm(a), norm(b)
+    return len(na) >= 5 and len(nb) >= 5 and na[:5] == nb[:5]
+
+
 def _fuzzy_overlap(a: str, b: str) -> bool:
     """判断两个指标名是否指向同一异常（模糊匹配，仅当两者足够相似且非单字匹配）。"""
     import re
@@ -169,6 +182,10 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
         if citem["item_name"] in reg_anomaly_names:
             continue
 
+        # 2026-09-05: 共享前缀变体("乙肝两对半(第…阳性)" vs 指标"乙肝两对半结论")→ 剔除结论侧
+        if any(_share_prefix5(citem["item_name"], rn) for rn in reg_anomaly_names):
+            continue
+
         # 模糊匹配
         fuzzy_matched = False
         for rname in reg_anomaly_names:
@@ -178,7 +195,7 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
                 # 不同语义层级, 用户要求两者都展示(指标黄区 + 总检建议)。
                 if rname in citem["item_name"] \
                         and len(citem["item_name"]) >= len(rname) + 2 \
-                        and re.search(r"(血症|病|症|炎|瘤|癌|肿|硬化|息肉|结节|结石|囊肿)$", citem["item_name"]):
+                        and re.search(r"(血症|病|症|炎|瘤|癌|肿|硬化|息肉|结节|结石|囊肿|异常)$", citem["item_name"]):
                     continue
                 _link_disease_mapping(db, citem["item_name"], rname)
                 fuzzy_matched = True
@@ -202,7 +219,11 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
                 rstem = re.sub(r"[（(].*?[)）]", "", rname).strip()
                 cname = citem["item_name"]
                 if rstem and len(rstem) >= 2 and rstem in cname \
-                        and re.search(r"(血症|病|症|炎|瘤|癌|肿|硬化|息肉|结石|囊肿)$", cname):
+                        and re.search(r"(血症|病|症|炎|瘤|癌|肿|硬化|息肉|结石|囊肿|异常)$", cname):
+                    continue
+                # 2026-09-05: 综合征诊断("血脂异常")不以指标名作子串,
+                # 只要不精确同名即放行(德宏 总检异常"血脂异常"需展示)
+                if re.search(r"(血症|异常)$", cname) and cname not in reg_anomaly_names:
                     continue
                 dm_matched = True
                 break
@@ -215,6 +236,28 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
     kept_names = {it["item_name"] for it in kept}
     regular_items = [it for it in regular_items
                      if not (it["item_name"] in kept_names and it.get("color_level") == "green")]
+
+    # === 2026-09-09: 总检异常 ↔ conclusion_text 原文行映射 ===
+    # 结论条目来自总检建议段(conclusion_text), 展示时附加 origin_row/origin_line,
+    # 前端可看到每条异常对应的原文句子(验收歧义消除)。
+    conc = db.execute(text(
+        "SELECT r.conclusion_text FROM report_interpretation j "
+        "JOIN report_info r ON r.id = j.report_id WHERE j.id = :iid"
+    ), {"iid": interpretation_id}).scalar()
+    if conc:
+        conc_lines = (conc or "").split("\n")
+        for it in regular_items + kept:
+            if it.get("source") != "conclusion":
+                continue
+            name = (it.get("item_name") or "").strip()
+            row = None
+            if name and len(name) >= 2 and name in conc:
+                for i, ln in enumerate(conc_lines):
+                    if name in ln:
+                        row = i
+                        break
+            it["origin_row"] = row
+            it["origin_line"] = conc_lines[row].strip()[:80] if row is not None else None
 
     return regular_items + kept
 

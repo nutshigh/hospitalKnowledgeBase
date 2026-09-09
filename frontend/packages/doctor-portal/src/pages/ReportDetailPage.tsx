@@ -37,7 +37,11 @@ export default function ReportDetailPage() {
   if (!report) return <DoctorLayout><Spin /></DoctorLayout>;
 
   const columns = [
-    { title: '指标', dataIndex: 'item_name', key: 'item_name' },
+    { title: '指标', dataIndex: 'item_name', key: 'item_name',
+      // 2026-09-09: 总检异常条目映射回总检建议段原文行(后端 origin_line)
+      render: (v: any, r: any) => r?.source === 'conclusion' && r.origin_line ? (
+        <div>{v}<div style={{ color: '#999', fontSize: 12, fontWeight: 'normal' }}>原文: {r.origin_line}</div></div>
+      ) : v },
     { title: '结果', dataIndex: 'result_value', key: 'result_value',
       render: (v: any, r: any) => <span>{v} <span style={{ color: '#888', fontSize: 12 }}>{r.unit}</span></span> },
     { title: '参考范围', key: 'ref',

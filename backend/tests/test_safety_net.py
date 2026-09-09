@@ -6,7 +6,9 @@ def test_parse_numbered_titles_basic():
 2、肺结节
 4、胆囊结节
 8、牙龈炎、牙结石"""
-    assert _parse_numbered_titles(text) == ["体重指数>24", "肺结节", "胆囊结节", "牙龈炎、牙结石"]
+    # 顿号并列的两个异常按切分取首段("牙龈炎、牙结石" → "牙龈炎"),
+    # 其余异常由 LLM 提取, 标题兜底只需首个名字(2026-09-03 与实现对齐)
+    assert _parse_numbered_titles(text) == ["体重指数>24", "肺结节", "胆囊结节", "牙龈炎"]
 
 
 def test_parse_numbered_titles_ignores_unnumbered():
