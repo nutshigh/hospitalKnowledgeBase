@@ -17,7 +17,7 @@
 2. **条数上限对齐 = 10**(走势前端展示上限),新增配置项;两处后端都按它截断。
 3. **前端展示保留现状**:变化总览仍默认 5 条 + 「展开全部」;走势仍 `slice(0,10)`。
 4. **取窗不动**(只对齐规则+上限):走势=最近 N 份报告(不限解读状态);总览=最近 N 份已完成解读报告。此为已知残留差异。
-5. 规则语义变更必须让旧 `comparison_summary` 缓存失效。
+5. 规则语义变更必须让旧 `comparison_summary` 缓存失效 —— **不引入缓存版本 key**,用一次性清理清空存量缓存(缓存可再生,无数据损失);后续标准名变更仍由既有 `fingerprint` 自动失效。
 
 ## 设计
 
@@ -73,13 +73,20 @@ PROFILE_TREND_MAX_ITEMS: int = Field(default=10, ge=1, description="指标走势
 - `ChangeOverviewCard.tsx`:后端现在最多返回 10 条,`key_indicators.length > 5` 时「展开全部」生效(此前后端 5 条永不触发展开)。
 - `ProfilePage.tsx`:`filtered.slice(0, 10)` 不变。
 
-### 4. 缓存失效
+### 4. 存量缓存一次性清理(不加版本 key)
 
-规则口径变更未改动 `report_id/interp_id/item_name_standard`,旧缓存会被原样命中 → 必须版本化:
+规则口径变更未改动 `report_id/interp_id/item_name_standard`,旧缓存会被原样命中 → 上线时**一次性清空**存量缓存即可(缓存可再生,无数据损失);保留既有 `signature` + `fingerprint` 校验应对未来的标准名变更,不再新增版本字段。
 
-- 模块常量 `_CHANGE_OVERVIEW_CACHE_VERSION = 2`。
-- 写缓存 JSON 增加 `"cache_version": _CHANGE_OVERVIEW_CACHE_VERSION`(与原 `signature` / `fingerprint` 并列)。
-- `_read_cached_overview` 除校验 `signature` 与 `fingerprint` 外,再要求 `data.get("cache_version") == _CHANGE_OVERVIEW_CACHE_VERSION`;不匹配(含旧 payload 无该键)→ 视为失效,重算并覆盖写回。
+- 新增 `backend/scripts/manual_migrations/008_clear_change_overview_cache.sql`:
+
+```sql
+-- 清空「近期健康变化」缓存(JSON)与退役的旧双报告对比纯文本;
+-- 属可再生缓存,下次访问 /profile/change-overview 会自动重算写回,无数据损失。
+UPDATE report_interpretation SET comparison_summary = NULL WHERE comparison_summary IS NOT NULL;
+```
+
+- 上线步骤:对全部 tenant 库执行一次(hospital_1 / hospital_H001 / hospital_H002 / hospital_H003 / hospital_H004)。`comparison_baseline_id` 已弃用,不动。
+- `_read_cached_overview` 仅保留 `signature` + `fingerprint` 校验,不做版本比较。
 
 ## 测试(`backend/tests/user_profile/`)
 
@@ -89,8 +96,7 @@ PROFILE_TREND_MAX_ITEMS: int = Field(default=10, ge=1, description="指标走势
 - 新增:
   - **子项不进 key_indicators**:同名报告里主项 + 子项(子项标准名 canonical child,如 `血小板比积（PCT）`)且子项红/黄 → key_indicators 不含子项;
   - **单报告异常入选**:仅 1 份报告出现、红/黄 → 入选且 `delta_pct is None`;
-  - **上限 10**:构造 >10 条窗口内红/黄主项 → `key_indicators` 长度 == 10;`get_overview.indicator_trends` 同测长度 == 10;
-  - **cache_version 失效**:写入 `signature`+`fingerprint` 均匹配但 `cache_version=1` 的缓存 → 第二次调用重算(`cached is False`)、LLM 被再次调用。
+  - **上限 10**:构造 >10 条窗口内红/黄主项 → `key_indicators` 长度 == 10;`get_overview.indicator_trends` 同测长度 == 10。
 - 既有 `test_service.py` 排序/过滤用例:仅在「红黄顺序」不因新增 item_name 兜底改变时保持断言;若受影响按新排序键修正(备注:红黄不同级时不受影响)。
 
 ## 不做 / 保留
