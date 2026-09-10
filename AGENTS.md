@@ -212,11 +212,12 @@ EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
   的最近 `PROFILE_TREND_REPORT_LIMIT` 份报告(默认 3,`backend/app/config.py`);`report_date` 为 NULL 视为最旧放前。
   不足 2 份返回 `reason=insufficient` 降级(不入缓存)。
 - **响应结构**: 自包含,含 `reports`(report_id/report_date/overall_level/红黄绿计数)、
-  `key_indicators`(≤5,排序 最近异常点红 > 黄 > 无、同级按 |delta_pct| 降序;仅保留 ≥2 份窗口报告出现、
-  且曾红/黄或首尾 |delta_pct|≥5 的数值指标)、`summary`(四键 `trend_summary`·`conclusion`·`suggestions`·`precautions`,
+  `key_indicators`(窗口内出现过红/黄的每一项指标,含血常规子项;与指标走势同口径:
+  最近异常红>黄、同级按极差降序、再按标准名;`PROFILE_TREND_MAX_ITEMS` 默认 10 截断)、`summary`(四键 `trend_summary`·`conclusion`·`suggestions`·`precautions`,
   MedGo 生成,宽容解析失败则返回 None 且不写缓存)。`role='user'` 的 app-login token 可直接调用。
 - **缓存**: 窗口最新一份的 `report_interpretation.comparison_summary` 存 JSON
-  `{signature:[{report_id,interp_id}], payload}`;signature 与当前窗口一致才复用,旧纯文本/签名不符 → 重新生成并写回。
+  `{signature:[{report_id,interp_id}], fingerprint, payload}`;signature、fingerprint 与当前窗口一致才复用,
+  旧纯文本/签名不符/指纹不符 → 重新生成并写回。
 - **worker 钩子**: 解读 worker(`interpretation/worker.py`)在解读完成后调
   `service.ensure_change_overview(db, report_id)` 预热缓存,异常吞掉不冒泡。`comparison_baseline_id` 列不再使用(写 NULL)。
 
