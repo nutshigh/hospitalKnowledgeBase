@@ -395,11 +395,45 @@ def test_sort_key_standard_name_stable_across_overview_and_change(db):
                       for t in get_overview(db, "123456", "张三")["indicator_trends"]]
     with patch(_model_patch) as m:
         m.return_value = _fake_model(_JSON_OK)
-        change_names = [k["item_name"]
+        change_names = [k["item_name_standard"]
                         for k in get_change_overview(db, "123456", "张三")["key_indicators"]]
 
     assert overview_names == change_names
     assert overview_names == ["丙氨酸氨基转移酶（ALT）", "空腹血糖（GLU）"]
+
+
+def test_sort_key_standard_name_parity_guard_split(db):
+    """守卫拆系列(同报告同标准名、不同原始名)下两路排序仍须同序。
+
+    `血糖` / `葡萄糖` 都归一化到 `空腹血糖（GLU）`,同报告并存触发
+    _split_item_name_collisions 拆成两条系列;两者标准名相同 → tie。
+    若 change-overview 丢失 item_name_standard,会退化成按原始名 tie-break,
+    与走势(按标准名)选出不同顺序/不同成员。
+    """
+    from app.modules.user_profile.service import get_overview, get_change_overview
+
+    for rid, rdate in [(1, date(2025, 5, 1)), (2, date(2026, 5, 1))]:
+        _report(db, rid, rdate=rdate)
+    # 原始名序:血糖 < 葡萄糖;两者标准名同为 空腹血糖（GLU）→ tie。
+    # 葡萄糖先于血糖插入,使守卫拆系列后 葡萄糖 在前(标准名 tie 的稳定序)。
+    _indicator(db, 1, 1, "葡萄糖", "空腹血糖（GLU）", "1.0")
+    _indicator(db, 2, 1, "血糖", "空腹血糖（GLU）", "1.0")
+    _indicator(db, 3, 2, "葡萄糖", "空腹血糖（GLU）", "2.0")
+    _indicator(db, 4, 2, "血糖", "空腹血糖（GLU）", "2.0")
+    _completed(db, 1)
+    _completed(db, 2)
+    _judgment(db, 1, 2, 3, "yellow")   # 葡萄糖最近点黄,极差 1.0
+    _judgment(db, 2, 2, 4, "yellow")   # 血糖最近点黄,极差 1.0
+    db.commit()
+
+    overview_std = [t["item_name_standard"]
+                    for t in get_overview(db, "123456", "张三")["indicator_trends"]]
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        change_std = [k["item_name_standard"]
+                      for k in get_change_overview(db, "123456", "张三")["key_indicators"]]
+
+    assert overview_std == change_std
 
 
 def test_change_overview_key_indicators_capped_at_config_limit(db):

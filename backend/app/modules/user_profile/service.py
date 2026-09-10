@@ -389,6 +389,7 @@ def _rank_key_indicators(db: Session, window: list) -> list[dict]:
             continue
         ranked.append({
             "item_name": item["item_name"],
+            "item_name_standard": item.get("item_name_standard"),
             "unit": item["unit"],
             "latest_value": points[-1]["value"],
             "latest_color": points[-1]["color"],
