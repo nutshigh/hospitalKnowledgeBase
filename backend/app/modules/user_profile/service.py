@@ -148,16 +148,7 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
         v["trend_direction"] = trend_direction(v["points"])
         v["latest_deviation"] = v["points"][-1].get("color") if v["points"] else None
 
-    def _abnormal_sev(points: list[dict]) -> str | None:
-        """最近一次异常(红/黄)点的颜色,用于排序。"""
-        for p in reversed(points):
-            c = p.get("color")
-            if c in ("red", "yellow"):
-                return c
-        return None
-
-    trend_items = [v for v in trend_items
-                   if any(p.get("color") in ("red", "yellow") for p in v["points"])]
+    trend_items = [v for v in trend_items if _has_abnormal(v["points"])]
 
     abnormal_dist_q = text("""
         SELECT ij.item_name, rind.item_name_standard, ij.color_level, COUNT(*) as cnt
@@ -204,19 +195,10 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
     if baseline:
         summary["baseline_date"] = baseline.report_date.isoformat() if baseline.report_date else None
 
-    _SEV = {"red": 0, "yellow": 1, None: 2}
-
-    def _range(v: dict) -> float:
-        vals = [p["value"] for p in v["points"]]
-        return max(vals) - min(vals) if vals else 0.0
-
-    trends_sorted = sorted(
-        trend_items,
-        key=lambda x: (_SEV.get(_abnormal_sev(x["points"]), 2), -_range(x)),
-    )
+    trends_sorted = sorted(trend_items, key=_trend_sort_key)
     return {
         "user_summary": summary,
-        "indicator_trends": trends_sorted,
+        "indicator_trends": trends_sorted[:settings.PROFILE_TREND_MAX_ITEMS],
         "abnormal_distribution": abnormal_distribution,
     }
 
@@ -363,6 +345,24 @@ def _severity(points: list[dict]) -> int:
         if p.get("color") in ("red", "yellow"):
             return 0 if p["color"] == "red" else 1
     return 2
+
+
+def _has_abnormal(points: list[dict]) -> bool:
+    """窗口内任一点红/黄。"""
+    return any(p.get("color") in ("red", "yellow") for p in points)
+
+
+def _points_range(points: list[dict]) -> float:
+    """数值极差 max-min;经 _try_float 兼容 float(get_overview) 与 str(_series);
+    无有效数值返回 0.0。"""
+    vals = [v for v in (_try_float(p.get("value")) for p in points) if v is not None]
+    return max(vals) - min(vals) if vals else 0.0
+
+
+def _trend_sort_key(item: dict):
+    """统一排序键:最近异常红>黄,同级按极差降序,再按指标名。"""
+    pts = item["points"]
+    return (_severity(pts), -_points_range(pts), item.get("item_name") or "")
 
 
 def _endpoint_pct(points: list[dict]) -> Optional[float]:

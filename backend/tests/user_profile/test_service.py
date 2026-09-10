@@ -373,3 +373,30 @@ def test_get_overview_trends_only_primary_items(db):
     plt = result["indicator_trends"][0]
     assert len(plt["points"]) == 3  # 每份报告 1 点,不再 5 点/份
     assert len({p["report_id"] for p in plt["points"]}) == 3
+
+
+def test_get_overview_trends_capped_at_config_limit(db):
+    """窗口内红/黄主项超过上限(默认10)→ indicator_trends 截断为 10。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import IndicatorJudgment
+    from app.config import settings
+
+    for rid in (1, 2):
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=date(2025, rid, 1)))
+    db.commit()
+    # 12 个不同的主项标准名,各在报告2 带黄判定
+    for i in range(12):
+        std = "指标%02d" % i
+        db.add(ReportIndicator(id=100 + i, report_id=1, item_name=std,
+                               item_name_standard=std, result_value="1.0", unit=""))
+        db.add(ReportIndicator(id=200 + i, report_id=2, item_name=std,
+                               item_name_standard=std, result_value="2.0", unit=""))
+    db.commit()
+    for i in range(12):
+        db.add(IndicatorJudgment(interpretation_id=99, indicator_id=200 + i,
+                                 item_name="x", color_level="yellow"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    assert settings.PROFILE_TREND_MAX_ITEMS == 10
+    assert len(result["indicator_trends"]) == 10

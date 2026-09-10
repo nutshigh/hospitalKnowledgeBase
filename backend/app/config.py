@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     # User Profile(用户端 overview):指标走势只纳入最近 N 份报告
     PROFILE_TREND_REPORT_LIMIT: int = Field(default=3, ge=1, description="指标走势只纳入最近 N 份报告")
 
+    # User Profile(用户端):指标走势 / 变化总览关键指标最多展示条数
+    PROFILE_TREND_MAX_ITEMS: int = Field(default=10, ge=1, description="指标走势/变化总览关键指标最多展示条数")
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
