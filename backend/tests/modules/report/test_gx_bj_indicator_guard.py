@@ -23,8 +23,8 @@ from app.modules.report.service import (  # noqa: E402
     _locate_findings_sections,
 )
 from app.modules.report.table_extractor import (  # noqa: E402
+    col_rows_with_fallback,
     extract_abnormal_signals,
-    extract_column_table_rows,
     extract_indicator_rows,
 )
 from app.modules.interpretation.rules_engine import RulesEngine  # noqa: E402
@@ -68,7 +68,7 @@ CASES = {
     "钦州二": ("hospital_H004", os.path.join(GX, "广西钦州市第二人民医院.PDF"),
              ["钾(K)"]),
     "步新宇(北京)": ("hospital_H004", os.path.join(SAMPLES, "步新宇_H004_11.pdf"),
-                   ["舒张压", "弃检", "游离前列腺特异性抗原", "血清同型半胱氨酸", "肌酸激酶"]),
+                   ["舒张压", "游离前列腺特异性抗原", "血清同型半胱氨酸", "肌酸激酶"]),
 }
 
 _GARBAGE_IN_YELLOW = re.compile(
@@ -85,7 +85,7 @@ def _extract(pdf):
         extra_skip_re=comp["extra_skip_re"], extra_anchor_re=comp["extra_anchor_re"])
     t2 = t.replace(sec, "") if sec and len(sec) > 50 else t
     rows = extract_indicator_rows(t2)
-    col_rows = extract_column_table_rows(t2)
+    col_rows = col_rows_with_fallback(pdf, t2)
     signals = extract_abnormal_signals(pdf)
     col_flag_keys = {(r["item_name"], r["result"]) for r in col_rows if r.get("signal_flag") == 3}
     if col_flag_keys:

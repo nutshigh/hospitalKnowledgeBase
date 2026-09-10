@@ -2271,7 +2271,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 from app.modules.report.table_extractor import (
                     extract_indicator_rows,
                     extract_abnormal_signals,
-                    extract_column_table_rows,
+                    col_rows_with_fallback,
                     extract_personal_info,
                 )
                 # 2026-08-31: 指标解析前挖掉结论段(体检结果综述/总检建议/异常结果汇总),
@@ -2287,7 +2287,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 rows = extract_indicator_rows(text)
                 # 2026-08-28: 列式表格(广西"项目名称|检查结果|单位|参考范围|提示")
                 # 标志权威 —— 提示列异常标志 signal_flag=3 强制黄, 弃检不入库
-                col_rows = extract_column_table_rows(text)
+                col_rows = col_rows_with_fallback(processed_path, text)
                 signals = extract_abnormal_signals(processed_path)
                 # 2026-08-28: 列式报告(表格有提示列异常标志)抑制 word/arrow/red 通道 ——
                 # 综述异常词配对(残缺重复)、箭头跨块错配(↑向上找名称跨块)、红字样式

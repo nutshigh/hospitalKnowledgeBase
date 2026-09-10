@@ -10,7 +10,7 @@ LLM 自由提取不稳定(梧州 67 vs 226 项), 改为规则定位:
 层3校验: 名称+结果必须都存在; 按(名称,结果)去重。
 """
 import re
-from typing import Optional
+from typing import List, Optional
 
 _QUALITATIVE_WORDS = (
     "正常|未见异常|未见|未闻及|未触及|未检出|无异常|无|阴性|弱阳性|阳性|"
@@ -75,7 +75,7 @@ _RANGE_RE = re.compile(
 _ARROW_RE = re.compile(r"^[↑↓]$")
 # 名称行黑名单(页眉/标题/结构化标签)
 _SKIP_NAMES = re.compile(
-    r"^(姓名|性别|年龄|体检日期|检查日期|审核日期|健康档案号|体检编号|登记号|电话|话$|"
+    r"^(姓名|性别|年龄|体检日期|检查日期|审核日期|健康档案号|体检编号|登记号|电话|话$|弃检|未检|拒检|放弃检查|"
     r"项目名称|检查结果|检查医生|检查医师|审核医师|审核者|审核人|报告医师|科室小结|检查者|报告整理|"
     r"主检医师|总检医师|总检建议与结论|温馨提示|说明[:：]|"
     r"第\s*\d+\s*页|第|页/共|一般项目|内科查体|外科查体|一般检查|"
@@ -1308,4 +1308,186 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
             if key not in seen:
                 seen[key] = True
                 out.append(row)
+    return out
+
+
+# === Phase 2 接线(2026-09-07): 布局优先, 布局不可用(空/异常/图片型)回退旧列式 ===
+def col_rows_with_fallback(pdf_path: str, text: str) -> list[dict]:
+    try:
+        rows = col_rows_via_layout(pdf_path)
+        if rows:
+            return rows
+    except Exception:
+        pass
+    return extract_column_table_rows(text)
+
+
+# === Phase 2(2026-09-07): 列语义组装(col_rows_via_layout) ===
+# region(坐标检测) + 表头行列角色(x 区间) → 数据行按列归位取 名称/结果/参考/单位/标志。
+# 统一覆盖: 常规列式表(广西)、华西三列表、弘爱双值表(表头"本次结果"直接给出结果列)、
+# 齐鲁反序表(名称/值/参考/单位/异常标识 = 五列表头, 无需 rev 特判)。
+# 值/参考的单元格判定复用本模块既有 helper(_norm_value_cell/_range_with_unit/_parse_ref)。
+# ⚠ 未接线: 由 service 组装在验证通过后切换; 行式通道不变。
+def col_rows_via_layout(pdf_path: str) -> list[dict]:
+    """列语义组装(Phase 2 v6, 表头分段 + 段内独立列谱):
+    - region 内每个表头行 → 新段; 段内数据行独立做 x0 列聚簇(容差 30);
+    - 列数 > 角色数时剔除"窄标志列"(该列 ≥60% cell 为 ↑↓HL*/'-' 等短标记, 如华西 ↑ 列);
+    - 等长 → 角色序 zip; 数据 cell 就近归列(容差 30), 归不进且近表头 x(≤60)也取角色;
+    - region 首段包含表头前的页首块(华西上半血脂块)。
+    ⚠ 未接线; 验证通过后由 service 组装切换。
+    """
+    from app.modules.report import layout as L
+
+    regions = L.detect_table_regions(pdf_path)
+    out: list[dict] = []
+    _last_rx: Optional[list] = None
+    for reg in regions:
+        lines = L.logical_lines(reg.rows)
+        # 切段: [(roles_xs, start_idx, end_idx)]; region 首段起点回拨到 0(页首块)
+        segs: list = []
+        cur_start = 0
+        cur_roles = None
+        for idx, cells in enumerate(lines):
+            roles = L.header_roles(cells)
+            if roles:
+                if cur_roles is not None:
+                    segs.append((cur_roles, cur_start, idx, False))
+                cur_roles = [(r, c.x0) for r, c in zip(roles, cells)]
+                cur_start = idx
+        if cur_roles is not None:
+            segs.append((cur_roles, cur_start, len(lines), False))
+            _last_rx = cur_roles
+        elif _last_rx is not None and lines:
+            # 跨页/跨 region 续表(德宏毕建国化验大表): 继承最近表头谱(继承段)
+            segs.append((_last_rx, 0, len(lines), True))
+        for roles_xs, s0, s1 in segs:
+            if s0 > 0 and segs[0][1] == 0:
+                pass  # 首段含页首块(已在切段时 cur_start=0? 首表头前数据未被包)
+        # 处理: 段 s0 的表头行之前若有数据(页首块), 归该段
+        if segs:
+            segs[0] = (segs[0][0], 0, segs[0][2])
+        import os as _os
+        _dbg = _os.getenv("LAYOUT_DEBUG")
+        for roles_xs, s0, s1, inherited in segs:
+            seg_rows: list[dict] = []
+            seg_data = []
+            for idx in range(s0, s1):
+                cells = lines[idx]
+                if L.header_roles(cells):
+                    continue
+                seg_data.append(cells)
+            if _dbg and seg_data and any("肌酐" in c.text for cl in seg_data for c in cl):
+                import sys as _s
+                print("SEG roles:", [(r, round(x)) for r, x in roles_xs],
+                      "cols:", [round(x) for x in col_xs], file=_s.stderr)
+            cells_flat = [c for cl in seg_data for c in cl if c.text.strip()]
+            if not cells_flat:
+                continue
+            xs = sorted(c.x0 for c in cells_flat)
+            col_xs: List[float] = []
+            for x in xs:
+                if col_xs and x - col_xs[-1] <= 30.0:
+                    col_xs[-1] = (col_xs[-1] + x) / 2
+                else:
+                    col_xs.append(x)
+            pass
+            # 窄标志列剔除(仅当 列数 > 角色数)
+            while len(col_xs) > len(roles_xs):
+                best_i = None
+                best_ratio = 0.0
+                for i, cx in enumerate(col_xs):
+                    cs = [c.text.strip() for c in cells_flat
+                          if abs(c.x0 - cx) <= 30.0]
+                    if not cs:
+                        continue
+                    short = sum(1 for t in cs if len(t) <= 2
+                                or t in ("↑", "↓", "H", "L", "*", "-", "异常"))
+                    if short / len(cs) > best_ratio:
+                        best_ratio = short / len(cs)
+                        best_i = i
+                if best_i is None or best_ratio < 0.6:
+                    break
+                col_xs.pop(best_i)
+            for cells in seg_data:
+                name_parts, result_parts, ref_parts, unit_parts, flag_parts = [], [], [], [], []
+                float_flags: List[str] = []
+                for c in sorted(cells, key=lambda c: c.x0):
+                    col = min(range(len(col_xs)), key=lambda k: abs(c.x0 - col_xs[k]))
+                    role = None
+                    if col_xs and abs(c.x0 - col_xs[col]) <= 30.0:
+                        if len(col_xs) == len(roles_xs):
+                            role = roles_xs[col][0]
+                    if role is None and roles_xs:
+                        k = min(range(len(roles_xs)),
+                                key=lambda i: abs(c.x0 - roles_xs[i][1]))
+                        if abs(c.x0 - roles_xs[k][1]) <= 90.0:
+                            role = roles_xs[k][0]
+                            # 窄标志(↑↓HL)不应落非 flag 角色(体格表值后 ↑ 会被 ref 列吸走)
+                            if c.text.strip() in ("↑", "↓", "H", "L") \
+                                    and role != "flag":
+                                role = None
+                    t = c.text.strip()
+                    if role is None:
+                        if t in ("↑", "↓", "H", "L"):
+                            float_flags.append(t)
+                        continue
+                    if role == "name":
+                        name_parts.append(t)
+                    elif role == "result":
+                        result_parts.append(t)
+                    elif role == "ref":
+                        ref_parts.append(t)
+                    elif role == "unit":
+                        unit_parts.append(t)
+                    elif role == "flag":
+                        flag_parts.append(t)
+                name = "".join(name_parts).strip()
+                result_txt = "".join(result_parts).strip()
+                if not name or not result_txt or _skip_name(name):
+                    continue
+                row = {"item_name": name.lstrip("★*＊▲△"), "result": result_txt,
+                       "unit": "".join(unit_parts).strip(),
+                       "ref_low": None, "ref_high": None, "signal_flag": 0,
+                       "__auth": True}
+                tail_flag = ""
+                m = re.search(r"[（(](↑|↓|\*)[)）]$", result_txt)
+                if m:
+                    tail_flag = m.group(1)
+                    result_txt = result_txt[:m.start()]
+                nv = _norm_value_cell(result_txt)
+                row["result"] = nv if nv is not None else result_txt.strip()
+                for rt in reversed(ref_parts):
+                    ru = _range_with_unit(rt)
+                    if ru:
+                        rlo, rhi, runit = ru
+                        row["ref_low"], row["ref_high"] = rlo, rhi
+                        if not row["unit"] and runit:
+                            row["unit"] = runit
+                        break
+                else:
+                    for rt in ref_parts:
+                        lo, hi = _parse_ref(rt)
+                        if lo or hi:
+                            row["ref_low"], row["ref_high"] = lo, hi
+                            break
+                flag_txt = "".join(flag_parts)
+                if (tail_flag or float_flags
+                        or flag_txt in ("↑", "↓", "H", "L", "*", "异常")
+                        or "*" in flag_txt
+                        or re.search(r"(偏高|升高|增高|降低|偏低|阳性|异常)", flag_txt)):
+                    row["signal_flag"] = 3
+                out.append(row)
+    # 结果形态门(报告级): result 应为 值/定性形态; 若大量 result 是单位/文本(表头-
+    # 数据列倒挂, 如茂名人民陈灿明把 单位列当结果列 → result='μmol/L')→ 布局不可信,
+    # 整体弃用, 交行式(反列序/序号制)兜底。
+    if out:
+        bad = 0
+        for r in out:
+            res = str(r["result"]).strip()
+            if not (re.match(r"^[<>≤≥]?\s*[\d.]+", res)
+                    or re.match(r"^(阴性|阳性|弱阳性|正常|未见|未检出|无|未及|1\+|2\+|[1-5]\+)", res)
+                    or _norm_value_cell(res) is not None):
+                bad += 1
+        if bad / len(out) > 0.2:
+            return []
     return out

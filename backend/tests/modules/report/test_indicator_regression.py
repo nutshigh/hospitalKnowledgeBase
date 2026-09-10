@@ -18,8 +18,8 @@ from app.modules.report.service import (  # noqa: E402
     _locate_findings_sections,
 )
 from app.modules.report.table_extractor import (  # noqa: E402
+    col_rows_with_fallback,
     extract_abnormal_signals,
-    extract_column_table_rows,
     extract_indicator_rows,
 )
 
@@ -46,7 +46,7 @@ def _indicator_rows(pdf: str) -> list[dict]:
         extra_skip_re=comp["extra_skip_re"], extra_anchor_re=comp["extra_anchor_re"])
     t2 = text.replace(sec, "") if sec and len(sec) > 50 else text
     rows = extract_indicator_rows(t2)
-    col = extract_column_table_rows(t2)
+    col = col_rows_with_fallback(pdf, t2)
     signals = extract_abnormal_signals(pdf)
     all_items: list[dict] = list(rows) + list(col) + list(signals)
     merged: dict[tuple, dict] = {}

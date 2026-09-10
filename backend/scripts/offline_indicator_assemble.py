@@ -25,7 +25,7 @@ from app.modules.report.service import (
     _locate_findings_sections,
 )
 from app.modules.report.table_extractor import (
-    extract_abnormal_signals, extract_column_table_rows, extract_indicator_rows,
+    col_rows_with_fallback, extract_abnormal_signals, extract_indicator_rows,
     extract_personal_info,
 )
 from app.core.term_normalizer import normalize_indicators
@@ -48,7 +48,7 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         text = text.replace(findings_sec, "")
 
     rows = extract_indicator_rows(text)
-    col_rows = extract_column_table_rows(text)
+    col_rows = col_rows_with_fallback(pdf_path, text)
     signals = extract_abnormal_signals(pdf_path)
 
     col_flag_keys = {
