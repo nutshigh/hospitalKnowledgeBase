@@ -230,7 +230,7 @@ EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
 
 - **指标走势只留主项(2026-09-10 起)**:血常规衍生物子项(血小板比积/PCT、平均体积/MPV、分布宽度/PDW、大血小板比率/P-LCR、红细胞压积/HCT、MCV/MCH/MCHC/RDW、小而密 LDL 等)由 `app/core/term_normalizer.py` 词表 `primary=False` 打标,`get_overview` 走势按 raw `item_name` 经 `is_child_item()` 剔除子项;`/profile/change-overview` 的 `key_indicators` 自 2026-09-10 起与走势同口径同上限(仅主项、窗口内任一点红/黄、按最近异常红>黄再极差降序、`PROFILE_TREND_MAX_ITEMS` 默认 10 截断),不再保留全量。`_split_item_name_collisions()` 对同报告同 key 多 item_name 的脏数据拆独立系列并告警。存量标准名回填脚本 `backend/scripts/manual_migrations/007_fix_indicator_standard.py` 已对 hospital_1/H001/H002 执行;H003/H004 旧命名库未动。
 
-- **变化总览/走势取窗差异(已知)**:走势取最近 N 份报告(不限解读状态);变化总览取最近 N 份**已完成解读**报告。两者入选规则/排序/上限已对齐(2026-09-10),取窗仍可能不同。规则口径变更后需一次性清空存量缓存:`backend/scripts/manual_migrations/008_clear_change_overview_cache.sql`(对全部 tenant 库各执行一次)。
+- **变化总览/走势取窗差异(已知)**:走势取最近 N 份报告(不限解读状态);变化总览取最近 N 份**已完成解读**报告。两者入选规则/排序/上限已对齐(2026-09-10),取窗仍可能不同。规则口径变更后需一次性清空存量缓存:`backend/scripts/manual_migrations/008_clear_change_overview_cache.sql`(对全部 tenant 库各执行一次)。修改 `PROFILE_TREND_MAX_ITEMS` 或入选规则后需同样清一次缓存(否则旧 payload 保留旧条数/口径);且 AI 总结的输入指标集合已随之改变(子项不再进入、单报告异常会进入)。
 
 ---
 

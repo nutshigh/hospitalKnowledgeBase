@@ -372,6 +372,36 @@ def test_key_indicators_exclude_child_items(db):
     assert names == ["空腹血糖"]  # 血小板比积（PCT）子项被过滤
 
 
+def test_sort_key_standard_name_stable_across_overview_and_change(db):
+    """两路排序键必须同基准:get_overview 的项带 raw item_name,change-overview 的项
+    带标准名;同 severity、同极差时若按各自名字 tie-break,顺序会相反,10 项上限
+    边界就会选出不同成员。"""
+    from app.modules.user_profile.service import get_overview, get_change_overview
+
+    # 原始名序:血糖(U+8840) < 谷丙转氨酶;标准名序:丙氨酸…(丙) < 空腹…(空)——恰好相反
+    for rid, rdate in [(1, date(2025, 5, 1)), (2, date(2026, 5, 1))]:
+        _report(db, rid, rdate=rdate)
+    _indicator(db, 1, 1, "血糖", "空腹血糖（GLU）", "1.0")
+    _indicator(db, 2, 1, "谷丙转氨酶", "丙氨酸氨基转移酶（ALT）", "1.0")
+    _indicator(db, 3, 2, "血糖", "空腹血糖（GLU）", "2.0")
+    _indicator(db, 4, 2, "谷丙转氨酶", "丙氨酸氨基转移酶（ALT）", "2.0")
+    _completed(db, 1)
+    _completed(db, 2)
+    _judgment(db, 1, 2, 3, "yellow")   # 血糖最近点黄,极差 1.0
+    _judgment(db, 2, 2, 4, "yellow")   # 谷丙最近点黄,极差 1.0
+    db.commit()
+
+    overview_names = [t["item_name_standard"]
+                      for t in get_overview(db, "123456", "张三")["indicator_trends"]]
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        change_names = [k["item_name"]
+                        for k in get_change_overview(db, "123456", "张三")["key_indicators"]]
+
+    assert overview_names == change_names
+    assert overview_names == ["丙氨酸氨基转移酶（ALT）", "空腹血糖（GLU）"]
+
+
 def test_change_overview_key_indicators_capped_at_config_limit(db):
     """窗口内红/黄主项超过上限(默认10)→ key_indicators 截断为 10。"""
     from app.modules.user_profile.service import get_change_overview

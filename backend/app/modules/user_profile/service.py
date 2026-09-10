@@ -62,7 +62,7 @@ def _split_item_name_collisions(items: list[dict]) -> list[dict]:
     """防线:同一系列内若同一份报告出现多个不同 item_name(标准名吞噬造成的脏数据,
     如血常规子项被并入父项),按 (item_name, unit) 拆成独立系列,避免异量纲数值画成一条线。
 
-    同名重复行(如同一报告同一指标多次测量)不拆 —— 交给 distinct-report 门/展示语义处理。
+    同名重复行(如同一报告同一指标多次测量)不拆 —— 由聚合/展示语义处理。
     """
     out: list[dict] = []
     for item in items:
@@ -359,10 +359,11 @@ def _points_range(points: list[dict]) -> float:
     return max(vals) - min(vals) if vals else 0.0
 
 
-def _trend_sort_key(item: dict):
-    """统一排序键:最近异常红>黄,同级按极差降序,再按指标名。"""
+def _trend_sort_key(item: dict) -> tuple:
+    """统一排序键:最近异常红>黄,同级按极差降序,再按标准名(缺失回退原名)。"""
     pts = item["points"]
-    return (_severity(pts), -_points_range(pts), item.get("item_name") or "")
+    name = item.get("item_name_standard") or item.get("item_name") or ""
+    return (_severity(pts), -_points_range(pts), name)
 
 
 def _endpoint_pct(points: list[dict]) -> Optional[float]:
