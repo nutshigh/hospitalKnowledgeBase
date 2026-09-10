@@ -1,5 +1,9 @@
 """term_normalizer 纯函数单测：名称标准化 + 同名同值指标去重。无 DB 依赖。"""
-from app.core.term_normalizer import normalize_indicators, normalize_item_name
+from app.core.term_normalizer import (
+    normalize_indicators,
+    normalize_item_name,
+    is_child_item,
+)
 
 
 def test_normalize_item_name_alias_to_standard():
@@ -86,3 +90,38 @@ def test_dedup_no_change_when_no_duplicates():
     ]
     out = normalize_indicators(indicators)
     assert len(out) == 2
+
+
+def test_no_substring_swallow_child_into_parent():
+    """血常规子项不再被子串吞成父项,各自映射到子项 canonical。"""
+    assert normalize_item_name("血小板比积")[0] == "血小板比积（PCT）"
+    assert normalize_item_name("血小板平均体积")[0] == "血小板平均体积（MPV）"
+    assert normalize_item_name("血小板分布宽度")[0] == "血小板分布宽度（PDW）"
+    assert normalize_item_name("大血小板比率")[0] == "大血小板比率（P-LCR）"
+    assert normalize_item_name("血小板计数")[0] == "血小板计数（PLT）"
+    assert normalize_item_name("平均红细胞体积")[0] == "平均红细胞体积（MCV）"
+    assert normalize_item_name("平均血红蛋白浓度")[0] == "平均红细胞血红蛋白浓度（MCHC）"
+    assert normalize_item_name("小而密低密度脂蛋白胆固醇")[0] == "小而密低密度脂蛋白胆固醇（sdLDL）"
+
+
+def test_no_substring_swallow_urine_or_pH():
+    """含父名词干的尿检/酸碱度项不得并入父项,保持原名透传。"""
+    assert normalize_item_name("尿白细胞酯酶")[0] == "尿白细胞酯酶"
+    assert normalize_item_name("尿白细胞（镜检）")[0] == "尿白细胞（镜检）"
+    assert normalize_item_name("尿酸碱度")[0] == "尿酸碱度"
+
+
+def test_trailing_english_code_paren_stripped_for_lookup():
+    """尾缀英文码括号可剥(base 命中 canonical);中文括号限定语不剥。"""
+    assert normalize_item_name("血红蛋白(HGB)")[0] == "血红蛋白（Hb）"
+    assert normalize_item_name("血小板计数（PLT）")[0] == "血小板计数（PLT）"
+    assert normalize_item_name("尿红细胞（镜检）")[0] == "尿红细胞（镜检）"
+
+
+def test_is_child_item_flags():
+    assert is_child_item("血小板比积") is True
+    assert is_child_item("红细胞压积") is True
+    assert is_child_item("小而密低密度脂蛋白胆固醇") is True
+    assert is_child_item("血小板计数") is False
+    assert is_child_item("尿酸碱度") is False
+    assert is_child_item("") is False
