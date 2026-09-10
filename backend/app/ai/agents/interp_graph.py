@@ -180,6 +180,106 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
         return result
 
 
+
+# === 2026-09-10: 工具调用守卫(planner 层容错) ===
+# 背景: MedGo/vLLM 一次生成的批量检索 tool_calls 超长被截断 → arguments JSON 非法 →
+# 请求历史携带坏串 → vLLM 400(Invalid JSON, function-wrap 校验)→ 解读 failed 重试 3 次。
+# 策略(不改模型): 请求前清洗历史(防 400); 响应后校验/限流(防坏调用执行与入历史);
+# 超长 query 截断(保留调用, 尽量不丢覆盖面), 非法调用丢弃并记日志。
+_GUARD_MAX_QUERY = 600      # 单个参数超长截断(检索 query 无需超长)
+_GUARD_MAX_CALLS = 12       # 单轮工具调用数量上限(超出丢弃并在日志计数)
+
+
+def _guard_sanitize_tool_calls(tool_calls):
+    keep, dropped = [], 0
+    for tc in tool_calls or []:
+        try:
+            args = tc.get("args")
+            if isinstance(args, str):
+                args = json.loads(args)  # 截断的 JSON 会在此抛错 → 丢弃
+            if not isinstance(args, dict):
+                raise ValueError("args not dict")
+            fixed = {}
+            for k, v in args.items():
+                if isinstance(v, str) and len(v) > _GUARD_MAX_QUERY:
+                    v = v[:_GUARD_MAX_QUERY]
+                fixed[k] = v
+            keep.append({**tc, "args": fixed})
+        except Exception:
+            dropped += 1
+    if len(keep) > _GUARD_MAX_CALLS:
+        dropped += len(keep) - _GUARD_MAX_CALLS
+        keep = keep[:_GUARD_MAX_CALLS]
+    return keep, dropped
+
+
+def _guard_sanitize_message(m):
+    """返回 (消息, 丢弃数); AIMessage 的坏 tool_calls 移除、超长参数截断。"""
+    tcs = getattr(m, "tool_calls", None)
+    if not tcs:
+        return m, 0
+    keep, dropped = _guard_sanitize_tool_calls(tcs)
+    unchanged = (not dropped) and all(
+        isinstance(tc.get("args"), dict) for tc in tcs)
+    if unchanged:
+        return m, 0
+    upd = {"tool_calls": keep}
+    akw = dict(getattr(m, "additional_kwargs", None) or {})
+    if "tool_calls" in akw:  # 原始坏串(请求重建来源)一并清除
+        akw.pop("tool_calls", None)
+        upd["additional_kwargs"] = akw
+    try:
+        return m.model_copy(update=upd), dropped
+    except Exception:
+        return m, 0
+
+
+class ToolCallGuardMiddleware(AgentMiddleware):
+    """请求前/响应后的 tool_calls 守卫(防 vLLM Invalid JSON 400; 限批量/长度)。"""
+
+    def _sanitize_request(self, request):
+        dropped = 0
+        new_msgs = []
+        for m in request.messages:
+            nm, d = _guard_sanitize_message(m)
+            new_msgs.append(nm)
+            dropped += d
+        if dropped:
+            logger.warning("toolcall guard: 请求历史清洗, 丢弃 %d 个坏/超限 tool_call", dropped)
+            return request.override(messages=new_msgs), dropped
+        return request, 0
+
+    def _sanitize_response(self, response):
+        dropped = 0
+        result = getattr(response, "result", None)
+        if result is None:
+            nm, d = _guard_sanitize_message(response)
+            if d:
+                logger.warning("toolcall guard: 响应清洗, 丢弃 %d 个坏/超限 tool_call", d)
+            return nm
+        new_res = []
+        changed = False
+        for m in result:
+            nm, d = _guard_sanitize_message(m)
+            new_res.append(nm)
+            dropped += d
+            if nm is not m:
+                changed = True
+        if dropped:
+            logger.warning("toolcall guard: 响应清洗, 丢弃 %d 个坏/超限 tool_call", dropped)
+        if changed:
+            response.result = new_res
+        return response
+
+    def wrap_model_call(self, request, handler):
+        request, _ = self._sanitize_request(request)
+        return self._sanitize_response(handler(request))
+
+    async def awrap_model_call(self, request, handler):
+        request, _ = self._sanitize_request(request)
+        return self._sanitize_response(await handler(request))
+
+
 def build_interp_agent():
     # 2026-08-27: 解读改 no_think —— MedGo 思考模式下长报告单条 15-40 分钟,
     # 解读为结构化 JSON 提取/生成, 思考收益低; no_think 约 3-5 分钟/条。
@@ -190,7 +290,7 @@ def build_interp_agent():
         tools=INTERP_TOOLS,
         system_prompt=SEARCH_SYSTEM_PROMPT,
         response_format=ToolStrategy(ConfirmSchema),
-        middleware=[InterpKnowledgeMiddleware()],
+        middleware=[InterpKnowledgeMiddleware(), ToolCallGuardMiddleware()],
         state_schema=InterpAgentState,
     )
 

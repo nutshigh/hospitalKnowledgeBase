@@ -53,6 +53,12 @@ PROFILES = [
          extra_anchor=[r"医\s*生\s*建\s*议"],
          review_block=True),  # 25 茂名人民(分散字标题; 切段后剥离中段
          # "检 查 综 述"★枚举页 —— 综述条目与医生建议重复, 且该页插在建议区中间
+    # 滨州人民(董延广): "体检综述"实为 2025/2026 两年对比表(非结论), 且文本流
+    # 后接"疫苗接种健康提示"; 真正结论段 = "▍异常指标解读"(1.超重 … 7.右肾囊肿)。
+    # anchor_only 只取该段(段尾=总检医师签名断点)。
+    dict(keywords=["滨州市人民医院"],
+         anchor_only=True,
+         extra_anchor=["异常指标解读"]),
     dict(keywords=["莆田九十五医院"],
          anchor_only=True, visual_sort=True,
          extra_anchor=["体检结论分析"]),  # 26 莆田九十五: 文本流逐cell乱序,
