@@ -228,6 +228,8 @@ EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
 **测试**: `backend/tests/user_profile/test_change_overview.py`(窗口/缓存签名命中与失效/降级/LLM 失败不写缓存)、
 `backend/tests/test_interp_worker_bulk.py::test_comparison_summary_failure_doesnt_break`。改回比较式旧功能前先看这些测试。
 
+- **指标走势只留主项(2026-09-10 起)**:血常规衍生物子项(血小板比积/PCT、平均体积/MPV、分布宽度/PDW、大血小板比率/P-LCR、红细胞压积/HCT、MCV/MCH/MCHC/RDW、小而密 LDL 等)由 `app/core/term_normalizer.py` 词表 `primary=False` 打标,`get_overview` 走势按 raw `item_name` 经 `is_child_item()` 剔除子项;`/profile/change-overview` key_indicators 与 AI 总结保留全量。`_split_item_name_collisions()` 对同报告同 key 多 item_name 的脏数据拆独立系列并告警。存量标准名回填脚本 `backend/scripts/manual_migrations/007_fix_indicator_standard.py` 已对 hospital_1/H001/H002 执行;H003/H004 旧命名库未动。
+
 ---
 
 ## 日志收口(2026-07-18 起)
