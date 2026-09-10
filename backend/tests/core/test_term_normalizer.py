@@ -118,6 +118,14 @@ def test_trailing_english_code_paren_stripped_for_lookup():
     assert normalize_item_name("尿红细胞（镜检）")[0] == "尿红细胞（镜检）"
 
 
+def test_rdw_canonical_self_resolve():
+    """发射的标准名(红细胞分布宽度 RDW-CV/SD)再喂回必须自解析回自身,不得落入通用 RDW。"""
+    assert normalize_item_name("红细胞分布宽度（RDW-CV）")[0] == "红细胞分布宽度（RDW-CV）"
+    assert normalize_item_name("红细胞分布宽度(RDW-CV)")[0] == "红细胞分布宽度（RDW-CV）"
+    assert normalize_item_name("红细胞分布宽度（RDW-SD）")[0] == "红细胞分布宽度（RDW-SD）"
+    assert normalize_item_name("红细胞分布宽度(RDW-SD)")[0] == "红细胞分布宽度（RDW-SD）"
+
+
 def test_is_child_item_flags():
     assert is_child_item("血小板比积") is True
     assert is_child_item("红细胞压积") is True

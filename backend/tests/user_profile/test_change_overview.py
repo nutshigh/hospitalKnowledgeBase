@@ -163,6 +163,44 @@ def test_stale_plain_text_cache_regenerates(db):
     assert payload["summary"]["conclusion"] == "血糖回落"
 
 
+def test_stale_after_indicator_standard_backfill_regenerates(db):
+    """09-10 标准名回填(report/interpretation id 不变,仅 indicator.item_name_standard
+    变化)→ 缓存指纹失效,二次必须重算并写新 fingerprint。"""
+    from app.modules.user_profile.service import get_change_overview
+    from app.modules.interpretation.models import ReportInterpretation
+    import json as _json
+
+    for rid, val in [(1, "300"), (2, "290")]:
+        _report(db, rid, rdate=date(2025, 5, rid))
+        _indicator(db, rid, rid, "血小板计数", "血小板计数（PLT）", val, "x10^9/L")
+        _completed(db, rid)
+    _judgment(db, 1001, 1, 1, "red")
+    _judgment(db, 1002, 2, 2, "yellow")
+    db.commit()
+
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        first = get_change_overview(db, "123456", "张三")
+    assert first["cached"] is False
+    stored1 = _json.loads(
+        db.query(ReportInterpretation).filter_by(report_id=2).first().comparison_summary)
+    fp1 = stored1["fingerprint"]
+    assert fp1
+
+    for ind in db.query(ReportIndicator).filter(ReportIndicator.report_id.in_([1, 2])).all():
+        ind.item_name_standard = "血小板比积（PCT）"  # 模拟 007 标准名回填,id 不变
+    db.commit()
+
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        second = get_change_overview(db, "123456", "张三")
+    assert second["cached"] is False  # 指纹不符 → 不可复用旧 payload
+    stored2 = _json.loads(
+        db.query(ReportInterpretation).filter_by(report_id=2).first().comparison_summary)
+    assert stored2["fingerprint"] != fp1
+    assert stored2["signature"] == stored1["signature"]  # report/interp id 均未变
+
+
 def test_stale_after_new_report_changes_window(db):
     """新增更近 completed 报告后窗口变化 → 换锚点重算。"""
     from app.modules.user_profile.service import get_change_overview
@@ -366,6 +404,9 @@ def test_series_splits_same_report_different_item_names(db):
     series = _series(db, window)
     by_name = {s["item_name"]: s for s in series}
     assert set(by_name) == {"血小板计数", "血小板比积"}
+    assert {s["item_name_standard"] for s in series} == {"血小板计数（PLT）", "血小板比积（PCT）"}
+    assert by_name["血小板计数"]["item_name_standard"] == "血小板计数（PLT）"
+    assert by_name["血小板比积"]["item_name_standard"] == "血小板比积（PCT）"
     for s in series:
         per_report = {}
         for p in s["points"]:

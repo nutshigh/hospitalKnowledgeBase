@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -9,7 +10,7 @@ from sqlalchemy import text
 
 from app.modules.report.models import ReportInfo, ReportIndicator
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
-from app.core.term_normalizer import is_child_item
+from app.core.term_normalizer import is_child_item, normalize_item_name
 from app.modules.user_profile.comparison import (
     compute_delta, trend_direction, _try_float, build_change_prompt,
 )
@@ -79,7 +80,7 @@ def _split_item_name_collisions(items: list[dict]) -> list[dict]:
         for p in item["points"]:
             gkey = (p.get("item_name"), p.get("unit"))
             g = groups.setdefault(gkey, {
-                "item_name_standard": gkey[0],
+                "item_name_standard": normalize_item_name(gkey[0])[0],
                 "item_name": gkey[0],
                 "unit": gkey[1],
                 "points": [],
@@ -276,16 +277,37 @@ def _report_header(pair) -> dict:
     }
 
 
-def _read_cached_overview(interp: Optional[ReportInterpretation], window: list) -> Optional[dict]:
-    """列内容为 JSON 且 signature 与当前窗口一致 → 返回 payload;否则 None(含旧纯文本)。"""
+def _window_std_fingerprint(db: Session, report_ids: list[int]) -> str:
+    """窗口指标标准名指纹:窗口内所有 (indicator_id, item_name_standard) 的确定性摘要。
+
+    09-10 标准名回填 / 未来词表变更都会改写 item_name_standard 而 report/interp id 不变;
+    指纹保证这类变化使旧缓存失效重算。行序无关,输出稳定。
+    """
+    if not report_ids:
+        return ""
+    rows = db.query(ReportIndicator).filter(
+        ReportIndicator.report_id.in_(report_ids),
+    ).all()
+    pairs = sorted((ind.id, ind.item_name_standard or "") for ind in rows)
+    return hashlib.md5(repr(pairs).encode("utf-8")).hexdigest()
+
+
+def _read_cached_overview(interp: Optional[ReportInterpretation], window: list,
+                          fingerprint: str) -> Optional[dict]:
+    """列内容为 JSON、signature 与当前窗口一致且 fingerprint 匹配窗口指标标准名
+    → 返回 payload;否则 None(含旧纯文本、旧格式无 fingerprint 的缓存)。"""
     if not interp or not interp.comparison_summary:
         return None
     try:
         data = json.loads(interp.comparison_summary)
     except (TypeError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
     sig = [{"report_id": pair[0].id, "interp_id": pair[1].id} for pair in window]
     if data.get("signature") != sig:
+        return None
+    if data.get("fingerprint") != fingerprint:
         return None
     payload = data.get("payload")
     if not isinstance(payload, dict):
@@ -426,7 +448,8 @@ def get_change_overview(db: Session, user_id: str, name: str) -> dict:
     if len(window) < 2:
         return empty_change_overview(len(window))
     newest_interp = window[-1][1]
-    cached = _read_cached_overview(newest_interp, window)
+    fingerprint = _window_std_fingerprint(db, [pair[0].id for pair in window])
+    cached = _read_cached_overview(newest_interp, window, fingerprint)
     if cached:
         cached["cached"] = True
         return cached
@@ -446,7 +469,8 @@ def get_change_overview(db: Session, user_id: str, name: str) -> dict:
     if summary:
         sig = [{"report_id": pair[0].id, "interp_id": pair[1].id} for pair in window]
         newest_interp.comparison_summary = json.dumps(
-            {"signature": sig, "payload": payload}, ensure_ascii=False)
+            {"signature": sig, "fingerprint": fingerprint, "payload": payload},
+            ensure_ascii=False)
         newest_interp.comparison_baseline_id = None
         db.commit()
     return payload

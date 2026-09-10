@@ -105,6 +105,11 @@ _ALIASES: Dict[str, CanonTerm] = {
     "红细胞分布宽度(SD)": CanonTerm("红细胞分布宽度（RDW-SD）", primary=False),
     "红细胞分布宽度-标准差": CanonTerm("红细胞分布宽度（RDW-SD）", primary=False),
     "红细胞分布宽度标准差": CanonTerm("红细胞分布宽度（RDW-SD）", primary=False),
+    # canonical 标准名自解析:回填/重归一化时 RDW-CV/SD 不得回落通用 RDW
+    "红细胞分布宽度（RDW-CV）": CanonTerm("红细胞分布宽度（RDW-CV）", primary=False),
+    "红细胞分布宽度(RDW-CV)": CanonTerm("红细胞分布宽度（RDW-CV）", primary=False),
+    "红细胞分布宽度（RDW-SD）": CanonTerm("红细胞分布宽度（RDW-SD）", primary=False),
+    "红细胞分布宽度(RDW-SD)": CanonTerm("红细胞分布宽度（RDW-SD）", primary=False),
     # 无码区分不定的 RDW 变体,归为通用 RDW 子项
     "红细胞体积分布宽度": CanonTerm("红细胞分布宽度（RDW）", primary=False),
     "红细胞分布宽度": CanonTerm("红细胞分布宽度（RDW）", primary=False),
