@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CanonTerm:
-    """词条。standard 为标准名;primary=False 表示子项/衍生物(指标走势隐藏)。"""
+    """词条。standard 为标准名;primary=False 表示子项/衍生物(仅分类标记,当前展示层不再据此过滤)。"""
     standard: str
     primary: bool = True
 
@@ -71,7 +71,7 @@ _ALIASES: Dict[str, CanonTerm] = {
     "血小板": CanonTerm("血小板计数（PLT）"),
     "血小板计数": CanonTerm("血小板计数（PLT）"),
 
-    # ==== 血常规子项(primary=False,走势隐藏) ====
+    # ==== 血常规子项(primary=False 分类标记,当前展示层不再据此过滤) ====
     # 血小板系
     "血小板比积": CanonTerm("血小板比积（PCT）", primary=False),
     "血小板比容": CanonTerm("血小板比积（PCT）", primary=False),
@@ -141,7 +141,7 @@ def resolve_canonical(raw_name: str) -> Optional[CanonTerm]:
 
 
 def is_child_item(item_name: str) -> bool:
-    """raw 名解析为 primary=False 的子项 → True(指标走势隐藏子项)。"""
+    """raw 名解析为 primary=False 的子项 → True(分类查询用;当前 profile 展示层不使用)。"""
     if not item_name:
         return False
     term = _resolve(item_name)
