@@ -713,7 +713,7 @@ Expected: PASS(全绿;如回归暴露,修复后重跑再进下一步)。
 cd /data/project/hospitalKnowledgeBase/backend && .venv/bin/python /tmp/opencode/repro_overview.py 2>&1 | head -40
 ```
 
-Expected: `血小板计数（PLT）` 系列 `#points= 3`,3 个点 value=319/319/210;不再出现 11 点、无子项系列。
+Expected: 走势列表中**不再出现任何子项系列**(血小板比积/平均体积/分布宽度/大血小板比率);任一主项系列的每报告点数为 1。u_zhangsan 的血小板计数因 3 个窗口点(319/319/210)全绿、按「只显示窗口内红/黄指标」的既有规则**整条不出现** —— 属预期(此前 11 点的黄来自被隐藏的子项),不再断言 PLT 系列存在。
 
 - [ ] **Step 3: AGENTS.md 补口径**
 
