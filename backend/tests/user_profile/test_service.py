@@ -342,3 +342,34 @@ def test_get_overview_trends_retained_green_newest_sorts_by_abnormal_color(db):
     assert a_trend["latest_deviation"] == "green"  # A 最新点确实是绿,测试才具区分度
     names = [t["item_name_standard"] for t in result["indicator_trends"]]
     assert names == ["A", "B"]
+
+
+def test_get_overview_trends_only_primary_items(db):
+    """旧库形态:每份报告父(血小板计数)+4 个子项全挂父标准名下。
+    走势应剔除子项,父系列点 = 报告份数(每报告 1 点),不出现子项系列。"""
+    from app.modules.user_profile.service import get_overview
+    from app.modules.interpretation.models import IndicatorJudgment
+
+    parent = "血小板计数"
+    children = ["血小板比积", "血小板平均体积", "血小板分布宽度", "大血小板比率"]
+    for rid, dt, pv in [(1, date(2024, 6, 1), "300"), (2, date(2025, 6, 1), "319"),
+                        (3, date(2026, 6, 1), "210")]:
+        db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
+        db.add(ReportIndicator(id=rid * 100 + 1, report_id=rid, item_name=parent,
+                               item_name_standard="血小板计数（PLT）",
+                               result_value=pv, unit="x10^9/L"))
+        for i, c in enumerate(children):
+            db.add(ReportIndicator(id=rid * 100 + 2 + i, report_id=rid, item_name=c,
+                                   item_name_standard="血小板计数（PLT）",
+                                   result_value=str(int(pv) - 1 - i), unit="%"))
+    db.commit()
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=301, item_name=parent,
+                             color_level="yellow"))
+    db.commit()
+
+    result = get_overview(db, user_id="123456", name="张三")
+    names = [t["item_name_standard"] for t in result["indicator_trends"]]
+    assert names == ["血小板计数（PLT）"]
+    plt = result["indicator_trends"][0]
+    assert len(plt["points"]) == 3  # 每份报告 1 点,不再 5 点/份
+    assert len({p["report_id"] for p in plt["points"]}) == 3

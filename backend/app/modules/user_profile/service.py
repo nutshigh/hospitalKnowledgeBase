@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.modules.report.models import ReportInfo, ReportIndicator
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+from app.core.term_normalizer import is_child_item
 from app.modules.user_profile.comparison import (
     compute_delta, trend_direction, _try_float, build_change_prompt,
 )
@@ -83,6 +84,8 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
         try:
             float(str(ind.result_value).strip())
         except (TypeError, ValueError):
+            continue
+        if is_child_item(ind.item_name or ""):
             continue
         key = ind.item_name_standard or ind.item_name
         if not key:
