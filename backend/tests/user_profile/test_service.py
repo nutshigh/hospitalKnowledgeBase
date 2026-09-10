@@ -344,35 +344,42 @@ def test_get_overview_trends_retained_green_newest_sorts_by_abnormal_color(db):
     assert names == ["A", "B"]
 
 
-def test_get_overview_trends_only_primary_items(db):
-    """旧库形态:每份报告父(血小板计数)+4 个子项全挂父标准名下。
-    走势应剔除子项,父系列点 = 报告份数(每报告 1 点),不出现子项系列。"""
+def test_get_overview_trends_include_abnormal_child_items(db):
+    """窗口内有红/黄判定的子项也必须出现,且以规范名独立成系列;无判定子项不出现。"""
     from app.modules.user_profile.service import get_overview
     from app.modules.interpretation.models import IndicatorJudgment
 
     parent = "血小板计数"
-    children = ["血小板比积", "血小板平均体积", "血小板分布宽度", "大血小板比率"]
-    for rid, dt, pv in [(1, date(2024, 6, 1), "300"), (2, date(2025, 6, 1), "319"),
-                        (3, date(2026, 6, 1), "210")]:
+    child_abn = "血小板比积"        # 带黄判定 → 应出现
+    child_quiet = "血小板平均体积"  # 无判定 → 不出现
+    for rid, dt, pv, cv in [(1, date(2024, 6, 1), "300", "0.29"),
+                            (2, date(2025, 6, 1), "319", "0.31"),
+                            (3, date(2026, 6, 1), "210", "0.33")]:
         db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
         db.add(ReportIndicator(id=rid * 100 + 1, report_id=rid, item_name=parent,
                                item_name_standard="血小板计数（PLT）",
                                result_value=pv, unit="x10^9/L"))
-        for i, c in enumerate(children):
-            db.add(ReportIndicator(id=rid * 100 + 2 + i, report_id=rid, item_name=c,
-                                   item_name_standard="血小板计数（PLT）",
-                                   result_value=str(int(pv) - 1 - i), unit="%"))
+        db.add(ReportIndicator(id=rid * 100 + 2, report_id=rid, item_name=child_abn,
+                               item_name_standard="血小板计数（PLT）",
+                               result_value=cv, unit="%"))
+        db.add(ReportIndicator(id=rid * 100 + 3, report_id=rid, item_name=child_quiet,
+                               item_name_standard="血小板计数（PLT）",
+                               result_value="9.1", unit="fL"))
     db.commit()
+    # 父项与异常子项各给一点黄判定(报告3)
     db.add(IndicatorJudgment(interpretation_id=99, indicator_id=301, item_name=parent,
+                             color_level="yellow"))
+    db.add(IndicatorJudgment(interpretation_id=99, indicator_id=302, item_name=child_abn,
                              color_level="yellow"))
     db.commit()
 
     result = get_overview(db, user_id="123456", name="张三")
-    names = [t["item_name_standard"] for t in result["indicator_trends"]]
-    assert names == ["血小板计数（PLT）"]
-    plt = result["indicator_trends"][0]
-    assert len(plt["points"]) == 3  # 每份报告 1 点,不再 5 点/份
-    assert len({p["report_id"] for p in plt["points"]}) == 3
+    by_std = {t["item_name_standard"]: t for t in result["indicator_trends"]}
+    assert "血小板计数（PLT）" in by_std
+    assert "血小板比积（PCT）" in by_std          # 异常子项出现
+    assert "血小板平均体积（MPV）" not in by_std  # 无判定子项不出现
+    assert len(by_std["血小板计数（PLT）"]["points"]) == 3
+    assert len({p["report_id"] for p in by_std["血小板比积（PCT）"]["points"]}) == 3
 
 
 def test_get_overview_trends_capped_at_config_limit(db):

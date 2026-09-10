@@ -348,19 +348,18 @@ def test_key_indicators_same_report_duplicate_rows_stay_one_series(db):
     assert names == ["空腹血糖", "血脂"]  # 血脂(单报告双行)按新口径入选,且只一条
 
 
-def test_key_indicators_exclude_child_items(db):
-    """子项(血常规衍生物)不进 key_indicators;主项异常正常入选。"""
+def test_key_indicators_include_abnormal_child_items(db):
+    """窗口内红/黄的子项必须进 key_indicators(规范名);主项异常同样保留。"""
     from app.modules.user_profile.service import get_change_overview
 
     for rid in (1, 2):
         _report(db, rid, rdate=date(2025, rid, 1))
         _indicator(db, rid, rid, "血糖", "空腹血糖", "6.0")
-        # 子项:raw 名 血小板比积,标准名已是 canonical child
         _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板比积（PCT）", "0.29", "%")
         _completed(db, rid)
     _judgment(db, 1, 1, 1, "yellow")
     _judgment(db, 2, 2, 2, "yellow")
-    _judgment(db, 3, 1, 11, "yellow")   # 子项黄判定
+    _judgment(db, 3, 1, 11, "yellow")
     _judgment(db, 4, 2, 21, "yellow")
     db.commit()
 
@@ -369,7 +368,8 @@ def test_key_indicators_exclude_child_items(db):
         result = get_change_overview(db, "123456", "张三")
 
     names = [k["item_name"] for k in result["key_indicators"]]
-    assert names == ["空腹血糖"]  # 血小板比积（PCT）子项被过滤
+    assert len(names) == 2
+    assert set(names) == {"空腹血糖", "血小板比积（PCT）"}
 
 
 def test_sort_key_standard_name_stable_across_overview_and_change(db):
@@ -520,3 +520,32 @@ def test_series_splits_same_report_different_item_names(db):
         assert all(len(n) == 1 for n in per_report.values())
     assert [p["value"] for p in by_name["血小板计数"]["points"]] == ["300", "300"]
     assert [p["value"] for p in by_name["血小板比积"]["points"]] == ["0.29", "0.29"]
+
+
+def test_overview_and_change_include_abnormal_child_parity(db):
+    """同一窗口下两处列表一致,且都含异常子项(规范名),每系列每报告 ≤1 点。"""
+    from app.modules.user_profile.service import get_overview, get_change_overview
+
+    for rid, rdate in [(1, date(2025, 5, 1)), (2, date(2026, 5, 1))]:
+        _report(db, rid, rdate=rdate)
+        _completed(db, rid)
+        _indicator(db, rid, rid, "血糖", "空腹血糖（GLU）", "6.0")
+        _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板比积（PCT）", "0.29", "%")
+    _judgment(db, 1, 1, 1, "yellow")
+    _judgment(db, 2, 2, 2, "yellow")
+    _judgment(db, 3, 1, 11, "yellow")
+    _judgment(db, 4, 2, 21, "yellow")
+    db.commit()
+
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        co = get_change_overview(db, "123456", "张三")
+    ov = get_overview(db, "123456", "张三")
+
+    ov_names = [t["item_name_standard"] for t in ov["indicator_trends"]]
+    co_names = [k["item_name_standard"] for k in co["key_indicators"]]
+    assert "血小板比积（PCT）" in ov_names and "血小板比积（PCT）" in co_names
+    assert ov_names == co_names
+    for t in ov["indicator_trends"]:
+        reps = [p["report_id"] for p in t["points"]]
+        assert len(reps) == len(set(reps))

@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app.modules.report.models import ReportInfo, ReportIndicator
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
-from app.core.term_normalizer import is_child_item, normalize_item_name
+from app.core.term_normalizer import normalize_item_name
 from app.modules.user_profile.comparison import (
     compute_delta, trend_direction, _try_float, build_change_prompt,
 )
@@ -119,8 +119,6 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
         try:
             float(str(ind.result_value).strip())
         except (TypeError, ValueError):
-            continue
-        if is_child_item(ind.item_name or ""):
             continue
         key = ind.item_name_standard or ind.item_name
         if not key:
@@ -375,16 +373,13 @@ def _endpoint_pct(points: list[dict]) -> Optional[float]:
 
 
 def _rank_key_indicators(db: Session, window: list) -> list[dict]:
-    """关键指标:与指标走势同一套口径 —— 仅主项、窗口内任一点红/黄;排序同走势。
+    """关键指标:与指标走势同一套口径 —— 窗口内任一点红/黄;排序同走势。
 
-    不再要求 ≥2 份报告,也不再需要 |delta_pct|≥5;子项(血常规衍生物等)不入选。
+    不再要求 ≥2 份报告,也不再需要 |delta_pct|≥5;不再过滤子项(含血常规衍生物)。
     """
     ranked = []
     for item in _series(db, window):
         points = item["points"]
-        standard = item.get("item_name_standard") or item.get("item_name") or ""
-        if is_child_item(standard):
-            continue
         if not _has_abnormal(points):
             continue
         ranked.append({
