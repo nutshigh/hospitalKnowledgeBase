@@ -374,18 +374,17 @@ def _endpoint_pct(points: list[dict]) -> Optional[float]:
 
 
 def _rank_key_indicators(db: Session, window: list) -> list[dict]:
-    """关键指标:出现在 ≥2 份窗口报告、且窗口内有过红/黄或首尾 |delta_pct|≥5。
+    """关键指标:与指标走势同一套口径 —— 仅主项、窗口内任一点红/黄;排序同走势。
 
-    排序:最近异常点红 > 黄 > 无,同级按 |delta_pct| 降序,再按指标名。
+    不再要求 ≥2 份报告,也不再需要 |delta_pct|≥5;子项(血常规衍生物等)不入选。
     """
     ranked = []
     for item in _series(db, window):
         points = item["points"]
-        if len({p["report_id"] for p in points}) < 2:
+        standard = item.get("item_name_standard") or item.get("item_name") or ""
+        if is_child_item(standard):
             continue
-        pct = _endpoint_pct(points)
-        sev = _severity(points)
-        if sev >= 2 and (pct is None or abs(pct) < 5):
+        if not _has_abnormal(points):
             continue
         ranked.append({
             "item_name": item["item_name"],
@@ -393,15 +392,10 @@ def _rank_key_indicators(db: Session, window: list) -> list[dict]:
             "latest_value": points[-1]["value"],
             "latest_color": points[-1]["color"],
             "direction": trend_direction(points),
-            "delta_pct": pct,
+            "delta_pct": _endpoint_pct(points),
             "points": points,
-            "_sev": sev,
-            "_pct_abs": abs(pct) if pct is not None else 0.0,
         })
-    ranked.sort(key=lambda x: (x["_sev"], -x["_pct_abs"], x["item_name"]))
-    for x in ranked:
-        x.pop("_sev", None)
-        x.pop("_pct_abs", None)
+    ranked.sort(key=_trend_sort_key)
     return ranked
 
 
@@ -459,7 +453,7 @@ def get_change_overview(db: Session, user_id: str, name: str) -> dict:
     payload = {
         "reports": reports,
         "covered": len(reports),
-        "key_indicators": key_indicators[:5],
+        "key_indicators": key_indicators[:settings.PROFILE_TREND_MAX_ITEMS],
         "summary": None,
         "cached": False,
     }

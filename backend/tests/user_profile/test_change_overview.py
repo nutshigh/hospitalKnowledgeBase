@@ -290,11 +290,11 @@ def test_llm_failure_swallowed_and_no_cache(db):
 
 # ---------- 关键指标 ----------
 
-def test_key_indicators_exclude_single_report_and_sort_red_first(db):
-    """只出现 1 份报告的指标不进候选;red 优先于纯 |delta|≥5。"""
+def test_key_indicators_single_report_included_and_sorted(db):
+    """新口径:单份报告出现的异常指标也入选(delta_pct=None);排序按最近异常红>黄、极差降序。"""
     from app.modules.user_profile.service import get_change_overview
 
-    # 报告1、2 都有血糖;报告2 独有尿酸
+    # 报告1、2 都有血糖;报告2 独有尿酸(仅 1 份,新口径应入选)
     _report(db, 1, rdate=date(2025, 5, 1))
     _indicator(db, 1, 1, "血糖", "空腹血糖", "7.2")
     _report(db, 2, rdate=date(2026, 5, 1))
@@ -304,6 +304,7 @@ def test_key_indicators_exclude_single_report_and_sort_red_first(db):
     _completed(db, 2, level="yellow", yellow=1)
     _judgment(db, 1, 1, 1, "red")
     _judgment(db, 2, 2, 2, "yellow")
+    _judgment(db, 3, 2, 3, "yellow")   # 尿酸(报告2独有)带黄判定,仅一份也应入选
     db.commit()
 
     with patch(_model_patch) as m:
@@ -311,24 +312,18 @@ def test_key_indicators_exclude_single_report_and_sort_red_first(db):
         result = get_change_overview(db, "123456", "张三")
 
     names = [k["item_name"] for k in result["key_indicators"]]
-    assert names == ["空腹血糖"]  # 尿酸仅一份不入选
-    ki = result["key_indicators"][0]
-    assert ki["latest_value"] == "6.4"
-    assert ki["latest_color"] == "yellow"
-    assert ki["direction"] == "down"
-    assert ki["delta_pct"] == pytest.approx(-11.11, abs=0.1)
+    # 血糖极差 0.8 > 尿酸 0 → 血糖在前;尿酸单报告也入选
+    assert names == ["空腹血糖", "尿酸"]
+    by = {k["item_name"]: k for k in result["key_indicators"]}
+    assert by["空腹血糖"]["latest_color"] == "yellow"
+    assert by["空腹血糖"]["delta_pct"] == pytest.approx(-11.11, abs=0.1)
+    assert by["尿酸"]["delta_pct"] is None
 
 
-def test_key_indicators_count_distinct_reports_not_rows(db):
-    """同一报告内同一指标出现两行 → 不算「≥2 份窗口报告」候选;跨报告指标仍入选。
-
-    判别要点:血脂在报告1内有两行(且带红/黄判定)→ 老的行数门(len(points)<2)
-    会把它误纳入,而 distinct-report 门(len({report_id})<2)应将其排除。
-    """
+def test_key_indicators_same_report_duplicate_rows_stay_one_series(db):
+    """同报告同名重复行仍是一条系列(不因行数被排除/拆分);窗口内异常即入选。"""
     from app.modules.user_profile.service import get_change_overview
 
-    # 报告1 有血糖两行(6.0/6.8,同一报告重复)与血脂两行(3.1/3.3,仅报告1,其中一行带红判定);
-    # 报告2 有血糖一行(6.4)
     _report(db, 1, rdate=date(2025, 5, 1))
     _indicator(db, 1, 1, "血糖", "空腹血糖", "6.0")
     _indicator(db, 2, 1, "血糖", "空腹血糖", "6.8")
@@ -340,7 +335,7 @@ def test_key_indicators_count_distinct_reports_not_rows(db):
     _completed(db, 2, level="yellow", yellow=1)
     _judgment(db, 1, 1, 1, "red")
     _judgment(db, 2, 1, 2, "red")
-    _judgment(db, 3, 1, 3, "red")   # 血脂两行均着色 → 老行数门会放行,distinct-report 门照排
+    _judgment(db, 3, 1, 3, "red")
     _judgment(db, 5, 1, 5, "yellow")
     _judgment(db, 4, 2, 4, "yellow")
     db.commit()
@@ -350,7 +345,54 @@ def test_key_indicators_count_distinct_reports_not_rows(db):
         result = get_change_overview(db, "123456", "张三")
 
     names = [k["item_name"] for k in result["key_indicators"]]
-    assert names == ["空腹血糖"]  # 血脂两行均在报告1、同报告重复行不算第二份 → 不入选
+    assert names == ["空腹血糖", "血脂"]  # 血脂(单报告双行)按新口径入选,且只一条
+
+
+def test_key_indicators_exclude_child_items(db):
+    """子项(血常规衍生物)不进 key_indicators;主项异常正常入选。"""
+    from app.modules.user_profile.service import get_change_overview
+
+    for rid in (1, 2):
+        _report(db, rid, rdate=date(2025, rid, 1))
+        _indicator(db, rid, rid, "血糖", "空腹血糖", "6.0")
+        # 子项:raw 名 血小板比积,标准名已是 canonical child
+        _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板比积（PCT）", "0.29", "%")
+        _completed(db, rid)
+    _judgment(db, 1, 1, 1, "yellow")
+    _judgment(db, 2, 2, 2, "yellow")
+    _judgment(db, 3, 1, 11, "yellow")   # 子项黄判定
+    _judgment(db, 4, 2, 21, "yellow")
+    db.commit()
+
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        result = get_change_overview(db, "123456", "张三")
+
+    names = [k["item_name"] for k in result["key_indicators"]]
+    assert names == ["空腹血糖"]  # 血小板比积（PCT）子项被过滤
+
+
+def test_change_overview_key_indicators_capped_at_config_limit(db):
+    """窗口内红/黄主项超过上限(默认10)→ key_indicators 截断为 10。"""
+    from app.modules.user_profile.service import get_change_overview
+    from app.config import settings
+
+    for rid in (1, 2):
+        _report(db, rid, rdate=date(2025, rid, 1))
+        _completed(db, rid)
+    for i in range(12):
+        std = "指标%02d" % i
+        _indicator(db, 100 + i, 1, std, std, "1.0", "")
+        _indicator(db, 200 + i, 2, std, std, "2.0", "")
+        _judgment(db, 300 + i, 2, 200 + i, "yellow")
+    db.commit()
+
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(_JSON_OK)
+        result = get_change_overview(db, "123456", "张三")
+
+    assert settings.PROFILE_TREND_MAX_ITEMS == 10
+    assert len(result["key_indicators"]) == 10
 
 
 # ---------- worker 钩子 ----------
