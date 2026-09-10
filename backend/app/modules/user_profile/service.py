@@ -57,6 +57,40 @@ def _auto_select_baseline(db: Session, user_id: str, name: str, report_id: int) 
     return max(nearest, key=_ct)
 
 
+def _split_item_name_collisions(items: list[dict]) -> list[dict]:
+    """防线:同一系列内若同一份报告出现多个不同 item_name(标准名吞噬造成的脏数据,
+    如血常规子项被并入父项),按 (item_name, unit) 拆成独立系列,避免异量纲数值画成一条线。
+
+    同名重复行(如同一报告同一指标多次测量)不拆 —— 交给 distinct-report 门/展示语义处理。
+    """
+    out: list[dict] = []
+    for item in items:
+        names_by_report: dict = {}
+        for p in item["points"]:
+            names_by_report.setdefault(p["report_id"], set()).add(p.get("item_name"))
+        if not any(len(names) > 1 for names in names_by_report.values()):
+            out.append(item)
+            continue
+        logger.warning(
+            "indicator series %r mixes distinct item_name within one report; "
+            "splitting by item_name/unit", item.get("item_name"),
+        )
+        groups: dict = {}
+        for p in item["points"]:
+            gkey = (p.get("item_name"), p.get("unit"))
+            g = groups.setdefault(gkey, {
+                "item_name_standard": gkey[0],
+                "item_name": gkey[0],
+                "unit": gkey[1],
+                "points": [],
+            })
+            g["points"].append(p)
+        for g in groups.values():
+            g["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
+            out.append(g)
+    return out
+
+
 def get_overview(db: Session, user_id: str, name: str) -> dict:
     """档案页主数据:总览 + 指标走势(仅最近 PROFILE_TREND_REPORT_LIMIT 份报告)+ 异常分布。"""
     reports = db.query(ReportInfo).filter(
@@ -103,10 +137,13 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
             "report_date": report_map[ind.report_id].report_date.isoformat() if report_map[ind.report_id].report_date else None,
             "value": float(str(ind.result_value).strip()),
             "color": judgment.color_level if judgment else None,
+            "item_name": ind.item_name,
+            "unit": ind.unit,
         })
 
-    for v in by_key.values():
-        v["points"].sort(key=lambda p: p["report_date"] or "")
+    trend_items = _split_item_name_collisions(list(by_key.values()))
+    for v in trend_items:
+        v["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
         v["trend_direction"] = trend_direction(v["points"])
         v["latest_deviation"] = v["points"][-1].get("color") if v["points"] else None
 
@@ -118,8 +155,8 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
                 return c
         return None
 
-    by_key = {k: v for k, v in by_key.items()
-              if any(p.get("color") in ("red", "yellow") for p in v["points"])}
+    trend_items = [v for v in trend_items
+                   if any(p.get("color") in ("red", "yellow") for p in v["points"])]
 
     abnormal_dist_q = text("""
         SELECT ij.item_name, rind.item_name_standard, ij.color_level, COUNT(*) as cnt
@@ -173,7 +210,7 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
         return max(vals) - min(vals) if vals else 0.0
 
     trends_sorted = sorted(
-        by_key.values(),
+        trend_items,
         key=lambda x: (_SEV.get(_abnormal_sev(x["points"]), 2), -_range(x)),
     )
     return {
@@ -290,10 +327,12 @@ def _series(db: Session, window: list) -> list[dict]:
             "report_date": rid2date.get(ind.report_id),
             "value": str(ind.result_value).strip(),
             "color": colors.get(ind.id),
+            "item_name": ind.item_name,
+            "unit": ind.unit,
         })
     for item in by_key.values():
         item["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
-    return list(by_key.values())
+    return _split_item_name_collisions(list(by_key.values()))
 
 
 def _severity(points: list[dict]) -> int:

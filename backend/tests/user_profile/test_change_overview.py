@@ -341,3 +341,35 @@ def test_ensure_change_overview_warm_cache_when_enough(db):
         ensure_change_overview(db, report_id=9)  # 不抛
     m.return_value.ainvoke.assert_not_called()
     assert db.query(ReportInterpretation).filter_by(report_id=9).first().comparison_summary is None
+
+
+def test_series_splits_same_report_different_item_names(db):
+    """旧库吞噬形态:两份报告里“血小板计数”与“血小板比积”同挂标准名。
+    _series 应把不同 item_name 拆成各自系列,杜绝异量纲并线。"""
+    from app.modules.user_profile.service import _series
+
+    for rid in (1, 2):
+        db.add(ReportInfo(id=rid, user_id="u1", name="甲", report_date=date(2025, rid, 1)))
+        db.add(ReportIndicator(id=rid * 100 + 1, report_id=rid, item_name="血小板计数",
+                               item_name_standard="血小板计数（PLT）",
+                               result_value="300", unit="x10^9/L"))
+        db.add(ReportIndicator(id=rid * 100 + 2, report_id=rid, item_name="血小板比积",
+                               item_name_standard="血小板计数（PLT）",
+                               result_value="0.29", unit="%"))
+        db.add(ReportInterpretation(id=rid, report_id=rid, overall_level="green",
+                                    status="completed", red_count=0, yellow_count=0, green_count=0))
+    db.commit()
+    rows = db.query(ReportInfo, ReportInterpretation).join(
+        ReportInterpretation, ReportInterpretation.report_id == ReportInfo.id).all()
+    window = list(rows)
+
+    series = _series(db, window)
+    by_name = {s["item_name"]: s for s in series}
+    assert set(by_name) == {"血小板计数", "血小板比积"}
+    for s in series:
+        per_report = {}
+        for p in s["points"]:
+            per_report.setdefault(p["report_id"], set()).add(p.get("item_name"))
+        assert all(len(n) == 1 for n in per_report.values())
+    assert [p["value"] for p in by_name["血小板计数"]["points"]] == ["300", "300"]
+    assert [p["value"] for p in by_name["血小板比积"]["points"]] == ["0.29", "0.29"]
