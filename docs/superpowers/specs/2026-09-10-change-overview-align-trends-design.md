@@ -40,18 +40,21 @@ def _points_range(points: list[dict]) -> float:
     无有效数值返回 0.0。"""
 
 
-def _trend_sort_key(item: dict):
-    """统一排序键:最近异常红>黄,同级按极差降序,再按指标名。"""
+def _trend_sort_key(item: dict) -> tuple:
+    """统一排序键:最近异常红>黄,同级按极差降序,再按标准名(缺失回退原名)。"""
     pts = item["points"]
-    return (_severity(pts), -_points_range(pts), item.get("item_name") or "")
+    name = item.get("item_name_standard") or item.get("item_name") or ""
+    return (_severity(pts), -_points_range(pts), name)
 ```
 
-- `get_overview`:删除内嵌 `_abnormal_sev` / `_range` / `_SEV`;过滤改用 `_has_abnormal`;排序改用 `_trend_sort_key`(**补 item_name 兜底**,与走势完全一致);返回前 `[:settings.PROFILE_TREND_MAX_ITEMS]`。
+> 实现备注(2026-09-10 终审后):排序键最终以**标准名**为基准(`item_name_standard or item_name`),而非原先草稿的 `item_name` —— 因为 `get_overview` 的 item 携带 raw 名、`_series` 的 item 携带标准名,二者用 raw 名做末位比较会在红黄同级同极差时排序不一致,进而在 10 条上限边界显示不同成员。相应地 `_rank_key_indicators` 返回字段需携带 `item_name_standard`(下面第 4 条已含)。
+
+- `get_overview`:删除内嵌 `_abnormal_sev` / `_range` / `_SEV`;过滤改用 `_has_abnormal`;排序改用 `_trend_sort_key`(标准名基准,与走势完全一致);返回前 `[:settings.PROFILE_TREND_MAX_ITEMS]`。
 - `_rank_key_indicators`:遍历 `_series(db, window)` 时
   1. `is_child_item(item["item_name_standard"] or item["item_name"] or "")` 为真 → 跳过子项;
   2. 入选条件改为 `_has_abnormal(points)`;
   3. 排序改用 `_trend_sort_key`;
-  4. 保留返回字段 `item_name / unit / latest_value / latest_color / direction / delta_pct / points`(单点系列 `delta_pct=None`、`direction=None`)。
+  4. 保留返回字段 `item_name / item_name_standard / unit / latest_value / latest_color / direction / delta_pct / points`(单点系列 `delta_pct=None`、`direction=None`)。
 - `_endpoint_pct` / `trend_direction` 保留(仅作字段填充,不再决定入选/排序)。
 
 ### 2. 条数上限配置
@@ -86,6 +89,7 @@ UPDATE report_interpretation SET comparison_summary = NULL WHERE comparison_summ
 ```
 
 - 上线步骤:对全部 tenant 库执行一次(hospital_1 / hospital_H001 / hospital_H002 / hospital_H003 / hospital_H004)。`comparison_baseline_id` 已弃用,不动。
+- 执行顺序提示:先重启 `:8000` backend(否则旧进程继续按旧口径写 `comparison_summary`),再跑 008,随后核对各库计数为 0(旧 checkout 的 stray worker/服务可能写回旧格式缓存;新代码的 JSON + fingerprint 校验会拒绝这些行,但计数核对前宜确认无旧进程在写)。
 - `_read_cached_overview` 仅保留 `signature` + `fingerprint` 校验,不做版本比较。
 
 ## 测试(`backend/tests/user_profile/`)
