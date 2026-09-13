@@ -10,44 +10,6 @@ def _try_float(s) -> Optional[float]:
         return None
 
 
-def match_indicators(current: list[dict], baseline: list[dict]) -> list[dict]:
-    """按 item_name_standard 优先匹配,双边都空时 fallback item_name。
-
-    单边有 standard 一边无 -> 跳过(避免误匹配)。
-    单位不一致仍匹配,由 compute_delta 时判断是否可计算。
-    """
-    matches = []
-    cur_by_std = {r.get("item_name_standard"): r for r in current if r.get("item_name_standard")}
-    base_by_std = {r.get("item_name_standard"): r for r in baseline if r.get("item_name_standard")}
-    for std, c in cur_by_std.items():
-        b = base_by_std.get(std)
-        if b:
-            matches.append({
-                "item_name_standard": std,
-                "item_name": c.get("item_name", std),
-                "current_value": c.get("result_value"),
-                "baseline_value": b.get("result_value"),
-                "unit": c.get("unit"),
-                "current_color": c.get("color_level"),
-                "baseline_color": b.get("color_level"),
-            })
-    cur_no_std = [r for r in current if not r.get("item_name_standard")]
-    base_no_std_by_name = {r.get("item_name"): r for r in baseline if not r.get("item_name_standard")}
-    for c in cur_no_std:
-        b = base_no_std_by_name.get(c.get("item_name"))
-        if b:
-            matches.append({
-                "item_name_standard": None,
-                "item_name": c.get("item_name"),
-                "current_value": c.get("result_value"),
-                "baseline_value": b.get("result_value"),
-                "unit": c.get("unit"),
-                "current_color": c.get("color_level"),
-                "baseline_color": b.get("color_level"),
-            })
-    return matches
-
-
 def compute_delta(current_value: str, baseline_value: str) -> Optional[tuple[float, float]]:
     """返回 (delta, delta_pct)。非数值返回 None。
 
@@ -64,14 +26,6 @@ def compute_delta(current_value: str, baseline_value: str) -> Optional[tuple[flo
     return delta, delta_pct
 
 
-def judge_status(delta_pct: float) -> str:
-    if delta_pct <= -5:
-        return "improved"
-    if delta_pct >= 5:
-        return "worsened"
-    return "stable"
-
-
 def trend_direction(points: list[dict]) -> Optional[str]:
     if len(points) < 2:
         return None
@@ -86,42 +40,60 @@ def trend_direction(points: list[dict]) -> Optional[str]:
     return None
 
 
-def build_comparison_prompt(current_report: dict, baseline_report: dict,
-                            indicators_diff: list[dict], top_abnormal: list[dict]) -> str:
-    """拼出给 MedGo 的中文 prompt。indicators_diff 与 top_abnormal 在 worker 钩子里通常是同一份数据。"""
-    cur_level = current_report.get("overall_level") or "未知"
-    base_level = baseline_report.get("overall_level") or "未知"
+def build_change_prompt(reports: list[dict], key_indicators: list[dict]) -> str:
+    """拼出给 MedGo 的跨最近 N 份报告总体变化总览 prompt(纯 JSON 四键输出)。
 
-    abnormal_lines = []
-    for ind in top_abnormal[:5]:
-        name = ind.get("item_name") or ind.get("item_name_standard") or ""
-        cur_v = ind.get("current_value", "")
-        unit = ind.get("unit", "")
-        cur_color = ind.get("current_color") or ""
-        base_v = ind.get("baseline_value", "")
-        delta = ind.get("delta")
-        arrow = ""
-        if delta is not None:
-            arrow = f",上次{base_v}," + ("↑" if delta > 0 else "↓") + f"{abs(delta)}"
-        abnormal_lines.append(
-            f"  - {name}:{cur_v} {unit}({cur_color or '未判色'}{arrow})"
+    reports: 升序的报告头(含 overall_level / 红黄绿计数)。
+    key_indicators: 排序后的关键指标(含 delta_pct / points)。
+    """
+    if not reports:
+        return ""
+    report_lines = [
+        "- {date}:总体{level},红区{r} 黄区{y} 绿区{g}".format(
+            date=r.get("report_date") or "未知",
+            level=r.get("overall_level") or "未知",
+            r=r.get("red_count", 0),
+            y=r.get("yellow_count", 0),
+            g=r.get("green_count", 0),
         )
-    abnormal_text = "\n".join(abnormal_lines) or "  (无异常指标)"
+        for r in reports
+    ]
+    ind_lines = []
+    for ind in key_indicators[:8]:
+        name = ind.get("item_name") or "?"
+        unit = ind.get("unit") or ""
+        segs = []
+        for p in ind.get("points", []):
+            d = (p.get("report_date") or "?").__str__()[:7]
+            c = p.get("color") or ""
+            segs.append("{d} {v}{suffix}".format(
+                d=d, v=p.get("value", ""),
+                suffix=("(" + c + ")") if c else ""))
+        d = ind.get("delta_pct")
+        delta_txt = ""
+        if d is not None:
+            delta_txt = ",{arrow}{absv}%".format(
+                arrow="↑" if d > 0 else "↓", absv=abs(round(float(d), 1)))
+        ind_lines.append("- {name}{unit}:{segs}{delta}".format(
+            name=name,
+            unit=("(" + unit + ")") if unit else "",
+            segs=" → ".join(segs) if segs else "无连续数值",
+            delta=delta_txt))
+    ind_text = "\n".join(ind_lines) or "  (窗口内无连续可量化的关键指标)"
 
-    return f"""你是体检报告解读助手。基于下方两份报告的对比数据,用通俗易懂的中文写一段健康变化小结(150-250字)。
+    return f"""你是体检报告解读助手。下面是该用户最近 {len(reports)} 次体检报告的窗口数据,请给出一份总体性健康变化总览,用通俗中文。
 
-## 本次报告({current_report.get('report_date', '未知')})
-- 总体:{cur_level} | 红区{current_report.get('red_count', 0)} 黄区{current_report.get('yellow_count', 0)} 绿区{current_report.get('green_count', 0)}
-- 异常指标:
-{abnormal_text}
+## 各次报告(按日期升序)
+{chr(10).join(report_lines)}
 
-## 上一份报告({baseline_report.get('report_date', '未知')})
-- 总体:{base_level} | 红区{baseline_report.get('red_count', 0)} 黄区{baseline_report.get('yellow_count', 0)} 绿区{baseline_report.get('green_count', 0)}
+## 关键指标走势(按时间先后列出每次值;red=红区异常,yellow=黄区偏高,green=绿区)
+{ind_text}
 
-## 小结要求
-1. 先说整体变化(红黄区数量变化、新增/消失的异常)
-2. 再点出明显改善和明显恶化的指标
-3. 给出 1-2 条针对性建议(基于上述指标,不编造)
-4. 不下诊断,语气同解读模块
-5. 不输出 thinking 标签
+## 输出要求
+只输出一个 JSON 对象(不要 markdown 代码块、不要 thinking 标签),键严格为以下四个:
+- "trend_summary": 一段(≤80字)总体变化概述,概括红/黄区数量增减与整体走向
+- "conclusion": (≤120字)提炼窗口内最重要的指标变化结论,落到上面列出的具体指标
+- "suggestions": (≤150字)针对可量化的变化指标(如血糖、血脂)给 1-3 条健康建议
+- "precautions": (≤100字)复查与就医注意事项,异常时提示尽快就医
+要求:不下诊断;不要编造上面未出现的指标或数值;不提绝对数值;内容仅供健康参考。
 """

@@ -132,6 +132,23 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 - `hospital_not_found`:文件名格式合法,但外部接口(`EXTERNAL_RESOLVER_URL`,baUser searchUser)按 `realName+idCardLast6` 无精确匹配、解析出 orgId 本地未注册、或匹配歧义。**不可重试**。
 - 后端 `retry_failed` 把这三类统称 unretryable,在响应里以 `skipped_unretryable` 计数返回,不重投。
 
+## 检后随访表(2026-09-07 起)
+
+新表 5 张,同样须在三处 DDL 源保持一致:`infra/mysql/init/01_template_db.sql`(平台库
+`followup_template` / `followup_template_question`,平台统一维护单套激活模板)、
+`start.sh` DDL 块与 `infra/mysql/init/02_hospital_created.sql` 存储过程(租户库
+`followup` / `followup_question` / `user_notification`)。存量 5 库迁移见
+`backend/scripts/manual_migrations/006_followup.sql`。
+
+- 触发:解读 worker(`interpretation/worker.py`)在 `run_interpretation_agent` 成功后同步调
+  `try_generate_followup`;仅 `overall_level in (red,yellow)` 且此前无该 report_id 随访时生成。
+- 生成把平台激活模板问题 + 黄/红指标(`indicator_judgment.color_level`)快照进租户库
+  `followup_question` / `followup.recheck_indicators_json`,并写一条 `user_notification`
+  (`category=recheck_reminder`),同事务;无激活模板时跳过(记 `app.followup`)。
+- 用户侧接口在 `backend/app/modules/followup/router.py`,前缀 `/api/v1/followup` 与
+  `/api/v1/notifications`;全部 `role='user'` + 双锚定,App(app-login)直接可用,无真推送。
+- 删除报告时 `report/router.py::delete_report` 调 `delete_report_followup` 清理三张关联表。
+
 ## 批量上传跨院分发:进度与重试跨库定位(2026-09-03 起)
 
 **事实**:批量上传时 `BatchImport`/`BatchImportFile`/进度计数器写在上传方(批次)库,而 `report_task`/`report`/解读跑在**文件名解析出的目标医院库**(可 ≠ 上传方)。若 worker 用目标库记批次进度,会 `file_not_found` 让批次永远卡 `parsing`(2026-09-03 真实故障)。
@@ -186,17 +203,35 @@ EXTERNAL_RESOLVER_URL=http://...    # 未配置时 resolver 返回 None → 401
 
 ---
 
-## 报告对比默认基线退化策略(2026-09-02 起)
+## 报告跨报告对比 → 我的页健康变化总览(2026-09-09 起)
 
-**事实**: `backend/app/modules/user_profile/service.py::_auto_select_baseline` 现在**允许选任意其它报告**。
-选择逻辑(该用户锚定 user_id 后六位 + name 内、排除当前报告):
-1. 优先取 `report_date` **严格早于**当前报告且最接近的一份(原行为,保存「与上次报告对比」语义);
-2. 若无更早(当前即该用户最早一份报告,如首页按 `created_at` 倒序把日期最早的报告排在最上)→ **退化**为该用户 `report_date` 与当前报告 `|日期差|` 最小的一份(不再返回 None);
-3. 全部无 `report_date` → 取最近 `created_at` 的另一份;用户仅 1 份报告仍返回 None。
+**事实**: 2026-09-09 起报告对比功能从报告详情页挪到用户端「我的」tab,由新增 `GET /api/v1/profile/change-overview` 支撑
+(`backend/app/modules/user_profile/router.py` / `service.py::get_change_overview`)。
 
-**原因**: 退化前返回 None 会让前端 `frontend/packages/user-portal/src/components/ComparisonCard.tsx`(`if (!data || !data.baseline) return null`)整卡不渲染,用户连「选择历史报告」下拉都看不到。现 UI 标题为「📊 与历史报告对比」;`GET /profile/compare?baseline_id=` 对任意属于该锚定的报告都放行(不限早于当前),AI 小结 `/profile/ai-summary` 同理。
+- **窗口选取**: 自动对比该锚定(user_id 后六位 + name)按 `report_date` 升序、仅 `status='completed'`
+  的最近 `PROFILE_TREND_REPORT_LIMIT` 份报告(默认 3,`backend/app/config.py`);`report_date` 为 NULL 视为最旧放前。
+  不足 2 份返回 `reason=insufficient` 降级(不入缓存)。
+- **响应结构**: 自包含,含 `reports`(report_id/report_date/overall_level/红黄绿计数)、
+  `key_indicators`(窗口内出现过红/黄的每一项指标,含血常规子项;与指标走势同口径:
+  最近异常红>黄、同级按极差降序、再按标准名;`PROFILE_TREND_MAX_ITEMS` 默认 10 截断)、`summary`(四键 `trend_summary`·`conclusion`·`suggestions`·`precautions`,
+  MedGo 生成,宽容解析失败则返回 None 且不写缓存)。`role='user'` 的 app-login token 可直接调用。
+- **缓存**: 窗口最新一份的 `report_interpretation.comparison_summary` 存 JSON
+  `{signature:[{report_id,interp_id}], fingerprint, payload}`;signature、fingerprint 与当前窗口一致才复用,
+  旧纯文本/签名不符/指纹不符 → 重新生成并写回。
+- **worker 钩子**: 解读 worker(`interpretation/worker.py`)在解读完成后调
+  `service.ensure_change_overview(db, report_id)` 预热缓存,异常吞掉不冒泡。`comparison_baseline_id` 列不再使用(写 NULL)。
 
-**测试**: `backend/tests/user_profile/test_service.py` 新增 4 条(最早一份→退化到日期最近 / 有更早→仍取更早且最近 / 单份报告→None / `get_comparison` 返回基线)。改回「最早一份无基线」前先看这些测试。
+**已退役(勿再引用)**: `GET /profile/compare`、`GET /profile/ai-summary` 两路由与
+`frontend/packages/user-portal/src/components/ComparisonCard.tsx` 均已删除;worker 旧钩子
+`try_generate_comparison_summary` 不存在。`_auto_select_baseline` 仍在(供 `/profile/overview` 的
+`user_summary.baseline_date`)。
+
+**测试**: `backend/tests/user_profile/test_change_overview.py`(窗口/缓存签名命中与失效/降级/LLM 失败不写缓存)、
+`backend/tests/test_interp_worker_bulk.py::test_comparison_summary_failure_doesnt_break`。改回比较式旧功能前先看这些测试。
+
+- **走势/变化总览展示窗口内全部红黄指标(含子项)(2026-09-10 起)**:窗口内出现过红/黄的每一项指标(含血常规子项,如 血小板比积（PCT）、血小板平均体积（MPV）)都以自身规范名在 `get_overview` 走势与 `/profile/change-overview` 的 `key_indicators` 独立成系列,每报告 ≤1 点;两处入选/排序/上限一致(最近异常红>黄再极差降序、`PROFILE_TREND_MAX_ITEMS` 默认 10)。正常(绿色)指标不出现(如全绿的血小板计数)。`app/core/term_normalizer.py::is_child_item` 保留但其定义不再被 profile 用于过滤;`_split_item_name_collisions()` 仍对同报告同 key 多 item_name 的脏数据拆独立系列并告警。存量标准名回填脚本 007 已对 hospital_1/H001/H002 执行;H003/H004 未回填。
+
+- **变化总览/走势取窗差异(已知)**:走势取最近 N 份报告(不限解读状态);变化总览取最近 N 份**已完成解读**报告。两者入选规则/排序/上限已对齐(2026-09-10),取窗仍可能不同。规则口径变更后需一次性清空存量缓存:`backend/scripts/manual_migrations/008_clear_change_overview_cache.sql`(对全部 tenant 库各执行一次)。修改 `PROFILE_TREND_MAX_ITEMS` 或入选规则后需同样清一次缓存(否则旧 payload 保留旧条数/口径);且 AI 总结的输入指标集合已随之改变(异常子项也会进入、单报告异常会进入)。
 
 ---
 
@@ -304,4 +339,25 @@ curl -s http://localhost:8004/v1/chat/completions -H 'Content-Type: application/
 ```
 
 **重跑受影响报告的方法**: `/tmp/reparse.py <task_id...>`(删除旧指标+解读 → 重跑 `process_task` → 自动投解读)。注意 MedGo 生成 70+ 项 JSON 每份约 2~3 分钟,`setsid nohup` 后台跑。
+
+## 医生工作台跨院查看(X-Hospital-Id)(2026-09-08 起)
+
+**事实**: doctor-portal 是单医院视图,靠 `get_current_user` 从 JWT 取 `hospital_id` 选库。
+2026-09-08 起支持**请求头 `X-Hospital-Id` 覆盖**:
+
+- 契约:doctor/admin 角色带 `X-Hospital-Id: <hospital_id>` 且该院在 `hospital_tenant.is_active=1`
+  时,后端用请求头医院覆盖 JWT 医院(一处改动在 `dependencies.py::get_current_user`);未知/停用
+  医院静默回退 JWT 医院;`role='user'`(患者端/App)一律忽略该头,绝不跨院。
+- 跟随 `X-Hospital-Id` 的:走 `get_current_user`、用 `CurrentUser.hospital_id` 选库的院级查询 ——
+  reports(list/detail/delete/upload)、interpretations(含 high-risk)、followup、chat、profile。
+  **statistics / dispatch 不在此列**:它们不依赖 `get_current_user`,直接读 context var
+  `current_hospital_id`(`app/middleware/hospital_context.py`,仅 `get_current_user` 内 set),
+  无前置鉴权请求会 400,切换医院对它们不生效 —— 既有缺口,另行接线,不在 2026-09-08 改动范围。
+- 医生端(`doctor-portal`)Header 顶部有医院切换器:选项来自 `GET /api/v1/tenants`
+  (该接口已对 doctor 开放),选择后写 `localStorage['doctor_active_hospital']` 并经
+  axios 拦截器自动带头,页面重载切库。患者端(3001)不发该头。
+- 报告管理列表(doctor/admin 全量视图)过滤 `task_status='failed'` 与
+  `parsed_name/name/report_date 全 NULL` 的空壳残留行(演示库白行来源);
+  患者按锚点查询不受影响。
+- 历史演示库(hospital_H001,3056 条)含大量空壳/失败残留行,列表已隐藏,未批量清理。
 

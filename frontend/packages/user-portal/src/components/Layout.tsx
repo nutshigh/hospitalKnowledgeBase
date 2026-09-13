@@ -1,16 +1,29 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { HomeOutlined, MessageOutlined, UserOutlined } from '@ant-design/icons';
+import { Badge } from 'antd';
+import { HomeOutlined, MessageOutlined, UserOutlined, NotificationOutlined } from '@ant-design/icons';
+import { useFollowupStore } from '../stores/followupStore';
 
 const tabs = [
   { key: '/', label: '首页', icon: <HomeOutlined /> },
   { key: '/chat', label: 'AI咨询', icon: <MessageOutlined /> },
+  { key: '/followup', label: '随访', icon: <NotificationOutlined />, badge: true },
   { key: '/profile', label: '我的', icon: <UserOutlined /> },
 ];
 
 export default function Layout({ children, title }: { children: ReactNode; title?: string }) {
   const nav = useNavigate();
   const loc = useLocation();
+
+  const count = useFollowupStore(s => s.count);
+  const refresh = useFollowupStore(s => s.refresh);
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, 30000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isActive = (key: string) => {
     if (key === '/') return loc.pathname === '/';
@@ -49,7 +62,9 @@ export default function Layout({ children, title }: { children: ReactNode; title
               userSelect: 'none',
             }}
           >
-            <span style={{ fontSize: 20 }}>{t.icon}</span>
+            <span style={{ fontSize: 20 }}>
+              {t.badge && count > 0 ? <Badge count={count} size="small">{t.icon}</Badge> : t.icon}
+            </span>
             <span>{t.label}</span>
           </div>
         ))}

@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.core.database import get_hospital_db
 from app.core.dependencies import get_current_user, CurrentUser, user_identity
-from app.utils.exceptions import NotFoundException, ValidationException
+from app.utils.exceptions import ValidationException
 from app.modules.user_profile import service
 
 router = APIRouter()
@@ -32,28 +31,12 @@ def overview(
     return service.get_overview(db, uid, nm)
 
 
-@router.get("/compare")
-def compare(
-    report_id: int = Query(...),
-    baseline_id: Optional[int] = Query(None),
+@router.get("/change-overview")
+def change_overview(
     db: Session = Depends(_get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     uid, nm = user_identity(current_user)
     if uid is None:
-        raise NotFoundException(detail="Report not found")
-    return service.get_comparison(db, uid, nm, report_id, baseline_id)
-
-
-@router.get("/ai-summary")
-def ai_summary(
-    report_id: int = Query(...),
-    baseline_id: int = Query(...),
-    db: Session = Depends(_get_db),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    uid, nm = user_identity(current_user)
-    if uid is None:
-        raise NotFoundException(detail="Report not found")
-    summary, cached = service.get_ai_summary(db, uid, nm, report_id, baseline_id)
-    return {"ai_summary": summary, "cached": cached}
+        return service.empty_change_overview(0)
+    return service.get_change_overview(db, uid, nm)

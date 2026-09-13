@@ -51,7 +51,7 @@ def env():
     win_p = patch("app.modules.interpretation.worker.is_bulk_window_now",
                   return_value=True)
     agent_p = patch("app.modules.interpretation.worker.run_interpretation_agent")
-    cmp_p = patch("app.modules.user_profile.service.try_generate_comparison_summary")
+    cmp_p = patch("app.modules.user_profile.service.ensure_change_overview")
     batch_p = patch("app.modules.interpretation.worker.BatchService")
     mq_p = patch("app.modules.interpretation.worker.rabbitmq", Mq)
 

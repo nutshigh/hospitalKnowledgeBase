@@ -6,6 +6,7 @@ import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
 import ColorBadge from '../components/ColorBadge';
 import IndicatorTrendChart from '../components/IndicatorTrendChart';
+import ChangeOverviewCard from '../components/ChangeOverviewCard';
 
 interface UserSummary {
   total_reports: number;
@@ -29,17 +30,9 @@ interface IndicatorTrend {
   trend_direction: string | null;
 }
 
-interface AbnormalDist {
-  item_name_standard: string;
-  red_count: number;
-  yellow_count: number;
-  last_color: string;
-}
-
 interface OverviewResponse {
   user_summary: UserSummary | null;
   indicator_trends: IndicatorTrend[];
-  abnormal_distribution: AbnormalDist[];
 }
 
 export default function ProfilePage() {
@@ -48,6 +41,11 @@ export default function ProfilePage() {
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<number[]>([]);
+  const toggleExpand = (i: number) =>
+    setExpanded(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
+
+  useEffect(() => setExpanded([]), [search]);
 
   useEffect(() => {
     api.get('/profile/overview').then(r => setData(r.data)).catch(() => setData(null)).finally(() => setLoading(false));
@@ -111,27 +109,7 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      {data.abnormal_distribution.length > 0 && (
-        <div style={{
-          background: 'var(--color-surface)', borderRadius: 'var(--radius-md)',
-          padding: '16px 20px', boxShadow: 'var(--shadow-sm)', border: '1px solid var(--color-border-light)', marginBottom: 16,
-        }}>
-          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>异常指标分布</div>
-          {data.abnormal_distribution.map((a, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '8px 0', borderBottom: i < data.abnormal_distribution.length - 1 ? '1px solid var(--color-border-light)' : 'none',
-              fontSize: 13,
-            }}>
-              <span>{a.item_name_standard}</span>
-              <span style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                红 {a.red_count} · 黄 {a.yellow_count}
-                {' '}<ColorBadge level={a.last_color} size="sm" />
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      <ChangeOverviewCard />
 
       <div style={{
         background: 'var(--color-surface)', borderRadius: 'var(--radius-md)',
@@ -150,12 +128,23 @@ export default function ProfilePage() {
         ) : (
           topTrends.map((t, i) => {
             const last = t.points[t.points.length - 1];
+            const expandable = t.points.length >= 2;
+            const isOpen = expandable && expanded.includes(i);
             return (
               <div key={i} style={{
                 padding: '10px 0', borderBottom: i !== topTrends.length - 1 ? '1px solid var(--color-border-light)' : 'none',
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>
+                <div
+                  onClick={() => { if (expandable) toggleExpand(i); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, marginBottom: isOpen ? 4 : 0,
+                    cursor: expandable ? 'pointer' : 'default',
+                  }}
+                >
+                  <span style={{
+                    fontSize: 13, fontWeight: 500, flex: '1 1 auto', minWidth: 0,
+                    wordBreak: 'break-word', lineHeight: 1.4,
+                  }}>
                     {t.item_name_standard || t.item_name}
                     {t.trend_direction && (
                       <span style={{
@@ -166,12 +155,17 @@ export default function ProfilePage() {
                       </span>
                     )}
                   </span>
-                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                  <span style={{ color: 'var(--color-text-secondary)', fontSize: 12, whiteSpace: 'nowrap' }}>
                     {last ? `${last.value}${t.unit ? ' ' + t.unit : ''}` : '-'}
                     {last?.color && <ColorBadge level={last.color} size="sm" />}
                   </span>
+                  {expandable && (
+                    <span style={{ fontSize: 10, color: 'var(--color-text-secondary)' }}>
+                      {isOpen ? '▾' : '▸'}
+                    </span>
+                  )}
                 </div>
-                <IndicatorTrendChart data={t.points} />
+                {isOpen && <IndicatorTrendChart data={t.points} />}
               </div>
             );
           })

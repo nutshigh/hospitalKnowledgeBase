@@ -1,25 +1,24 @@
 import asyncio
+import hashlib
+import json
 import logging
-from datetime import datetime
+import re
+from datetime import date, datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.modules.report.models import ReportInfo, ReportIndicator
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
+from app.core.term_normalizer import normalize_item_name
 from app.modules.user_profile.comparison import (
-    match_indicators, compute_delta, judge_status, trend_direction,
-    build_comparison_prompt,
+    compute_delta, trend_direction, _try_float, build_change_prompt,
 )
 from app.ai.llm import get_chat_model, _guarded
 from app.ai.agents.think_filter import strip_think_tags
+from app.config import settings
 
 logger = logging.getLogger(__name__)
-
-MAX_HISTORY_REPORTS = 100
-TOP_INDICATORS_DEFAULT = 10
-TOP_ABNORMAL_FOR_PROMPT = 5
-STATUS_STABLE_PCT = 5
 
 
 def _auto_select_baseline(db: Session, user_id: str, name: str, report_id: int) -> Optional[ReportInfo]:
@@ -59,8 +58,42 @@ def _auto_select_baseline(db: Session, user_id: str, name: str, report_id: int) 
     return max(nearest, key=_ct)
 
 
+def _split_item_name_collisions(items: list[dict]) -> list[dict]:
+    """防线:同一系列内若同一份报告出现多个不同 item_name(标准名吞噬造成的脏数据,
+    如血常规子项被并入父项),按 (item_name, unit) 拆成独立系列,避免异量纲数值画成一条线。
+
+    同名重复行(如同一报告同一指标多次测量)不拆 —— 由聚合/展示语义处理。
+    """
+    out: list[dict] = []
+    for item in items:
+        names_by_report: dict = {}
+        for p in item["points"]:
+            names_by_report.setdefault(p["report_id"], set()).add(p.get("item_name"))
+        if not any(len(names) > 1 for names in names_by_report.values()):
+            out.append(item)
+            continue
+        logger.warning(
+            "indicator series %r mixes distinct item_name within one report; "
+            "splitting by item_name/unit", item.get("item_name"),
+        )
+        groups: dict = {}
+        for p in item["points"]:
+            gkey = (p.get("item_name"), p.get("unit"))
+            g = groups.setdefault(gkey, {
+                "item_name_standard": normalize_item_name(gkey[0])[0],
+                "item_name": gkey[0],
+                "unit": gkey[1],
+                "points": [],
+            })
+            g["points"].append(p)
+        for g in groups.values():
+            g["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
+            out.append(g)
+    return out
+
+
 def get_overview(db: Session, user_id: str, name: str) -> dict:
-    """档案页主数据:总览 + 指标走势 + 异常分布。"""
+    """档案页主数据:总览 + 指标走势(仅最近 PROFILE_TREND_REPORT_LIMIT 份报告)+ 异常分布。"""
     reports = db.query(ReportInfo).filter(
         ReportInfo.user_id == user_id,
         ReportInfo.name == name,
@@ -68,9 +101,9 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
     if not reports:
         return {"user_summary": None, "indicator_trends": [], "abnormal_distribution": []}
 
-    report_ids = [r.id for r in reports]
+    trend_report_ids = [r.id for r in reports[-settings.PROFILE_TREND_REPORT_LIMIT:]]
     indicators = db.query(ReportIndicator).filter(
-        ReportIndicator.report_id.in_(report_ids),
+        ReportIndicator.report_id.in_(trend_report_ids),
     ).all()
     report_map = {r.id: r for r in reports}
 
@@ -103,12 +136,17 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
             "report_date": report_map[ind.report_id].report_date.isoformat() if report_map[ind.report_id].report_date else None,
             "value": float(str(ind.result_value).strip()),
             "color": judgment.color_level if judgment else None,
+            "item_name": ind.item_name,
+            "unit": ind.unit,
         })
 
-    for v in by_key.values():
-        v["points"].sort(key=lambda p: p["report_date"] or "")
+    trend_items = _split_item_name_collisions(list(by_key.values()))
+    for v in trend_items:
+        v["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
         v["trend_direction"] = trend_direction(v["points"])
         v["latest_deviation"] = v["points"][-1].get("color") if v["points"] else None
+
+    trend_items = [v for v in trend_items if _has_abnormal(v["points"])]
 
     abnormal_dist_q = text("""
         SELECT ij.item_name, rind.item_name_standard, ij.color_level, COUNT(*) as cnt
@@ -155,267 +193,286 @@ def get_overview(db: Session, user_id: str, name: str) -> dict:
     if baseline:
         summary["baseline_date"] = baseline.report_date.isoformat() if baseline.report_date else None
 
-    trends_sorted = sorted(
-        by_key.values(),
-        key=lambda x: (
-            0 if x.get("latest_deviation") in ("red", "yellow") else 1,
-            -abs(max([p["value"] for p in x["points"]], default=0) - min([p["value"] for p in x["points"]], default=0)),
-        ),
-    )
+    trends_sorted = sorted(trend_items, key=_trend_sort_key)
     return {
         "user_summary": summary,
-        "indicator_trends": trends_sorted,
+        "indicator_trends": trends_sorted[:settings.PROFILE_TREND_MAX_ITEMS],
         "abnormal_distribution": abnormal_distribution,
     }
 
 
-def _build_indicator_diff(db: Session, current: ReportInfo, baseline: ReportInfo) -> dict:
-    """组装对比明细(current / baseline / delta_summary / indicators / only_in_*)。"""
-    cur_inds = db.query(ReportIndicator).filter_by(report_id=current.id).all()
-    base_inds = db.query(ReportIndicator).filter_by(report_id=baseline.id).all()
+# ===========================================================================
+# 跨报告健康变化总览(2026-09-09):自动对比最近 N 份已完成解读的报告
+# ===========================================================================
 
-    cur_judgments = {j.indicator_id: j for j in db.query(IndicatorJudgment).join(
-        ReportInterpretation, IndicatorJudgment.interpretation_id == ReportInterpretation.id
-    ).filter(ReportInterpretation.report_id == current.id).all()}
-    base_judgments = {j.indicator_id: j for j in db.query(IndicatorJudgment).join(
-        ReportInterpretation, IndicatorJudgment.interpretation_id == ReportInterpretation.id
-    ).filter(ReportInterpretation.report_id == baseline.id).all()}
-
-    cur_dicts = [
-        {**_indicator_to_dict(i), "color_level": cur_judgments[i.id].color_level if i.id in cur_judgments else None}
-        for i in cur_inds
-    ]
-    base_dicts = [
-        {**_indicator_to_dict(i), "color_level": base_judgments[i.id].color_level if i.id in base_judgments else None}
-        for i in base_inds
-    ]
-
-    matches = match_indicators(cur_dicts, base_dicts)
-    indicators_diff = []
-    matched_stds = {m["item_name_standard"] for m in matches if m["item_name_standard"]}
-    matched_raw_names = {m["item_name"] for m in matches if not m["item_name_standard"]}
-    only_in_current = []
-    only_in_baseline = []
-
-    for ind in cur_inds:
-        if ind.item_name_standard:
-            already_matched = ind.item_name_standard in matched_stds
-        else:
-            already_matched = ind.item_name in matched_raw_names
-        if not already_matched:
-            only_in_current.append({
-                "item_name": ind.item_name,
-                "item_name_standard": ind.item_name_standard,
-                "current_value": ind.result_value,
-                "unit": ind.unit,
-            })
-    for ind in base_inds:
-        if ind.item_name_standard:
-            already_matched = ind.item_name_standard in matched_stds
-        else:
-            already_matched = ind.item_name in matched_raw_names
-        if not already_matched:
-            only_in_baseline.append({
-                "item_name": ind.item_name,
-                "item_name_standard": ind.item_name_standard,
-                "baseline_value": ind.result_value,
-                "unit": ind.unit,
-            })
-
-    for m in matches:
-        delta = compute_delta(m["current_value"], m["baseline_value"])
-        entry = {
-            "item_name_standard": m["item_name_standard"],
-            "item_name": m["item_name"],
-            "current_value": m["current_value"],
-            "baseline_value": m["baseline_value"],
-            "unit": m["unit"],
-            "current_color": m["current_color"],
-            "baseline_color": m["baseline_color"],
-            "delta": None,
-            "delta_pct": None,
-            "status": None,
-        }
-        if delta is not None:
-            entry["delta"], entry["delta_pct"] = delta
-            entry["status"] = judge_status(delta[1])
-        indicators_diff.append(entry)
-
-    cur_interp = db.query(ReportInterpretation).filter_by(report_id=current.id).first()
-    base_interp = db.query(ReportInterpretation).filter_by(report_id=baseline.id).first()
-
+def empty_change_overview(covered: int) -> dict:
+    """不足 2 份可对比报告时的降级响应。covered = 该锚定已解读报告数。"""
     return {
-        "current": {
-            "report_id": current.id,
-            "report_date": current.report_date.isoformat() if current.report_date else None,
-            "overall_level": cur_interp.overall_level if cur_interp else None,
-            "red_count": cur_interp.red_count if cur_interp else 0,
-            "yellow_count": cur_interp.yellow_count if cur_interp else 0,
-            "green_count": cur_interp.green_count if cur_interp else 0,
-        },
-        "baseline": {
-            "report_id": baseline.id,
-            "report_date": baseline.report_date.isoformat() if baseline.report_date else None,
-            "overall_level": base_interp.overall_level if base_interp else None,
-            "red_count": base_interp.red_count if base_interp else 0,
-            "yellow_count": base_interp.yellow_count if base_interp else 0,
-            "green_count": base_interp.green_count if base_interp else 0,
-        },
-        "delta_summary": {
-            "red_delta": (cur_interp.red_count if cur_interp else 0) - (base_interp.red_count if base_interp else 0),
-            "yellow_delta": (cur_interp.yellow_count if cur_interp else 0) - (base_interp.yellow_count if base_interp else 0),
-            "green_delta": (cur_interp.green_count if cur_interp else 0) - (base_interp.green_count if base_interp else 0),
-        },
-        "indicators": indicators_diff,
-        "only_in_current": only_in_current,
-        "only_in_baseline": only_in_baseline,
-        "_current_report_obj": current,
-        "_baseline_report_obj": baseline,
-        "_current_interp": cur_interp,
+        "reports": [],
+        "covered": covered,
+        "reason": "insufficient",
+        "key_indicators": [],
+        "summary": None,
+        "cached": False,
     }
 
 
-def _indicator_to_dict(ind):
-    return {
-        "item_name": ind.item_name,
-        "item_name_standard": ind.item_name_standard,
-        "result_value": ind.result_value,
-        "unit": ind.unit,
-    }
+def _change_window(db: Session, user_id: str, name: str) -> list:
+    """返回 [(ReportInfo, ReportInterpretation), ...] 升序,仅 completed,取最近 N 份。
 
-
-def _filter_abnormal_top(diff_result: dict) -> list[dict]:
-    """筛出给 prompt 用的 top 异常指标 (red 优先, 黄次之, 同色 |delta| 降序)。"""
-    indicators = diff_result["indicators"]
-    def sort_key(x):
-        cur_color = x.get("current_color") or "green"
-        color_pri = 0 if cur_color == "red" else (1 if cur_color == "yellow" else 2)
-        delta_abs = abs(x.get("delta") or 0)
-        return (color_pri, -delta_abs)
-    return sorted(indicators, key=sort_key)[:TOP_ABNORMAL_FOR_PROMPT]
-
-
-def get_comparison(db: Session, user_id: str, name: str, report_id: int,
-                   baseline_id: Optional[int] = None) -> dict:
-    """对比接口主入口。附带 ai_summary(走缓存命中逻辑)。
-
-    Raises:
-        NotFoundException: 当前报告 user_id+name+report_id 不匹配
-        ValidationException: 指定 baseline_id 但非该 user 历史报告
+    report_date 升序,None 视为最旧放最前(与 /overview 口径一致);取末
+    PROFILE_TREND_REPORT_LIMIT 份。
     """
-    current = db.query(ReportInfo).filter_by(id=report_id, user_id=user_id, name=name).first()
-    if not current:
-        from app.utils.exceptions import NotFoundException
-        raise NotFoundException(detail="Report not found")
-    if baseline_id:
-        baseline = db.query(ReportInfo).filter_by(id=baseline_id, user_id=user_id, name=name).first()
-        if not baseline:
-            from app.utils.exceptions import ValidationException
-            raise ValidationException(detail="Baseline report not found or not owned by user")
-    else:
-        baseline = _auto_select_baseline(db, user_id, name, report_id)
-        if not baseline:
-            return {
-                "current": {
-                    "report_id": current.id,
-                    "report_date": current.report_date.isoformat() if current.report_date else None,
-                    "overall_level": None, "red_count": 0, "yellow_count": 0, "green_count": 0,
-                },
-                "baseline": None,
-                "delta_summary": {"red_delta": 0, "yellow_delta": 0, "green_delta": 0},
-                "indicators": [],
-                "only_in_current": [],
-                "only_in_baseline": [],
-                "ai_summary": "",
-                "ai_summary_cached": False,
-            }
-
-    diff = _build_indicator_diff(db, current, baseline)
-    interp = diff.get("_current_interp")
-    ai_summary = ""
-    cached = False
-    if interp:
-        if interp.comparison_summary and interp.comparison_baseline_id == baseline.id:
-            ai_summary = interp.comparison_summary or ""
-            cached = True
-
-    diff_out = {k: v for k, v in diff.items() if not k.startswith("_")}
-    diff_out["ai_summary"] = ai_summary
-    diff_out["ai_summary_cached"] = cached
-    return diff_out
-
-
-def get_ai_summary(db: Session, user_id: str, name: str, report_id: int, baseline_id: int) -> tuple[str, bool]:
-    """读缓存或调 LLM 实时生成。实时生成不写回缓存。
-
-    Raises:
-        NotFoundException: 当前报告不存在或不属于该用户
-        ValidationException: baseline_id 非该用户历史报告
-    """
-    current = db.query(ReportInfo).filter_by(id=report_id, user_id=user_id, name=name).first()
-    if not current:
-        from app.utils.exceptions import NotFoundException
-        raise NotFoundException(detail="Report not found")
-    baseline = db.query(ReportInfo).filter_by(id=baseline_id, user_id=user_id, name=name).first()
-    if not baseline:
-        from app.utils.exceptions import ValidationException
-        raise ValidationException(detail="Baseline report not found or not owned by user")
-    interp = db.query(ReportInterpretation).filter_by(report_id=report_id).first()
-    if interp and interp.comparison_summary and interp.comparison_baseline_id == baseline_id:
-        return interp.comparison_summary, True
-
-    diff = _build_indicator_diff(db, current, baseline)
-    top_abnormal = _filter_abnormal_top(diff)
-    prompt = build_comparison_prompt(
-        diff["current"], diff["baseline"], diff["indicators"], top_abnormal,
+    rows = (
+        db.query(ReportInfo, ReportInterpretation)
+        .join(ReportInterpretation, ReportInterpretation.report_id == ReportInfo.id)
+        .filter(
+            ReportInfo.user_id == user_id,
+            ReportInfo.name == name,
+            ReportInterpretation.status == "completed",
+        )
+        .all()
     )
-    summary = _call_llm_for_summary(prompt)
-    return summary, False
+    window = []
+    for report, interp in rows:
+        window.append((report, interp))
+
+    def _key(pair):
+        report = pair[0]
+        return (report.report_date is not None, report.report_date or date.min, report.id)
+
+    ordered = sorted(window, key=_key)
+    return ordered[-settings.PROFILE_TREND_REPORT_LIMIT:]
 
 
-def _call_llm_for_summary(prompt: str) -> str:
-    """调用 MedGo 生成小结。失败返回空串并记 warning。"""
-    try:
-        model = get_chat_model(streaming=False)
-        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=512)))
-        return strip_think_tags(resp.content or "")
-    except Exception as e:
-        logger.warning("comparison summary LLM call failed: %s", e)
+def _report_header(pair) -> dict:
+    report, interp = pair
+    return {
+        "report_id": report.id,
+        "report_date": report.report_date.isoformat() if report.report_date else None,
+        "overall_level": interp.overall_level,
+        "red_count": interp.red_count,
+        "yellow_count": interp.yellow_count,
+        "green_count": interp.green_count,
+    }
+
+
+def _window_std_fingerprint(db: Session, report_ids: list[int]) -> str:
+    """窗口指标标准名指纹:窗口内所有 (indicator_id, item_name_standard) 的确定性摘要。
+
+    09-10 标准名回填 / 未来词表变更都会改写 item_name_standard 而 report/interp id 不变;
+    指纹保证这类变化使旧缓存失效重算。行序无关,输出稳定。
+    """
+    if not report_ids:
         return ""
+    rows = db.query(ReportIndicator).filter(
+        ReportIndicator.report_id.in_(report_ids),
+    ).all()
+    pairs = sorted((ind.id, ind.item_name_standard or "") for ind in rows)
+    return hashlib.md5(repr(pairs).encode("utf-8")).hexdigest()
 
 
-def try_generate_comparison_summary(db: Session, report_id: int) -> None:
-    """worker 钩子:解读完成后调一次,生成 AI 小结并写回缓存。
+def _read_cached_overview(interp: Optional[ReportInterpretation], window: list,
+                          fingerprint: str) -> Optional[dict]:
+    """列内容为 JSON、signature 与当前窗口一致且 fingerprint 匹配窗口指标标准名
+    → 返回 payload;否则 None(含旧纯文本、旧格式无 fingerprint 的缓存)。"""
+    if not interp or not interp.comparison_summary:
+        return None
+    try:
+        data = json.loads(interp.comparison_summary)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    sig = [{"report_id": pair[0].id, "interp_id": pair[1].id} for pair in window]
+    if data.get("signature") != sig:
+        return None
+    if data.get("fingerprint") != fingerprint:
+        return None
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
-    - 用户历史报告不足 2 份 -> 跳过
-    - 缓存已有且 baseline 匹配 -> 跳过
-    - LLM 失败 -> logger.warning,不报错,不阻塞主流程
+
+def _series(db: Session, window: list) -> list[dict]:
+    """按 item_name_standard 聚合窗口内数值指标为 points;value 保留原始字符串。"""
+    report_ids = [pair[0].id for pair in window]
+    rid2date = {pair[0].id: _report_header(pair)["report_date"] for pair in window}
+    inds = db.query(ReportIndicator).filter(ReportIndicator.report_id.in_(report_ids)).all()
+    colors: dict = {}
+    if inds:
+        judgments = (
+            db.query(IndicatorJudgment)
+            .join(ReportInterpretation,
+                  IndicatorJudgment.interpretation_id == ReportInterpretation.id)
+            .filter(ReportInterpretation.report_id.in_(report_ids))
+            .all()
+        )
+        colors = {j.indicator_id: j.color_level for j in judgments}
+
+    by_key: dict = {}
+    for ind in inds:
+        if _try_float(ind.result_value) is None:
+            continue
+        key = ind.item_name_standard or ind.item_name
+        if not key:
+            continue
+        item = by_key.setdefault(key, {
+            "item_name": key,
+            "item_name_standard": ind.item_name_standard,
+            "unit": ind.unit,
+            "points": [],
+        })
+        item["points"].append({
+            "report_id": ind.report_id,
+            "report_date": rid2date.get(ind.report_id),
+            "value": str(ind.result_value).strip(),
+            "color": colors.get(ind.id),
+            "item_name": ind.item_name,
+            "unit": ind.unit,
+        })
+    for item in by_key.values():
+        item["points"].sort(key=lambda p: (p["report_date"] is not None, p["report_date"] or ""))
+    return _split_item_name_collisions(list(by_key.values()))
+
+
+def _severity(points: list[dict]) -> int:
+    """窗口内最近一次红/黄(红=0,黄=1),否则 2。"""
+    for p in reversed(points):
+        if p.get("color") in ("red", "yellow"):
+            return 0 if p["color"] == "red" else 1
+    return 2
+
+
+def _has_abnormal(points: list[dict]) -> bool:
+    """窗口内任一点红/黄。"""
+    return any(p.get("color") in ("red", "yellow") for p in points)
+
+
+def _points_range(points: list[dict]) -> float:
+    """数值极差 max-min;经 _try_float 兼容 float(get_overview) 与 str(_series);
+    无有效数值返回 0.0。"""
+    vals = [v for v in (_try_float(p.get("value")) for p in points) if v is not None]
+    return max(vals) - min(vals) if vals else 0.0
+
+
+def _trend_sort_key(item: dict) -> tuple:
+    """统一排序键:最近异常红>黄,同级按极差降序,再按标准名(缺失回退原名)。"""
+    pts = item["points"]
+    name = item.get("item_name_standard") or item.get("item_name") or ""
+    return (_severity(pts), -_points_range(pts), name)
+
+
+def _endpoint_pct(points: list[dict]) -> Optional[float]:
+    """最新点相对最旧点的 delta_pct。"""
+    if len(points) < 2:
+        return None
+    pair = compute_delta(points[-1]["value"], points[0]["value"])
+    return pair[1] if pair else None
+
+
+def _rank_key_indicators(db: Session, window: list) -> list[dict]:
+    """关键指标:与指标走势同一套口径 —— 窗口内任一点红/黄;排序同走势。
+
+    不再要求 ≥2 份报告,也不再需要 |delta_pct|≥5;不再过滤子项(含血常规衍生物)。
     """
-    current = db.query(ReportInfo).filter_by(id=report_id).first()
-    if not current:
-        return
-    interp = db.query(ReportInterpretation).filter_by(report_id=report_id).first()
-    if not interp:
-        return
-    if interp.comparison_summary and interp.comparison_baseline_id:
-        return
+    ranked = []
+    for item in _series(db, window):
+        points = item["points"]
+        if not _has_abnormal(points):
+            continue
+        ranked.append({
+            "item_name": item["item_name"],
+            "item_name_standard": item.get("item_name_standard"),
+            "unit": item["unit"],
+            "latest_value": points[-1]["value"],
+            "latest_color": points[-1]["color"],
+            "direction": trend_direction(points),
+            "delta_pct": _endpoint_pct(points),
+            "points": points,
+        })
+    ranked.sort(key=_trend_sort_key)
+    return ranked
 
-    baseline = _auto_select_baseline(db, current.user_id, current.name, report_id)
-    if not baseline:
-        return
 
-    diff = _build_indicator_diff(db, current, baseline)
-    top_abnormal = _filter_abnormal_top(diff)
-    prompt = build_comparison_prompt(
-        diff["current"], diff["baseline"], diff["indicators"], top_abnormal,
-    )
+def _parse_change_json(content: str) -> Optional[dict]:
+    """宽容解析 MedGo 输出的 JSON 四键对象;失败返回 None。"""
+    if not content:
+        return None
+    text0 = content.strip()
+    if text0.startswith("```"):
+        text0 = re.sub(r"^```[A-Za-z]*\n?", "", text0)
+        text0 = re.sub(r"```$", "", text0).strip()
+    try:
+        obj = json.loads(text0)
+    except (TypeError, ValueError):
+        m = re.search(r"\{.*\}", text0, re.S)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(obj, dict):
+        return None
+    keys = ("trend_summary", "conclusion", "suggestions", "precautions")
+    if not all(isinstance(obj.get(k), str) for k in keys):
+        return None
+    return {k: obj.get(k, "").strip() for k in keys}
+
+
+def _call_llm_for_change_overview(prompt: str) -> Optional[dict]:
+    """调 MedGo 生成总览。失败/解析失败返回 None 并记 warning。"""
     try:
         model = get_chat_model(streaming=False)
-        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=512)))
-        summary = strip_think_tags(resp.content or "")
-        if summary:
-            interp.comparison_summary = summary
-            interp.comparison_baseline_id = baseline.id
-            db.commit()
+        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=1024)))
+        return _parse_change_json(strip_think_tags(resp.content or ""))
     except Exception as e:
-        logger.warning("comparison summary generation failed: %s", e)
+        logger.warning("change overview LLM call failed: %s", e)
+        return None
+
+
+def get_change_overview(db: Session, user_id: str, name: str) -> dict:
+    """GET /profile/change-overview 主入口。不足 2 份降级;否则读缓存或生成并写回。"""
+    window = _change_window(db, user_id, name)
+    if len(window) < 2:
+        return empty_change_overview(len(window))
+    newest_interp = window[-1][1]
+    fingerprint = _window_std_fingerprint(db, [pair[0].id for pair in window])
+    cached = _read_cached_overview(newest_interp, window, fingerprint)
+    if cached:
+        cached["cached"] = True
+        return cached
+
+    key_indicators = _rank_key_indicators(db, window)
+    reports = [_report_header(pair) for pair in window]
+    payload = {
+        "reports": reports,
+        "covered": len(reports),
+        "key_indicators": key_indicators[:settings.PROFILE_TREND_MAX_ITEMS],
+        "summary": None,
+        "cached": False,
+    }
+    prompt = build_change_prompt(reports, key_indicators)
+    summary = _call_llm_for_change_overview(prompt)
+    payload["summary"] = summary
+    if summary:
+        sig = [{"report_id": pair[0].id, "interp_id": pair[1].id} for pair in window]
+        newest_interp.comparison_summary = json.dumps(
+            {"signature": sig, "fingerprint": fingerprint, "payload": payload},
+            ensure_ascii=False)
+        newest_interp.comparison_baseline_id = None
+        db.commit()
+    return payload
+
+
+def ensure_change_overview(db: Session, report_id: int) -> None:
+    """worker 钩子:解读完成后按锚定重算窗口并预热缓存。任何异常吞掉不冒泡。"""
+    try:
+        report = db.query(ReportInfo).filter_by(id=report_id).first()
+        if not report:
+            return
+        get_change_overview(db, report.user_id, report.name)
+    except Exception as e:
+        logger.warning("change overview pre-generation failed: %s", e)
