@@ -8,16 +8,23 @@ def test_queue_topology():
         "parsing.urgent", "parsing.normal", "parsing.bulk",
         "interpretation.urgent", "interpretation.normal", "interpretation.bulk",
         "extract.bulk",
+        "risk.hit",
     }
     assert set(c.RETRY_QUEUES.keys()) == {
         "parsing.urgent.retry", "parsing.normal.retry", "parsing.bulk.retry",
         "interpretation.urgent.retry", "interpretation.normal.retry", "interpretation.bulk.retry",
         "extract.bulk.retry",
+        "risk.normal.retry",
     }
     # 每个 retry 队列 DLX 回对应的原队列
     assert c.RETRY_QUEUES["parsing.bulk.retry"] == "parsing.bulk"
     assert c.RETRY_QUEUES["interpretation.bulk.retry"] == "interpretation.bulk"
     assert c.RETRY_QUEUES["extract.bulk.retry"] == "extract.bulk"
+    assert c.RETRY_QUEUES["risk.normal.retry"] == "risk.hit"
+    # risk 任务按 normal 优先级路由到 risk.hit 队列
+    from app.core.rabbitmq import TaskMessage
+    assert TaskMessage(task_type="risk", hospital_id="H", priority="normal").routing_key() == "risk.normal"
+    assert c.QUEUES["risk.normal"] == "risk.hit"
     assert c.DLX == "hospital.dlx"
     assert c.DEAD_LETTER_QUEUE == "dead.letter"
 

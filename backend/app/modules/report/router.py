@@ -117,7 +117,7 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
     report = service.get_report_detail(db, report_id)
     if not report:
         raise NotFoundException(detail="Report not found")
-    indicators_rows = service.get_report_indicators(db, report_id)
+    indicators = service.get_report_indicators(db, report_id)
     # 展示名:与列表一致——解析出真实姓名优先;解析中(未完成)不泄露账号锚定名;
     # 已完成但未抽出姓名→回退归属锚定名。
     task_status = None
@@ -130,20 +130,38 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
         display_name = None
     else:
         display_name = report.name
+    # 2026-09-01: 绿区展示层垃圾过滤(黄/红/结论不动)
+    # 2026-09-02: "弃检/未检/放弃"类名称任何区都滤(非指标, 步新宇眼压弃检行)
+    from app.modules.report.service import _clean_green_indicator, _ABANDON_ITEM_RE
+    kept = []
+    for i in indicators:
+        if i.raw_text:
+            kept.append(i)
+            continue
+        if _ABANDON_ITEM_RE.search(i.item_name):
+            continue
+        if not i.signal_flag:
+            clean = _clean_green_indicator(i.item_name, i.result_value or "")
+            if clean is None:
+                continue
+            if clean != i.item_name:
+                i.item_name = clean
+        kept.append(i)
+    indicators = kept
     from app.core.indicator_groups import group_indicators
     indicator_dicts = [
         {"item_name": i.item_name, "item_name_standard": i.item_name_standard,
          "item_code": i.item_code, "result_value": i.result_value,
          "unit": i.unit, "ref_range_low": i.ref_range_low,
          "ref_range_high": i.ref_range_high, "category": i.category}
-        for i in indicators_rows
+        for i in indicators
     ]
     grouped, module_order = group_indicators(indicator_dicts)
     return {
         "id": report.id, "task_id": report.task_id,
         "name": display_name, "gender": report.gender, "age": report.age,
         "report_date": report.report_date, "check_type": report.check_type,
-        "unit_name": report.unit_name,
+        "unit_name": report.unit_name, "conclusion_text": report.conclusion_text,
         "indicators": grouped,
         "module_order": module_order,
         "created_at": report.created_at,

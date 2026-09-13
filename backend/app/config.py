@@ -144,6 +144,10 @@ class Settings(BaseSettings):
     # User Profile(用户端):指标走势 / 变化总览关键指标最多展示条数
     PROFILE_TREND_MAX_ITEMS: int = Field(default=10, ge=1, description="指标走势/变化总览关键指标最多展示条数")
 
+    # [新增] 服务间调用共享密钥（sz-mana Java 后端转发统计接口时校验 X-Api-Key）
+    # 为空时服务间端点拒绝服务；生产环境必须配置强随机值
+    STAT_SERVICE_API_KEY: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

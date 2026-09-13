@@ -32,6 +32,7 @@ class IndicatorJudgment(Base):
     result_value = Column(String(50), nullable=True)
     deviation = Column(String(10), nullable=True)
     color_level = Column(String(10), nullable=True)
+    source = Column(String(20), nullable=True)
     matched_rule_id = Column(BigInteger, nullable=True)
     explanation = Column(Text, nullable=True)
     suggestion = Column(Text, nullable=True)

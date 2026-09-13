@@ -35,6 +35,9 @@ export WORKER_EXTRACT="${WORKER_EXTRACT:-1}"
 # 不误杀其它 checkout(如 /home/wjyy2/hospitalKnowledgeBase)隔离运行的旧 worker。
 export WORKER_TAG="$BACKEND_DIR"
 
+# bulk 队列消费窗口：0-24 全天允许批量上传解析；默认 22-8 只在夜间消费 bulk
+export BULK_WINDOW_START=${BULK_WINDOW_START:-0}
+export BULK_WINDOW_END=${BULK_WINDOW_END:-24}
 mkdir -p /data/logs
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -88,6 +91,7 @@ cleanup() {
   pkill -f "from app.modules.report.worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
   pkill -f "from app.modules.interpretation.worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
   pkill -f "from app.modules.report.extract_worker import start_worker; start_worker\\(\\) # $WORKER_TAG" 2>/dev/null || true
+  pkill -f "app.modules.risk.worker" 2>/dev/null || true
   log "Done. Docker 中间件保持运行（如需停止：cd $INFRA_DIR && docker compose down）"
   exit 0
 }
@@ -144,10 +148,10 @@ CREATE TABLE IF NOT EXISTS hospital_user (id BIGINT AUTO_INCREMENT PRIMARY KEY, 
 CREATE TABLE IF NOT EXISTS knowledge_category (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, parent_id BIGINT DEFAULT NULL, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS knowledge_entry (id BIGINT AUTO_INCREMENT PRIMARY KEY, category_id BIGINT DEFAULT NULL, title VARCHAR(200) NOT NULL, content TEXT NOT NULL, source_type VARCHAR(20) NOT NULL DEFAULT 'manual', source_file VARCHAR(500) DEFAULT NULL, chunk_index INT NOT NULL DEFAULT 0, parent_entry_id BIGINT DEFAULT NULL, vector_id VARCHAR(64) DEFAULT NULL, status TINYINT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS report_task (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, original_file_path VARCHAR(500) NOT NULL, original_filename VARCHAR(200) NOT NULL, file_type VARCHAR(10) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, thumbnail_path VARCHAR(500) DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT 'queued', priority TINYINT NOT NULL DEFAULT 0, retry_count INT NOT NULL DEFAULT 0, error_message TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, completed_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS report_info (id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id BIGINT DEFAULT NULL, user_id VARCHAR(16) NOT NULL, name VARCHAR(50), parsed_name VARCHAR(50), gender VARCHAR(5), age INT, report_date DATE, check_type VARCHAR(20), unit_name VARCHAR(100), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS report_indicator (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, item_name_standard VARCHAR(100) DEFAULT NULL, item_code VARCHAR(50) DEFAULT NULL, result_value VARCHAR(50) DEFAULT NULL, unit VARCHAR(20) DEFAULT NULL, ref_range_low VARCHAR(50) DEFAULT NULL, ref_range_high VARCHAR(50) DEFAULT NULL, category VARCHAR(50) DEFAULT NULL, raw_text TEXT DEFAULT NULL) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS report_interpretation (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, overall_level VARCHAR(10) DEFAULT NULL, red_count INT NOT NULL DEFAULT 0, yellow_count INT NOT NULL DEFAULT 0, green_count INT NOT NULL DEFAULT 0, summary_text TEXT DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', retry_count INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
-CREATE TABLE IF NOT EXISTS indicator_judgment (id BIGINT AUTO_INCREMENT PRIMARY KEY, interpretation_id BIGINT NOT NULL, indicator_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, result_value VARCHAR(50) DEFAULT NULL, deviation VARCHAR(10) DEFAULT NULL, color_level VARCHAR(10) DEFAULT NULL, matched_rule_id BIGINT DEFAULT NULL, explanation TEXT DEFAULT NULL, suggestion TEXT DEFAULT NULL, knowledge_refs JSON DEFAULT NULL, certainty VARCHAR(10) DEFAULT NULL, certainty_reason TEXT DEFAULT NULL) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS report_info (id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id BIGINT DEFAULT NULL, user_id VARCHAR(16) NOT NULL, name VARCHAR(50), parsed_name VARCHAR(50), gender VARCHAR(5), age INT, report_date DATE, check_type VARCHAR(20), unit_name VARCHAR(100), conclusion_text TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS report_indicator (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, item_name_standard VARCHAR(100) DEFAULT NULL, item_code VARCHAR(50) DEFAULT NULL, result_value VARCHAR(50) DEFAULT NULL, unit VARCHAR(20) DEFAULT NULL, ref_range_low VARCHAR(50) DEFAULT NULL, ref_range_high VARCHAR(50) DEFAULT NULL, category VARCHAR(50) DEFAULT NULL, raw_text TEXT DEFAULT NULL, signal_flag TINYINT NOT NULL DEFAULT 0) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS report_interpretation (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, overall_level VARCHAR(10) DEFAULT NULL, red_count INT NOT NULL DEFAULT 0, yellow_count INT NOT NULL DEFAULT 0, green_count INT NOT NULL DEFAULT 0, summary_text TEXT DEFAULT NULL, summary_refs JSON DEFAULT NULL, comparison_summary TEXT DEFAULT NULL, comparison_baseline_id BIGINT DEFAULT NULL, quality_note VARCHAR(255) DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', retry_count INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS indicator_judgment (id BIGINT AUTO_INCREMENT PRIMARY KEY, interpretation_id BIGINT NOT NULL, indicator_id BIGINT NOT NULL, item_name VARCHAR(100) NOT NULL, result_value VARCHAR(50) DEFAULT NULL, deviation VARCHAR(10) DEFAULT NULL, color_level VARCHAR(10) DEFAULT NULL, source VARCHAR(20) DEFAULT NULL, matched_rule_id BIGINT DEFAULT NULL, explanation TEXT DEFAULT NULL, suggestion TEXT DEFAULT NULL, knowledge_refs JSON DEFAULT NULL, certainty VARCHAR(10) DEFAULT NULL, certainty_reason TEXT DEFAULT NULL) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS triage_rule (id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_name VARCHAR(100) NOT NULL, rule_type VARCHAR(20) NOT NULL, indicator_code VARCHAR(50) DEFAULT NULL, conditions JSON NOT NULL, color_level VARCHAR(10) NOT NULL, priority INT NOT NULL DEFAULT 0, is_active TINYINT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS report_template (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, type VARCHAR(10) NOT NULL, content LONGBLOB DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS statistic_cache (id BIGINT AUTO_INCREMENT PRIMARY KEY, stat_type VARCHAR(50) NOT NULL, params_hash VARCHAR(64) NOT NULL, result_json JSON DEFAULT NULL, expired_at DATETIME DEFAULT NULL) ENGINE=InnoDB;
@@ -160,6 +164,12 @@ CREATE TABLE IF NOT EXISTS batch_import_file (id VARCHAR(36) PRIMARY KEY, batch_
 CREATE TABLE IF NOT EXISTS followup (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, user_id VARCHAR(16) NOT NULL, name VARCHAR(50), overall_level VARCHAR(10) NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'pending', recheck_indicators_json JSON DEFAULT NULL, template_name VARCHAR(100), generated_at DATETIME DEFAULT CURRENT_TIMESTAMP, submitted_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_followup_report (report_id), KEY idx_followup_user (user_id, name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS followup_question (id BIGINT AUTO_INCREMENT PRIMARY KEY, followup_id BIGINT NOT NULL, question_type VARCHAR(10) NOT NULL, question_text VARCHAR(500) NOT NULL, options JSON DEFAULT NULL, is_required TINYINT NOT NULL DEFAULT 1, sort_order INT NOT NULL DEFAULT 0, answer TEXT DEFAULT NULL, answered_at DATETIME DEFAULT NULL, KEY idx_fq_followup (followup_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS user_notification (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, name VARCHAR(50), category VARCHAR(24) NOT NULL, title VARCHAR(200) NOT NULL, content JSON NOT NULL, ref_report_id BIGINT DEFAULT NULL, ref_followup_id BIGINT DEFAULT NULL, is_read TINYINT NOT NULL DEFAULT 0, read_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_un_user_created (user_id, name, created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ CREATE TABLE IF NOT EXISTS disease_mapping (id BIGINT AUTO_INCREMENT PRIMARY KEY, item_name_standard VARCHAR(200) NOT NULL, item_name VARCHAR(200) DEFAULT NULL, disease_name VARCHAR(200) NOT NULL, disease_category VARCHAR(20) DEFAULT 'OTHER', disease_class VARCHAR(100) DEFAULT NULL, sort_code INT DEFAULT 200, enabled TINYINT DEFAULT 1, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_item_name_std (item_name_standard)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ CREATE TABLE IF NOT EXISTS disease_rule (id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_code VARCHAR(50) NOT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, member_items JSON DEFAULT NULL, source VARCHAR(20) DEFAULT 'LOCAL', enabled TINYINT DEFAULT 1, sort_code INT DEFAULT 200, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_rule_code (rule_code)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ CREATE TABLE IF NOT EXISTS disease_hit (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, interpretation_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, unit_name VARCHAR(100) DEFAULT NULL, report_date DATE DEFAULT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, hit_type VARCHAR(20) DEFAULT 'single', mapping_id BIGINT DEFAULT NULL, rule_id BIGINT DEFAULT NULL, hit_items JSON DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_report_disease (report_id, disease_name), KEY idx_user_date (user_id, report_date), KEY idx_disease (disease_name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'LOCAL';
+ ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_level VARCHAR(10) DEFAULT 'YELLOW';
+ ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_deviation VARCHAR(10) DEFAULT NULL;
 SQL
   docker exec -i hospital-mysql mysql -uroot -proot --default-character-set=utf8mb4 hospital_template <<'SQL' 2>/dev/null || true
 INSERT INTO hospital_tenant (hospital_id, hospital_name, db_name, is_active)
@@ -197,6 +207,18 @@ else
   # 展示名与归属分离:report_info.parsed_name(PDF 解析真实姓名,仅展示;兼容旧库)
   docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
     "ALTER TABLE report_info ADD COLUMN IF NOT EXISTS parsed_name VARCHAR(50) NULL;" 2>/dev/null || true
+  # 报告结论提取列
+  docker exec hospital-mysql mysql -uroot -proot hospital_H001 -e \
+    "ALTER TABLE report_info ADD COLUMN IF NOT EXISTS conclusion_text TEXT DEFAULT NULL;" 2>/dev/null || true
+  # 疾病风险引擎: disease_rule/disease_hit 表 + mapping 增强列(兼容旧库)
+  for TBL in hospital_H001 hospital_H002 hospital_H003 hospital_H004; do
+    docker exec hospital-mysql mysql -uroot -proot ${TBL} -e \
+      "CREATE TABLE IF NOT EXISTS disease_rule (id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_code VARCHAR(50) NOT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, member_items JSON DEFAULT NULL, source VARCHAR(20) DEFAULT 'LOCAL', enabled TINYINT DEFAULT 1, sort_code INT DEFAULT 200, create_time DATETIME DEFAULT CURRENT_TIMESTAMP, update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uk_rule_code (rule_code)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      CREATE TABLE IF NOT EXISTS disease_hit (id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, interpretation_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, unit_name VARCHAR(100) DEFAULT NULL, report_date DATE DEFAULT NULL, disease_name VARCHAR(100) NOT NULL, disease_category VARCHAR(20) DEFAULT 'CHRONIC', disease_class VARCHAR(100) DEFAULT NULL, hit_type VARCHAR(20) DEFAULT 'single', mapping_id BIGINT DEFAULT NULL, rule_id BIGINT DEFAULT NULL, hit_items JSON DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_report_disease (report_id, disease_name), KEY idx_user_date (user_id, report_date), KEY idx_disease (disease_name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'LOCAL';
+      ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_level VARCHAR(10) DEFAULT 'YELLOW';
+      ALTER TABLE disease_mapping ADD COLUMN IF NOT EXISTS match_deviation VARCHAR(10) DEFAULT NULL;" 2>/dev/null || true
+  done
 fi
 
 # ── 3. 确保 .env ────────────────────────────────────────────────
@@ -344,6 +366,17 @@ ensure_workers() {
 ensure_workers report.worker            "报告解析"  "$WORKER_PARSE"    worker-parsing
 ensure_workers interpretation.worker    "解读"      "$WORKER_INTERP"   worker-interpretation
 ensure_workers report.extract_worker    "批量解压"  "$WORKER_EXTRACT"   worker-extract
+
+if pgrep -f "app.modules.risk.worker" >/dev/null 2>&1; then
+  log "风险规则引擎 Worker 已运行"
+else
+  log "启动风险规则引擎 Worker..."
+  cd "$BACKEND_DIR"
+  nohup $VENV/python -u -c "from app.modules.risk.worker import start_worker; start_worker()" > /data/logs/worker-risk.stdout.log 2>&1 &
+  echo $! > /tmp/start-sh-worker-risk.pid
+  cd "$ROOT_DIR"
+  log "  风险规则引擎 Worker 已启动 (log: /data/logs/worker-risk.stdout.log)"
+fi
 
 # ── 8. 创建测试用户（如不存在）──────────────────────────────────
 log "确保测试用户存在..."

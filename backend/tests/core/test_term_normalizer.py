@@ -7,16 +7,22 @@ from app.core.term_normalizer import (
 
 
 def test_normalize_item_name_alias_to_standard():
-    assert normalize_item_name("血糖")[0] == "空腹血糖（GLU）"
-    assert normalize_item_name("葡萄糖")[0] == "空腹血糖（GLU）"
-    assert normalize_item_name("谷丙转氨酶")[0] == "丙氨酸氨基转移酶（ALT）"
+    assert normalize_item_name("血糖")[0] == "空腹血糖"
+    assert normalize_item_name("葡萄糖")[0] == "空腹血糖"
+    assert normalize_item_name("谷丙转氨酶")[0] == "丙氨酸氨基转移酶(谷丙酶)"
+    # 方案2量词收敛(2026-08-24): 百分数/百分率/比率 → 百分比口径标准名
+    assert normalize_item_name("淋巴细胞百分数")[0] == "淋巴细胞百分比(LYM)"
+    assert normalize_item_name("中性粒细胞数")[0] == "中性粒细胞绝对值(NEUT#)"
+    # 方案1清洗(2026-08-24): 全角/空格/前后缀
+    assert normalize_item_name("血清钾")[0] == "钾(K)"
+    assert normalize_item_name("α－羟丁酸脱氢酶")[0] == "α-羟丁酸脱氢酶"
     # 未知名称原样保留
-    assert normalize_item_name("淋巴细胞百分数")[0] == "淋巴细胞百分数"
+    assert normalize_item_name("随机未知项目X")[0] == "随机未知项目X"
 
 
 def test_normalize_indicators_sets_standard_and_code():
     out = normalize_indicators([{"item_name": "血糖", "result": "6.8"}])
-    assert out[0]["item_name_standard"] == "空腹血糖（GLU）"
+    assert out[0]["item_name_standard"] == "空腹血糖"
     assert out[0]["item_code"] is None
 
 
@@ -93,37 +99,37 @@ def test_dedup_no_change_when_no_duplicates():
 
 
 def test_no_substring_swallow_child_into_parent():
-    """血常规子项不再被子串吞成父项,各自映射到子项 canonical。"""
-    assert normalize_item_name("血小板比积")[0] == "血小板比积（PCT）"
-    assert normalize_item_name("血小板平均体积")[0] == "血小板平均体积（MPV）"
-    assert normalize_item_name("血小板分布宽度")[0] == "血小板分布宽度（PDW）"
-    assert normalize_item_name("大血小板比率")[0] == "大血小板比率（P-LCR）"
-    assert normalize_item_name("血小板计数")[0] == "血小板计数（PLT）"
-    assert normalize_item_name("平均红细胞体积")[0] == "平均红细胞体积（MCV）"
-    assert normalize_item_name("平均血红蛋白浓度")[0] == "平均红细胞血红蛋白浓度（MCHC）"
-    assert normalize_item_name("小而密低密度脂蛋白胆固醇")[0] == "小而密低密度脂蛋白胆固醇（sdLDL）"
+    """血常规子项不再被子串吞成父项,各自映射到子项 canonical(feat/app 词表)。"""
+    assert normalize_item_name("血小板比积")[0] == "血小板压积(PCT)"
+    assert normalize_item_name("血小板平均体积")[0] == "血小板平均容积(MPV)"
+    assert normalize_item_name("血小板分布宽度")[0] == "血小板分布宽度(PDW)"
+    assert normalize_item_name("大血小板比率")[0] == "大血小板比例(P-LCR)"
+    assert normalize_item_name("血小板计数")[0] == "血小板数(PLT)"
+    assert normalize_item_name("平均红细胞体积")[0] == "红细胞平均体积(MCV)"
+    assert normalize_item_name("平均血红蛋白浓度")[0] == "平均红细胞血红蛋白浓度(MCHC)"
+    assert normalize_item_name("小而密低密度脂蛋白胆固醇")[0] == "小而密低密度脂蛋白胆固醇"
 
 
 def test_no_substring_swallow_urine_or_pH():
-    """含父名词干的尿检/酸碱度项不得并入父项,保持原名透传。"""
+    """含父名词干的尿检/酸碱度项不得并入父项。"""
     assert normalize_item_name("尿白细胞酯酶")[0] == "尿白细胞酯酶"
-    assert normalize_item_name("尿白细胞（镜检）")[0] == "尿白细胞（镜检）"
-    assert normalize_item_name("尿酸碱度")[0] == "尿酸碱度"
+    assert normalize_item_name("尿白细胞（镜检）")[0] == "尿白细胞(镜检)"
+    assert normalize_item_name("尿酸碱度")[0] == "尿液酸碱度(PH)"
 
 
 def test_trailing_english_code_paren_stripped_for_lookup():
     """尾缀英文码括号可剥(base 命中 canonical);中文括号限定语不剥。"""
-    assert normalize_item_name("血红蛋白(HGB)")[0] == "血红蛋白（Hb）"
-    assert normalize_item_name("血小板计数（PLT）")[0] == "血小板计数（PLT）"
-    assert normalize_item_name("尿红细胞（镜检）")[0] == "尿红细胞（镜检）"
+    assert normalize_item_name("血红蛋白(HGB)")[0] == "血红蛋白(HGB)"
+    assert normalize_item_name("血小板计数（PLT）")[0] == "血小板数(PLT)"
+    assert normalize_item_name("尿红细胞（镜检）")[0] == "尿红细胞(镜检)"
 
 
 def test_rdw_canonical_self_resolve():
-    """发射的标准名(红细胞分布宽度 RDW-CV/SD)再喂回必须自解析回自身,不得落入通用 RDW。"""
-    assert normalize_item_name("红细胞分布宽度（RDW-CV）")[0] == "红细胞分布宽度（RDW-CV）"
-    assert normalize_item_name("红细胞分布宽度(RDW-CV)")[0] == "红细胞分布宽度（RDW-CV）"
-    assert normalize_item_name("红细胞分布宽度（RDW-SD）")[0] == "红细胞分布宽度（RDW-SD）"
-    assert normalize_item_name("红细胞分布宽度(RDW-SD)")[0] == "红细胞分布宽度（RDW-SD）"
+    """标准名(红细胞分布宽度 RDW-CV/SD)再喂回必须自解析回自身,不得落入通用 RDW。"""
+    assert normalize_item_name("红细胞分布宽度（RDW-CV）")[0] == "红细胞变异系数(RDW-CV)"
+    assert normalize_item_name("红细胞分布宽度(RDW-CV)")[0] == "红细胞变异系数(RDW-CV)"
+    assert normalize_item_name("红细胞分布宽度（RDW-SD）")[0] == "红细胞分布宽度(RDW-SD)"
+    assert normalize_item_name("红细胞分布宽度(RDW-SD)")[0] == "红细胞分布宽度(RDW-SD)"
 
 
 def test_is_child_item_flags():

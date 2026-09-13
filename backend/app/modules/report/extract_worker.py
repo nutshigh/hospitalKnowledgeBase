@@ -294,7 +294,7 @@ def _stream_to_report(target_db, b, hospital_id, rel_path, fh, size, name, user_
         "extract stage=queued batch=%s file=%s file_id=%s user=%s size=%d target_hospital=%s",
         b.id, rel_path, fid, user_id, size, hospital_id,
     )
-    ext = os.path.splitext(rel_path)[1].lstrip(".")
+    ext = os.path.splitext(rel_path)[1].lstrip(".").lower()
     extract_dir = os.path.join(os.path.dirname(b.archive_path), "extracted", b.id)
     os.makedirs(extract_dir, exist_ok=True)
     disk_path = os.path.join(extract_dir, f"{fid}.{ext}")

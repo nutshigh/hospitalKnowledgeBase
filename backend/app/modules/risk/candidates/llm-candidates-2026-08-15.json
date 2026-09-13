@@ -1,0 +1,861 @@
+{
+  "single": [
+    {
+      "item_name": "CK同工酶(质量)",
+      "disease_name": "心肌梗死",
+      "disease_category": "MAJOR",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "a-羟丁酸脱氢酶",
+      "disease_name": "心肌梗死",
+      "disease_category": "MAJOR",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "三碘甲状腺原氨酸",
+      "disease_name": "甲状腺功能亢进",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "中性粒细胞百分比",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "中性粒细胞绝对值",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "乳酸脱氢酶",
+      "disease_name": "心肌梗死",
+      "disease_category": "MAJOR",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "二氧化碳",
+      "disease_name": "酸碱平衡紊乱",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "异常"
+    },
+    {
+      "item_name": "人体代谢率检查异常",
+      "disease_name": "肥胖",
+      "disease_category": "OTHER",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "低密度脂蛋白胆固醇",
+      "disease_name": "高脂血症",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "体质指数",
+      "disease_name": "肥胖",
+      "disease_category": "OTHER",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "体重指数",
+      "disease_name": "肥胖",
+      "disease_category": "OTHER",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "促甲状腺素",
+      "disease_name": "甲状腺功能减退",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "全血糖化血红蛋白测定",
+      "disease_name": "糖尿病",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "前列腺特异性抗原",
+      "disease_name": "前列腺癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "前白蛋白",
+      "disease_name": "营养不良",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "单核细胞百分比",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "单核细胞绝对值",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "嗜碱粒细胞百分比",
+      "disease_name": "过敏",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "嗜碱粒细胞绝对值",
+      "disease_name": "过敏",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "嗜酸粒细胞百分比",
+      "disease_name": "过敏",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "嗜酸粒细胞绝对值",
+      "disease_name": "过敏",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "大血小板比率",
+      "disease_name": "血小板异常",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "室上性早搏",
+      "disease_name": "心律失常",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "小而密低密度脂蛋白胆固醇",
+      "disease_name": "高脂血症",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿亚硝酸盐",
+      "disease_name": "尿路感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿微量白蛋白浓度",
+      "disease_name": "肾病",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿核基质蛋白(NMP22)测定",
+      "disease_name": "膀胱癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿潜血",
+      "disease_name": "肾病",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿白细胞",
+      "disease_name": "尿路感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿素",
+      "disease_name": "肾功能不全",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿红细胞",
+      "disease_name": "肾病",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿胆原",
+      "disease_name": "黄疸",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿胆红素",
+      "disease_name": "黄疸",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿葡萄糖",
+      "disease_name": "糖尿病",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿蛋白",
+      "disease_name": "肾病",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿酮体",
+      "disease_name": "糖尿病酮症",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "尿酸",
+      "disease_name": "痛风",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "屈光不正",
+      "disease_name": "屈光不正",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "平均红细胞体积",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "平均红细胞血红蛋白含量",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "平均红细胞血红蛋白浓度",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "平均血小板体积",
+      "disease_name": "血小板异常",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "心率",
+      "disease_name": "心律失常",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "心肌肌钙蛋白I",
+      "disease_name": "心肌梗死",
+      "disease_category": "MAJOR",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "总胆固醇",
+      "disease_name": "高脂血症",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "总胆汁酸",
+      "disease_name": "肝病",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "总胆红素",
+      "disease_name": "黄疸",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "总蛋白",
+      "disease_name": "肝病",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "扁桃体肥大",
+      "disease_name": "扁桃体肥大",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "有核红细胞百分比",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "有核红细胞绝对值",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "淋巴细胞百分比",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "淋巴细胞绝对值",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "渗透压",
+      "disease_name": "肾功能不全",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "游离T3",
+      "disease_name": "甲状腺功能亢进",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "游离T4",
+      "disease_name": "甲状腺功能亢进",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "游离前列腺特异性抗原",
+      "disease_name": "前列腺癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "牙结石",
+      "disease_name": "牙周病",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "牙龈炎",
+      "disease_name": "牙周病",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "球蛋白",
+      "disease_name": "肝病",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "甘油三酯",
+      "disease_name": "高脂血症",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "甲状腺双叶多发囊性结节",
+      "disease_name": "甲状腺结节",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "甲状腺摄取率",
+      "disease_name": "甲状腺功能异常",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "甲状腺素",
+      "disease_name": "甲状腺功能亢进",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "甲胎蛋白",
+      "disease_name": "肝癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "癌抗原CA19-9",
+      "disease_name": "胰腺癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "癌胚抗原",
+      "disease_name": "癌症",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "白球比值",
+      "disease_name": "肝病",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "白细胞团",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "白蛋白",
+      "disease_name": "肝病",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "直接胆红素",
+      "disease_name": "黄疸",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "粘液丝",
+      "disease_name": "尿路感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "糖原蛋白125",
+      "disease_name": "卵巢癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "糖原蛋白153",
+      "disease_name": "乳腺癌",
+      "disease_category": "MAJOR",
+      "disease_class": "肿瘤",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "红细胞",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "红细胞体积分布宽度",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "红细胞压积",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "细菌",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "维生素C",
+      "disease_name": "维生素C缺乏",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "肌酐",
+      "disease_name": "肾功能不全",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "肌酸激酶",
+      "disease_name": "心肌梗死",
+      "disease_category": "MAJOR",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "胆囊壁胆固醇结晶",
+      "disease_name": "胆囊炎",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "胆囊多发结节",
+      "disease_name": "胆囊结石",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "胆碱脂酶",
+      "disease_name": "肝病",
+      "disease_category": "CHRONIC",
+      "disease_class": "消化系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "葡萄糖",
+      "disease_name": "糖尿病",
+      "disease_category": "CHRONIC",
+      "disease_class": "内分泌代谢",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "血小板",
+      "disease_name": "血小板异常",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "血小板体积分布宽度",
+      "disease_name": "血小板异常",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "血小板压积",
+      "disease_name": "血小板异常",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "血常规白细胞",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "血沉",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "血红蛋白",
+      "disease_name": "贫血",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "血清同型半胱氨酸",
+      "disease_name": "心血管疾病",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "超氧化物歧化酶",
+      "disease_name": "氧化应激",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "超重",
+      "disease_name": "肥胖",
+      "disease_category": "OTHER",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    },
+    {
+      "item_name": "透明管型",
+      "disease_name": "肾病",
+      "disease_category": "CHRONIC",
+      "disease_class": "泌尿系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "酵母",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "酸碱度",
+      "disease_name": "酸碱平衡紊乱",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "异常"
+    },
+    {
+      "item_name": "钙",
+      "disease_name": "骨质疏松",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "钠",
+      "disease_name": "电解质紊乱",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "钾",
+      "disease_name": "电解质紊乱",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "镁",
+      "disease_name": "电解质紊乱",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "间接胆红素",
+      "disease_name": "黄疸",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "阴离子间隙",
+      "disease_name": "酸碱平衡紊乱",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "非鳞状上皮细胞",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "高密度脂蛋白胆固醇",
+      "disease_name": "高脂血症",
+      "disease_category": "CHRONIC",
+      "disease_class": "心血管系统",
+      "match_level": "YELLOW",
+      "match_deviation": "偏低"
+    },
+    {
+      "item_name": "鳞状上皮细胞",
+      "disease_name": "感染",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": "偏高"
+    },
+    {
+      "item_name": "龋齿",
+      "disease_name": "牙周病",
+      "disease_category": "CHRONIC",
+      "disease_class": "其他",
+      "match_level": "YELLOW",
+      "match_deviation": null
+    }
+  ],
+  "combos": []
+}

@@ -4,12 +4,37 @@ import time
 
 from app.core.database import get_hospital_db
 from app.core.logging_config import setup_logging
-from app.core.rabbitmq import rabbitmq, _NackOnce
+from app.core.rabbitmq import rabbitmq, _NackOnce, TaskMessage
 from app.core.retry import backoff_for_retry, is_bulk_window_now
 from app.ai.agents import run_interpretation_agent
 from app.modules.report.batch_service import BatchService
 
 _log = logging.getLogger("app.interp.worker")
+
+
+def _weak_candidates_enabled(db, report_id: int) -> bool:
+    """报告是否启用弱切分候选(profile multi_findings, 默认关)。
+
+    2026-09-12: 弱切分(多发现行/多方向行)按院声明 —— 这里用原始 PDF 文本匹配
+    档案(文本报告 <1s; 纯扫描件提取为空 → 默认关, 其条目靠【】标题/LLM)。
+    """
+    try:
+        from app.modules.report.models import ReportInfo, ReportTask
+        from app.modules.report.service import _extract_pdf_text, _load_report_profiles
+        info = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
+        if not info or not info.task_id:
+            return False
+        task = db.query(ReportTask).filter(ReportTask.id == info.task_id).first()
+        if not task or not task.original_file_path:
+            return False
+        text = _extract_pdf_text(task.original_file_path, hybrid=False)
+        if not text:
+            return False
+        match_profile, _ = _load_report_profiles()
+        return bool(match_profile(text).get("multi_findings"))
+    except Exception as e:
+        _log.warning("weak_candidates probe failed report=%d: %s", report_id, e)
+        return False
 
 
 def handle_interpretation_task(message: dict):
@@ -43,6 +68,27 @@ def handle_interpretation_task(message: dict):
             .first()
         )
         if existing:
+            # 解读已完成但结论异常还未提取 → 补跑异常提取
+            if existing.status == "completed":
+                try:
+                    from app.modules.report.service import _extract_abnormalities_async, _store_abnormalities
+                    from app.modules.report.models import ReportInfo
+                    from sqlalchemy import text
+                    report_info = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
+                    if report_info and report_info.conclusion_text:
+                        has_ab = db.execute(text(
+                            "SELECT COUNT(*) FROM indicator_judgment ij JOIN report_indicator ri ON ij.indicator_id = ri.id WHERE ij.interpretation_id = :iid AND ri.raw_text IS NOT NULL"
+                        ), {"iid": existing.id}).scalar()
+                        if not has_ab:
+                            import asyncio
+                            items = asyncio.run(_extract_abnormalities_async(
+                                report_info.conclusion_text,
+                                weak_candidates=_weak_candidates_enabled(db, report_id)))
+                            if items:
+                                _store_abnormalities(db, report_id, existing.id, items)
+                                _log.info("backfill abnormalities report=%d count=%d", report_id, len(items))
+                except Exception as e:
+                    _log.warning("backfill abnormalities failed report=%d: %s", report_id, e)
             _log.debug("interp skip (already running/completed) report=%s hospital=%s", report_id, hospital_id)
             return  # ack and skip — another worker is/has handled this report
         t_start = time.time()
@@ -70,10 +116,52 @@ def handle_interpretation_task(message: dict):
                     f"Change overview generation failed for report {report_id}: {e}",
                     flush=True,
                 )
+            # 从结论文本提取异常项 → 写入 indicator_judgment
+            try:
+                from app.modules.report.service import _extract_abnormalities_async, _store_abnormalities
+                from app.modules.report.models import ReportInfo
+                report_info = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
+                if report_info and report_info.conclusion_text:
+                    interp = db.query(ReportInterpretation).filter(
+                        ReportInterpretation.report_id == report_id,
+                        ReportInterpretation.status == "completed",
+                    ).order_by(ReportInterpretation.id.desc()).first()
+                    if interp:
+                        import asyncio
+                        items = asyncio.run(_extract_abnormalities_async(
+                                report_info.conclusion_text,
+                                weak_candidates=_weak_candidates_enabled(db, report_id)))
+                        if items:
+                            _store_abnormalities(db, report_id, interp.id, items)
+                        # 刷新解释统计（含结论异常）
+                        from app.modules.interpretation.service import refresh_interpretation_counts
+                        refresh_interpretation_counts(db, interp.id)
+            except Exception as e:
+                _log.warning("abnormality extraction failed report=%d: %s", report_id, e)
             # 成功 → 计 batch file 进度(interp_ok),落在批次所属库
             if batch_id and file_id:
                 BatchService.update_batch_progress(
                     batch_hospital_id, hospital_id, db, batch_id, file_id, "interp_ok")
+            # === STRATEGY:v2026-08-15-risk-hit 解读完成 → 异步触发病种命中计算 ===
+            # 不阻塞本链路;失败仅记日志, 由 risk worker 侧 retry 兜底。
+            # 回退: 删除本段即可。
+            try:
+                interp_row = db.query(ReportInterpretation).filter(
+                    ReportInterpretation.report_id == report_id,
+                    ReportInterpretation.status == "completed",
+                ).order_by(ReportInterpretation.id.desc()).first()
+                rabbitmq.publish(TaskMessage(
+                    task_type="risk",
+                    hospital_id=hospital_id,
+                    priority="normal",
+                    payload={
+                        "report_id": report_id,
+                        "interpretation_id": interp_row.id if interp_row else None,
+                    },
+                ))
+            except Exception as e:
+                _log.warning("risk publish failed report=%s: %s", report_id, e)
+            # === END STRATEGY ===
         except Exception as e:
             latency_ms = int((time.time() - t_start) * 1000)
             _log.warning(

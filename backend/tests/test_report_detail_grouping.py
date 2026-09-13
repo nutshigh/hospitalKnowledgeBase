@@ -18,12 +18,12 @@ def _client_with_indicators(indicator_names):
     report = SimpleNamespace(
         id=1, task_id=1, name="测试1", parsed_name=None,
         gender=None, age=None, report_date=None, check_type=None,
-        unit_name=None, created_at=datetime(2026, 1, 1),
+        unit_name=None, conclusion_text=None, created_at=datetime(2026, 1, 1),
     )
     inds = [SimpleNamespace(
         item_name=n, item_name_standard=None, item_code=None,
         result_value="1", unit=None, ref_range_low=None, ref_range_high=None,
-        category=None,
+        category=None, raw_text=None, signal_flag=0,
     ) for n in indicator_names]
     patches = [
         patch("app.modules.report.router.service.get_report_detail", return_value=report),

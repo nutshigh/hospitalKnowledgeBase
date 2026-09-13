@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, Integer, Date, DateTime, ForeignKey, func
+from sqlalchemy import Column, BigInteger, String, Text, Integer, SmallInteger, Date, DateTime, ForeignKey, func
 from app.models.base import Base
 
 
@@ -34,6 +34,7 @@ class ReportInfo(Base):
     report_date = Column(Date, nullable=True)
     check_type = Column(String(20), nullable=True)
     unit_name = Column(String(100), nullable=True)
+    conclusion_text = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
 
@@ -51,3 +52,4 @@ class ReportIndicator(Base):
     ref_range_high = Column(String(50), nullable=True)
     category = Column(String(50), nullable=True)
     raw_text = Column(Text, nullable=True)
+    signal_flag = Column(SmallInteger, nullable=True, default=0)  # 1=异常信号行(红字/箭头/异常词), 2026-08-25

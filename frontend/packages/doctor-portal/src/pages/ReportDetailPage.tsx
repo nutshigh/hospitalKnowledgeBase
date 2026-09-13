@@ -38,11 +38,22 @@ export default function ReportDetailPage() {
   if (!report) return <DoctorLayout><Spin /></DoctorLayout>;
 
   const columns = [
-    { title: '指标', dataIndex: 'item_name', key: 'item_name' },
+    { title: '指标', dataIndex: 'item_name', key: 'item_name',
+      // 2026-09-09: 总检异常条目映射回总检建议段原文行(后端 origin_line)
+      render: (v: any, r: any) => r?.source === 'conclusion' && r.origin_line ? (
+        <div>{v}<div style={{ color: '#999', fontSize: 12, fontWeight: 'normal' }}>原文: {r.origin_line}</div></div>
+      ) : v },
     { title: '结果', dataIndex: 'result_value', key: 'result_value',
       render: (v: any, r: any) => <span>{v} <span style={{ color: '#888', fontSize: 12 }}>{r.unit}</span></span> },
     { title: '参考范围', key: 'ref',
-      render: (_: any, r: any) => r.ref_range_low && r.ref_range_high ? `${r.ref_range_low}-${r.ref_range_high}` : '-' },
+      // 2026-08-31: 单限参考范围也显示(<5.2 / >1.04), "无"视为无值
+      render: (_: any, r: any) => {
+        const ok = (v: any) => v !== undefined && v !== null && v !== '' && v !== '无';
+        if (ok(r.ref_range_low) && ok(r.ref_range_high)) return `${r.ref_range_low}-${r.ref_range_high}`;
+        if (ok(r.ref_range_high)) return `<${r.ref_range_high}`;
+        if (ok(r.ref_range_low)) return `>${r.ref_range_low}`;
+        return '-';
+      } },
     { title: '色级', dataIndex: 'color_level', key: 'color_level',
       render: (c: string) => c ? <Tag color={COLORS[c]}>{c}</Tag> : '-' },
     { title: '偏离', dataIndex: 'deviation', key: 'deviation',
@@ -63,6 +74,14 @@ export default function ReportDetailPage() {
       <Card style={{ marginBottom: 16 }}>
         <p>性别: {report.gender} · 年龄: {report.age} · 日期: {report.report_date}</p>
         {report.unit_name && <p>单位: {report.unit_name}</p>}
+      </Card>
+
+      <Card title="总检建议与结论" style={{ marginBottom: 16 }}>
+        {report.conclusion_text ? (
+          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{report.conclusion_text}</div>
+        ) : (
+          <div style={{ color: '#999', fontStyle: 'italic' }}>未提取到结论</div>
+        )}
       </Card>
 
       {interp && (

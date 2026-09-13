@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Annotated, List, Optional, TypedDict
@@ -23,6 +24,25 @@ from app.ai.agents.citation_matcher import inject_citations
 from app.ai.agents.judge_graph import run_judge
 from app.ai.llm import get_chat_model, _guarded
 from app.config import settings
+
+_RANGE_RE = re.compile(r"([\d.]+)\s*[-~—到至]\s*([\d.]+)")
+
+
+def _to_num(v) -> float:
+    """结果/参考值转数字: 剥 >/</~ 等符号(如 ">1000" → 1000), 无法解析返回 0。"""
+    m = re.search(r"([\d.]+)", str(v or ""))
+    return float(m.group(1)) if m else 0.0
+
+
+def _fix_ref_range(ind: dict) -> None:
+    """防御性修复：当 ref_range_low 包含完整范围且 ref_range_high 为空时拆分。"""
+    low = ind.get("ref_range_low")
+    high = ind.get("ref_range_high")
+    if low and not high:
+        m = _RANGE_RE.match(str(low).strip())
+        if m:
+            ind["ref_range_low"] = m.group(1)
+            ind["ref_range_high"] = m.group(2)
 
 logger = logging.getLogger("app.interp")
 
@@ -161,21 +181,147 @@ class InterpKnowledgeMiddleware(AgentMiddleware):
         return result
 
 
+
+# === 2026-09-10: 工具调用守卫(planner 层容错) ===
+# 背景: MedGo/vLLM 一次生成的批量检索 tool_calls 超长被截断 → arguments JSON 非法 →
+# 请求历史携带坏串 → vLLM 400(Invalid JSON, function-wrap 校验)→ 解读 failed 重试 3 次。
+# 策略(不改模型): 请求前清洗历史(防 400); 响应后校验/限流(防坏调用执行与入历史);
+# 超长 query 截断(保留调用, 尽量不丢覆盖面), 非法调用丢弃并记日志。
+_GUARD_MAX_QUERY = 600      # 单个参数超长截断(检索 query 无需超长)
+_GUARD_MAX_CALLS = 12       # 单轮工具调用数量上限(超出丢弃并在日志计数)
+
+
+def _guard_sanitize_tool_calls(tool_calls):
+    keep, dropped = [], 0
+    for tc in tool_calls or []:
+        try:
+            args = tc.get("args")
+            if isinstance(args, str):
+                args = json.loads(args)  # 截断的 JSON 会在此抛错 → 丢弃
+            if not isinstance(args, dict):
+                raise ValueError("args not dict")
+            fixed = {}
+            changed = False
+            for k, v in args.items():
+                if isinstance(v, str) and len(v) > _GUARD_MAX_QUERY:
+                    v = v[:_GUARD_MAX_QUERY]
+                    changed = True
+                fixed[k] = v
+            keep.append({**tc, "args": fixed} if changed else tc)
+        except Exception:
+            dropped += 1
+    if len(keep) > _GUARD_MAX_CALLS:
+        dropped += len(keep) - _GUARD_MAX_CALLS
+        keep = keep[:_GUARD_MAX_CALLS]
+    return keep, dropped
+
+
+def _guard_raw_tool_calls_bad(raw_tcs) -> bool:
+    """additional_kwargs["tool_calls"] 原始串中是否存在非法 arguments JSON。"""
+    for tc in raw_tcs or []:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function")
+        args = fn.get("arguments") if isinstance(fn, dict) else None
+        if isinstance(args, str) and args.strip():
+            try:
+                json.loads(args)
+            except Exception:
+                return True
+    return False
+
+
+def _guard_sanitize_message(m):
+    """返回 (消息, 丢弃数); 清洗三处坏 tool-call 串(2026-09-12 修复不完整问题):
+    ①tool_calls: args 非法/超长(截断或丢弃);
+    ②invalid_tool_calls: 截断 JSON 被 langchain 归档于此, **tool_calls 会为空** ——
+      旧守卫 `if not tcs: return` 直接跳过, 坏串随请求历史回传 vLLM(function-wrap
+      校验 400, H003-22 实例), 现一并清空;
+    ③additional_kwargs["tool_calls"]: 请求重建的原始坏串, 检测到非法 arguments 即清除。
+    """
+    tcs = list(getattr(m, "tool_calls", None) or [])
+    inv = list(getattr(m, "invalid_tool_calls", None) or [])
+    akw = dict(getattr(m, "additional_kwargs", None) or {})
+    raw_bad = _guard_raw_tool_calls_bad(akw.get("tool_calls"))
+    keep, dropped = _guard_sanitize_tool_calls(tcs)
+    dropped += len(inv)
+    if not dropped and not raw_bad and keep == tcs and not inv:
+        return m, 0
+    upd = {"tool_calls": keep, "invalid_tool_calls": []}
+    if raw_bad:
+        akw.pop("tool_calls", None)
+        upd["additional_kwargs"] = akw
+    try:
+        return m.model_copy(update=upd), dropped
+    except Exception:
+        return m, 0
+
+
+class ToolCallGuardMiddleware(AgentMiddleware):
+    """请求前/响应后的 tool_calls 守卫(防 vLLM Invalid JSON 400; 限批量/长度)。"""
+
+    def _sanitize_request(self, request):
+        dropped = 0
+        new_msgs = []
+        for m in request.messages:
+            nm, d = _guard_sanitize_message(m)
+            new_msgs.append(nm)
+            dropped += d
+        if dropped:
+            logger.warning("toolcall guard: 请求历史清洗, 丢弃 %d 个坏/超限 tool_call", dropped)
+            return request.override(messages=new_msgs), dropped
+        return request, 0
+
+    def _sanitize_response(self, response):
+        dropped = 0
+        result = getattr(response, "result", None)
+        if result is None:
+            nm, d = _guard_sanitize_message(response)
+            if d:
+                logger.warning("toolcall guard: 响应清洗, 丢弃 %d 个坏/超限 tool_call", d)
+            return nm
+        new_res = []
+        changed = False
+        for m in result:
+            nm, d = _guard_sanitize_message(m)
+            new_res.append(nm)
+            dropped += d
+            if nm is not m:
+                changed = True
+        if dropped:
+            logger.warning("toolcall guard: 响应清洗, 丢弃 %d 个坏/超限 tool_call", dropped)
+        if changed:
+            response.result = new_res
+        return response
+
+    def wrap_model_call(self, request, handler):
+        request, _ = self._sanitize_request(request)
+        return self._sanitize_response(handler(request))
+
+    async def awrap_model_call(self, request, handler):
+        request, _ = self._sanitize_request(request)
+        return self._sanitize_response(await handler(request))
+
+
 def build_interp_agent():
-    model = get_chat_model(streaming=False)
+    # 2026-08-27: 解读改 no_think —— MedGo 思考模式下长报告单条 15-40 分钟,
+    # 解读为结构化 JSON 提取/生成, 思考收益低; no_think 约 3-5 分钟/条。
+    # 2026-09-12: 单请求超时 600s —— 模型退化循环(重复"研究分析…"直到截断)曾挂
+    # 12 分钟才由服务端 400 报错, 超时中断交由重试(正常单步 far below 600s)。
+    model = get_chat_model(streaming=False, no_think=True, request_timeout=600)
     model.max_tokens = 16384
     return create_agent(
         model=model,
         tools=INTERP_TOOLS,
         system_prompt=SEARCH_SYSTEM_PROMPT,
         response_format=ToolStrategy(ConfirmSchema),
-        middleware=[InterpKnowledgeMiddleware()],
+        middleware=[InterpKnowledgeMiddleware(), ToolCallGuardMiddleware()],
         state_schema=InterpAgentState,
     )
 
 
 def build_report_model():
-    model = get_chat_model(streaming=False)
+    model = get_chat_model(streaming=False, no_think=True, request_timeout=600)
     model.max_tokens = 16384
     return model
 
@@ -244,10 +390,21 @@ def _generate_report(state: InterpState, db: Session) -> dict:
     abnormal_text = "\n".join(abnormal_lines)
 
     knowledge_blocks = []
+    # 2026-09-05: 检索知识总量预算, 超限截断尾部, 防 LLM 单次输入超 vllm 上下文导致 400 死循环。
+    # 量化依据: 正常报告引用 ≤34 条(~17K 字, H004/齐鲁 类), 24K 预算在其上留有安全余量,
+    # 仅对极端超长报告(如某份 ~118 条/59K 触发 400)生效, 不影响其它报告解读。
+    _KNOWLEDGE_BUDGET_CHARS = 24000
+    _used = 0
     for k in knowledge:
-        knowledge_blocks.append(
-            f"- [来源] title={k.get('title','')}, source={k.get('source','document')}\n  {k.get('content','')[:500]}"
-        )
+        block = (f"- [来源] title={k.get('title','')}, source={k.get('source','document')}\n"
+                 f"  {k.get('content','')[:500]}")
+        if _used + len(block) > _KNOWLEDGE_BUDGET_CHARS:
+            logger.warning(
+                "generate_report: knowledge_text 超预算截断尾部(knowledge=%d used=%d)",
+                len(knowledge), _used)
+            break
+        knowledge_blocks.append(block)
+        _used += len(block)
     knowledge_text = "\n".join(knowledge_blocks) or "（无知识库结果）"
 
     user_content = f"""请基于以下数据撰写综合解读报告（5 节）：
@@ -286,12 +443,22 @@ def _generate_report(state: InterpState, db: Session) -> dict:
                 report_raw = json.loads(repair_json(match.group()))
             except Exception:
                 report_raw = {}
+    def _coerce_str(v) -> str:
+        """2026-08-29: MedGo JSON 字段类型漂移(abnormal_focus 偶发 list)容错。"""
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            return "、".join(str(x) for x in v)
+        return str(v)
+
     report = InterpretationReport(
-        overall_summary=strip_think_tags(report_raw.get("overall_summary", "")),
-        abnormal_focus=strip_think_tags(report_raw.get("abnormal_focus", "")),
-        trend_note=strip_think_tags(report_raw.get("trend_note", "")),
-        suggestions=strip_think_tags(report_raw.get("suggestions", "")),
-        risk_alert=strip_think_tags(report_raw.get("risk_alert", "")),
+        overall_summary=strip_think_tags(_coerce_str(report_raw.get("overall_summary"))),
+        abnormal_focus=strip_think_tags(_coerce_str(report_raw.get("abnormal_focus"))),
+        trend_note=strip_think_tags(_coerce_str(report_raw.get("trend_note"))),
+        suggestions=strip_think_tags(_coerce_str(report_raw.get("suggestions"))),
+        risk_alert=strip_think_tags(_coerce_str(report_raw.get("risk_alert"))),
     )
 
     refs_all: list[dict] = []
@@ -323,15 +490,19 @@ def build_interp_graph(hospital_id: str, db: Session):
         user_id = str(row[1]) if row else ""
         rows = db.execute(
             text("SELECT id, item_name, item_name_standard, result_value, unit, "
-                 "ref_range_low, ref_range_high FROM report_indicator WHERE report_id = :rid ORDER BY id"),
+                 "ref_range_low, ref_range_high, signal_flag FROM report_indicator "
+                 "WHERE report_id = :rid AND raw_text IS NULL ORDER BY id"),
             {"rid": report_id},
         ).fetchall()
         indicators = [
             {"id": r[0], "item_name": r[1], "item_name_standard": r[2],
              "result_value": r[3], "unit": r[4],
-             "ref_range_low": r[5], "ref_range_high": r[6]}
+             "ref_range_low": r[5], "ref_range_high": r[6],
+             "signal_flag": r[7]}
             for r in rows
         ]
+        for ind in indicators:
+            _fix_ref_range(ind)
         return {"indicators": indicators, "user_id": user_id}
 
     def run_rules(state: InterpState) -> dict:
@@ -359,21 +530,44 @@ def build_interp_graph(hospital_id: str, db: Session):
             result = rules_engine.evaluate(state["hospital_id"], ind_dict)
             deviation = result.deviation
             color_level = result.color_level
-            if deviation == "normal":
+            # === 2026-08-25: 异常信号行强制黄区 ===
+            # signal_flag=3(2026-08-28): 列式提示列异常标志(报告方明确判定), 强制黄;
+            # signal_flag=2(↑↓箭头): 语义标记, 强制黄(不复核, 箭头不会标在正常值上);
+            # signal_flag=1(红字/异常词): 样式标记, 有参考范围时复核
+            #   (超限→黄, 范围内→绿, 如"眼压 13"红字误标)。
+            if ind.get("signal_flag") == 3:
+                color_level = "yellow"
+                if deviation == "normal":
+                    deviation = "abnormal"
+            elif ind.get("signal_flag") == 2:
+                color_level = "yellow"
+                if deviation == "normal":
+                    deviation = "abnormal"
+            elif ind.get("signal_flag") == 1:
                 try:
-                    val = float(ind["result_value"] or 0)
-                    ref_high = float(ind["ref_range_high"] or 0)
-                    ref_low = float(ind["ref_range_low"] or 0)
-                    if ref_high and val > ref_high:
-                        deviation = "high"
-                        if color_level == "green":
-                            color_level = "yellow"
-                    elif ref_low and val < ref_low:
-                        deviation = "low"
-                        if color_level == "green":
-                            color_level = "yellow"
+                    val = _to_num(ind["result_value"])
+                    ref_high = _to_num(ind["ref_range_high"])
+                    ref_low = _to_num(ind["ref_range_low"])
+                    # 2026-09-07: 复核兼容单限(防城港一 HBcAb ref 0-0.15, lo=0 时
+                    # 旧双限判断失效 → 8.19 超上界不判黄)
+                    over_hi = ref_high is not None and val > ref_high
+                    under_lo = ref_low is not None and val < ref_low
+                    if over_hi or under_lo:
+                        deviation = "high" if over_hi else "low"
+                        color_level = "yellow"
+                    elif ref_high is None and ref_low is None:
+                        color_level = "yellow"
+                        if deviation == "normal":
+                            deviation = "abnormal"
                 except (ValueError, TypeError):
-                    pass
+                    color_level = "yellow"
+                    if deviation == "normal":
+                        deviation = "abnormal"
+            # 2026-09-07(口径确认): "仅标志判黄" —— 无任何 signal_flag 的指标不做
+            # 结果 vs 参考范围自动比较判黄(报告方自己会在表格内标记异常, 比较判黄多此一举,
+            # 且 ref 错配时会造成假黄)。黄/红只来自: 业务规则(rule 表)、表格标志
+            # (signal_flag 3/2 强制, 1=红字/异常词样式标记 + ref 复核)。
+            # 回退: 恢复本段即回到"无标志超限自动黄"。
 
             judgments.append({
                 "indicator_id": ind["id"],
@@ -485,6 +679,7 @@ def build_interp_graph(hospital_id: str, db: Session):
                 result_value=j["result_value"],
                 deviation=j["deviation"],
                 color_level=j["color_level"],
+                source="indicator",
                 matched_rule_id=j["matched_rule_id"],
                 explanation=None, suggestion=None, knowledge_refs=None,
                 certainty=None, certainty_reason=None,

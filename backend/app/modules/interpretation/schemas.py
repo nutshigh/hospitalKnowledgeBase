@@ -14,6 +14,14 @@ class IndicatorJudgmentSchema(BaseModel):
     deviation: Optional[str] = None
     color_level: Optional[str] = None
     group: Optional[str] = None
+    # === STRATEGY:v2026-08-16-original-name-display 展示原始名 ===
+    # 前端"指标异常/总检建议异常"展示报告原文名(如"窦性心律不齐"),
+    # 需要 source 区分结论型条目、explanation 取原始名(item_name 可能被
+    # 归一化名/疾病名覆盖)。纯新增字段, 不影响既有消费方。
+    # 回退: 删除以下两行即可。
+    source: Optional[str] = None
+    explanation: Optional[str] = None
+    # === END STRATEGY ===
 
 
 class InterpretationReportSchema(BaseModel):

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Spin, Button, Popconfirm, message, Collapse } from 'antd';
-import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DeleteOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/userStore';
 import Layout from '../components/Layout';
 import ColorBadge from '../components/ColorBadge';
@@ -12,6 +12,15 @@ import { useChatStore } from '../stores/chatStore';
 import { InterpretationReportCard } from '@hospital/shared';
 
 const COLOR_ORDER: Record<string, number> = { red: 0, yellow: 1, green: 2 };
+const CONCLUSION_TITLE_RE = /^(总检建议与结论|总检结论|医师建议|综合建议|健康指导|结论与建议)\s*\n*/;
+
+function cleanConclusionText(text: string): string {
+  return text.replace(CONCLUSION_TITLE_RE, '').trim();
+}
+
+function isConclusionIndicator(ind: any): boolean {
+  return ind.source === 'conclusion' || (!ind.result_value && !ind.ref_range_low && !ind.ref_range_high);
+}
 
 function sortByColor(items: any[]): any[] {
   return [...items].sort((a, b) =>
@@ -57,6 +66,7 @@ export default function ReportDetailPage() {
   const [report, setReport] = useState<any>(null);
   const [interpretation, setInterpretation] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [conclusionExpanded, setConclusionExpanded] = useState(false);
   const chatStore = useChatStore();
   const [chatSessionId, setChatSessionId] = useState<number | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
@@ -119,7 +129,6 @@ export default function ReportDetailPage() {
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>;
   if (!report) return <Layout title="报告详情"><p>报告不存在</p></Layout>;
 
-  // 统一用 ReportCard 一致的 effectiveStatus 计算,避免首页/详情页状态显示不一致
   const displayStatus = (() => {
     const ts = taskStatus || report?.task_status;
     const is = interpretation?.status;
@@ -127,7 +136,7 @@ export default function ReportDetailPage() {
     if (ts && ts !== 'completed') return ts;
     if (!is) return 'processing';
     if (is === 'completed') return 'completed';
-    return is; // processing / pending
+    return is;
   })();
   const isProcessing = displayStatus !== 'completed' && displayStatus !== 'failed';
   const interpLoading = isProcessing;
@@ -151,8 +160,42 @@ export default function ReportDetailPage() {
   const overallLevel = interpretation?.overall_level;
   const rawIndicators = interpretation?.indicators?.length ? interpretation.indicators : (report?.indicators || []);
   const moduleOrder = interpretation?.module_order ?? report?.module_order;
-  const { groups, flat } = toGroups(rawIndicators, moduleOrder);
-  const totalCount = rawIndicators.length;
+
+  // === STRATEGY:v2026-08-16-original-name-display 展示原始名 ===
+  // 结论条目的 item_name 可能被归一化名/疾病名覆盖(如"窦性心律不齐"→"心律失常"),
+  // explanation 列存的是报告原文名。展示与去重均以原始名(explanation||item_name)为准,
+  // 让用户能从展示名直接对应回报告。
+  // 回退: 删除 displayName 并恢复 ind.item_name / ind.explanation 的旧用法。
+  const displayName = (ind: any) => ind.explanation || ind.item_name;
+  // === END STRATEGY ===
+
+  // 分离结论型指标和化验型指标，结论型优先剔除与化验型同名的
+  // 2026-08-31: 名称变体也视为重复(互相包含, 如结论"肌酸激酶" vs 指标"血肌酸激酶")
+  // 2026-09-01: 只对"异常指标"(黄/红)去重 —— 绿色指标("甲状腺"/"呼吸"/"钙"
+  // 等短名、"右侧耳前瘘管鼻"检查项)不拦截结论条目; 包含匹配要求双方≥4字
+  // (防短名"甲状腺"⊂"甲状腺结节"误滤)。
+  const conclusionIndicators = rawIndicators.filter(isConclusionIndicator);
+  const regularIndicators = rawIndicators.filter((ind: any) => !isConclusionIndicator(ind));
+  const regAnomaly = regularIndicators.filter((ind: any) =>
+    ind.color_level === 'yellow' || ind.color_level === 'red');
+  const regularNames = regAnomaly.map((ind: any) => displayName(ind));
+  const isRegularDup = (n: string) => regularNames.some(rn =>
+    rn && (rn === n || (rn.length >= 4 && n.length >= 4 && (rn.includes(n) || n.includes(rn)))));
+  // 结论条目内部: 短名被更长结论名包含 → 剔除(如"钙化灶" vs "肝内钙化灶")
+  const concNames = conclusionIndicators.map((ind: any) => displayName(ind));
+  const isConcSub = (n: string) => concNames.some(cn =>
+    cn && cn !== n && cn.length >= 4 && n.length >= 4 && cn.includes(n));
+  const filteredConclusion = conclusionIndicators.filter((ind: any) => {
+    const n = displayName(ind);
+    return !isRegularDup(n) && !isConcSub(n);
+  });
+  const displayIndicators = [...regularIndicators, ...filteredConclusion].sort((a, b) =>
+    (COLOR_ORDER[a.color_level] ?? 3) - (COLOR_ORDER[b.color_level] ?? 3));
+
+  const { groups, flat } = toGroups(displayIndicators, moduleOrder);
+  const totalCount = displayIndicators.length;
+
+  const conclusionText = report.conclusion_text ? cleanConclusionText(report.conclusion_text) : '';
 
   return (
     <Layout title={report.name || '报告详情'}>
@@ -208,6 +251,37 @@ export default function ReportDetailPage() {
         </div>
       )}
 
+      <div style={{
+        background: 'var(--color-surface)', borderRadius: 'var(--radius-md)', padding: 16,
+        boxShadow: 'var(--shadow-sm)', border: '1px solid var(--color-border-light)',
+        marginBottom: 20,
+      }}>
+        <div
+          onClick={() => setConclusionExpanded(!conclusionExpanded)}
+          style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            cursor: 'pointer',
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+            📋 总检建议与结论
+            {conclusionText && !conclusionExpanded && (
+              <span style={{ fontWeight: 400, marginLeft: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                {conclusionText.slice(0, 40)}...
+              </span>
+            )}
+          </span>
+          {conclusionText ? (
+            conclusionExpanded ? <UpOutlined style={{ fontSize: 12 }} /> : <DownOutlined style={{ fontSize: 12 }} />
+          ) : null}
+        </div>
+        {conclusionExpanded && (
+          <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: 'var(--color-text)' }}>
+            {conclusionText || '未提取到结论'}
+          </div>
+        )}
+      </div>
+
       <div style={{ background: 'var(--color-surface)', borderRadius: 'var(--radius-md)', padding: '0 20px', boxShadow: 'var(--shadow-sm)', border: '1px solid var(--color-border-light)' }}>
         {groups.length > 0 && (
           <Collapse
@@ -234,12 +308,13 @@ export default function ReportDetailPage() {
                 children: items.map((ind: any, idx: number) => (
                   <IndicatorRow
                     key={idx}
-                    item_name={ind.item_name}
+                    item_name={displayName(ind)}
                     result_value={ind.result_value}
                     unit={ind.unit}
                     ref_range_low={ind.ref_range_low}
                     ref_range_high={ind.ref_range_high}
                     color_level={ind.color_level}
+                    is_conclusion={isConclusionIndicator(ind)}
                   />
                 )),
               };
@@ -252,18 +327,19 @@ export default function ReportDetailPage() {
             {flat.map((ind: any, idx: number) => (
               <IndicatorRow
                 key={idx}
-                item_name={ind.item_name}
+                item_name={displayName(ind)}
                 result_value={ind.result_value}
                 unit={ind.unit}
                 ref_range_low={ind.ref_range_low}
                 ref_range_high={ind.ref_range_high}
                 color_level={ind.color_level}
+                is_conclusion={isConclusionIndicator(ind)}
               />
             ))}
           </div>
         )}
 
-        {totalCount === 0 && (
+        {displayIndicators.length === 0 && (
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-secondary)', fontSize: 13 }}>暂无指标数据</div>
         )}
       </div>

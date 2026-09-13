@@ -1,0 +1,900 @@
+{
+ "1": {
+  "name": "石坤(石坤)",
+  "interp_id": 302,
+  "conclusion_len": 1466,
+  "conclusion_hash": "6e8b8f57d525770d",
+  "indicators": [
+   [
+    "γ-谷氨酰转移酶",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "游离PSA/总PSA",
+    "yellow"
+   ],
+   [
+    "红细胞分布宽度-SD",
+    "yellow"
+   ],
+   [
+    "血小板比容",
+    "yellow"
+   ],
+   [
+    "血尿酸",
+    "yellow"
+   ],
+   [
+    "视力(右)",
+    "yellow"
+   ],
+   [
+    "视力(左)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "双眼屈光不正",
+    "yellow"
+   ],
+   [
+    "气管憩室",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "血脂异常",
+    "yellow"
+   ],
+   [
+    "轻度肥胖",
+    "yellow"
+   ]
+  ]
+ },
+ "2": {
+  "name": "张亚(桂林边检站)",
+  "interp_id": 297,
+  "conclusion_len": 1621,
+  "conclusion_hash": "05fbb51ed43d2778",
+  "indicators": [
+   [
+    "二氧化碳结合力",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白",
+    "yellow"
+   ],
+   [
+    "干化学酮体",
+    "yellow"
+   ],
+   [
+    "血小板分布宽度",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "ST段抬高",
+    "yellow"
+   ],
+   [
+    "变应性鼻炎",
+    "yellow"
+   ],
+   [
+    "心脏呈逆钟向转位",
+    "yellow"
+   ],
+   [
+    "甲状腺右叶结节",
+    "yellow"
+   ],
+   [
+    "甲状腺左叶结节",
+    "yellow"
+   ],
+   [
+    "肝内钙化点",
+    "yellow"
+   ],
+   [
+    "肝囊肿",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "3": {
+  "name": "谢国宾(梧州市中医医院)",
+  "interp_id": 308,
+  "conclusion_len": 1080,
+  "conclusion_hash": "9eb73f0d8d377c40",
+  "indicators": [
+   [
+    "乙肝表面抗体(发光法)",
+    "yellow"
+   ],
+   [
+    "嗜碱性粒细胞百分比",
+    "yellow"
+   ],
+   [
+    "尿酸",
+    "yellow"
+   ],
+   [
+    "平均血小板体积(MPV)",
+    "yellow"
+   ],
+   [
+    "甘油三脂",
+    "yellow"
+   ],
+   [
+    "癌胚抗原定量",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣返流",
+    "yellow"
+   ],
+   [
+    "二尖瓣返流",
+    "yellow"
+   ],
+   [
+    "前列腺囊肿",
+    "yellow"
+   ],
+   [
+    "右肾肾盂旁囊肿",
+    "yellow"
+   ],
+   [
+    "右肾肾盂旁囊肿？",
+    "yellow"
+   ],
+   [
+    "肝小囊肿",
+    "yellow"
+   ],
+   [
+    "肾结石",
+    "yellow"
+   ],
+   [
+    "胆囊息肉样病变",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "4": {
+  "name": "欧阳庆(中华人民共和国钦州保税港区出入境边防检查站)",
+  "interp_id": 316,
+  "conclusion_len": 1051,
+  "conclusion_hash": "e983c0c405966dda",
+  "indicators": [
+   [
+    "*总胆固醇(T-CH)",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白胆固醇(LDL-C)",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌分型幽门螺杆菌抗体II型(YMII)",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌尿素酶抗体(Urease)(YMU)",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇(HDL-C)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "体重指数偏高",
+    "yellow"
+   ],
+   [
+    "尿白细胞2+",
+    "yellow"
+   ],
+   [
+    "左肾内强回声团",
+    "yellow"
+   ],
+   [
+    "左肾囊肿",
+    "yellow"
+   ],
+   [
+    "窦性心律不齐，ST抬高,提示早期复极",
+    "yellow"
+   ],
+   [
+    "肥胖",
+    "yellow"
+   ]
+  ]
+ },
+ "5": {
+  "name": "庞海锋()",
+  "interp_id": 304,
+  "conclusion_len": 1568,
+  "conclusion_hash": "3796f322af3d9fb9",
+  "indicators": [
+   [
+    "钾(K)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "保证充足睡眠",
+    "yellow"
+   ],
+   [
+    "健康风险自评自测问卷",
+    "yellow"
+   ],
+   [
+    "前列腺钙化",
+    "yellow"
+   ],
+   [
+    "右肺中叶内侧段微小结节",
+    "yellow"
+   ],
+   [
+    "右肾强光团",
+    "yellow"
+   ],
+   [
+    "左肾小结石",
+    "yellow"
+   ],
+   [
+    "左肾结石",
+    "yellow"
+   ],
+   [
+    "消除心理压力或紧张情绪",
+    "yellow"
+   ],
+   [
+    "牙面较多色素沉着",
+    "yellow"
+   ],
+   [
+    "稀便",
+    "yellow"
+   ],
+   [
+    "避免劳累和用脑过度",
+    "yellow"
+   ],
+   [
+    "隐血弱阳性",
+    "yellow"
+   ]
+  ]
+ },
+ "6": {
+  "name": "步新宇()",
+  "interp_id": 306,
+  "conclusion_len": 345,
+  "conclusion_hash": "3b7b3ea73f137b99",
+  "indicators": [
+   [
+    "游离前列腺特异性抗原",
+    "yellow"
+   ],
+   [
+    "肌酸激酶",
+    "yellow"
+   ],
+   [
+    "舒张压",
+    "yellow"
+   ],
+   [
+    "血清同型半胱氨酸",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "人体代谢率检查",
+    "yellow"
+   ],
+   [
+    "右肺尖间隔旁型肺气肿",
+    "yellow"
+   ],
+   [
+    "外耳道耵聍",
+    "yellow"
+   ],
+   [
+    "室上性早搏",
+    "yellow"
+   ],
+   [
+    "牙齿龋齿",
+    "yellow"
+   ],
+   [
+    "肝内钙化灶",
+    "yellow"
+   ],
+   [
+    "龋齿",
+    "yellow"
+   ]
+  ]
+ },
+ "21": {
+  "name": "林建生(华西厦门)",
+  "interp_id": 273,
+  "conclusion_len": 1179,
+  "conclusion_hash": "0ae1f5b1656232d4",
+  "indicators": [
+   [
+    "甘油三酯",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前列腺钙化灶",
+    "yellow"
+   ],
+   [
+    "双肺散在小结节",
+    "yellow"
+   ],
+   [
+    "双肺散在少许慢性炎症",
+    "yellow"
+   ],
+   [
+    "多系炎性结节",
+    "yellow"
+   ],
+   [
+    "多系肺内淋巴结",
+    "yellow"
+   ],
+   [
+    "左肺斜裂小结节",
+    "yellow"
+   ],
+   [
+    "左肾尿盐结晶形成",
+    "yellow"
+   ],
+   [
+    "慢性牙周炎",
+    "yellow"
+   ],
+   [
+    "肝囊肿",
+    "yellow"
+   ],
+   [
+    "肝脏结节",
+    "yellow"
+   ],
+   [
+    "肝血管瘤",
+    "yellow"
+   ],
+   [
+    "胆囊胆固醇沉着",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "龋齿",
+    "yellow"
+   ]
+  ]
+ },
+ "22": {
+  "name": "戴伟平()",
+  "interp_id": 287,
+  "conclusion_len": 552,
+  "conclusion_hash": "fa36c001187bb542",
+  "indicators": [
+   [
+    "乙肝两对半结论",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体(HBsAb)",
+    "yellow"
+   ],
+   [
+    "估计肾小球滤过率（eGFR)",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "尿蛋白(PRO)",
+    "yellow"
+   ],
+   [
+    "尿酸(UA)",
+    "yellow"
+   ],
+   [
+    "总胆固醇(CHOL)",
+    "yellow"
+   ],
+   [
+    "甘油三酯(TG)",
+    "yellow"
+   ],
+   [
+    "红细胞(RBC)",
+    "yellow"
+   ],
+   [
+    "载脂蛋白B(APOB)",
+    "yellow"
+   ],
+   [
+    "阴离子间隙(AG)",
+    "yellow"
+   ],
+   [
+    "隐血",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "C13呼气试验阳性",
+    "yellow"
+   ],
+   [
+    "二尖瓣、三尖瓣轻度反流",
+    "yellow"
+   ],
+   [
+    "前列腺钙化灶",
+    "yellow"
+   ],
+   [
+    "双肺上叶微小结节",
+    "yellow"
+   ],
+   [
+    "右肾钙化灶",
+    "yellow"
+   ],
+   [
+    "屈光不正",
+    "yellow"
+   ],
+   [
+    "左肺下叶少许纤维灶",
+    "yellow"
+   ],
+   [
+    "残根",
+    "yellow"
+   ],
+   [
+    "牙结石",
+    "yellow"
+   ],
+   [
+    "牙龈炎",
+    "yellow"
+   ],
+   [
+    "甲状腺右侧叶实性结节",
+    "yellow"
+   ],
+   [
+    "胆囊息肉样病变",
+    "yellow"
+   ],
+   [
+    "血压升高",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "轻度脂肪肝",
+    "yellow"
+   ],
+   [
+    "龋齿",
+    "yellow"
+   ]
+  ]
+ },
+ "23": {
+  "name": "王国瑞(中华人民共和国济南出入境边防检)",
+  "interp_id": 289,
+  "conclusion_len": 1430,
+  "conclusion_hash": "56c19b11acdcdbba",
+  "indicators": [
+   [
+    "AST/ALT",
+    "yellow"
+   ],
+   [
+    "三碘甲状腺原氨酸",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "体质指数",
+    "yellow"
+   ],
+   [
+    "尿胆原",
+    "yellow"
+   ],
+   [
+    "总胆红素",
+    "yellow"
+   ],
+   [
+    "淋巴细胞绝对值",
+    "yellow"
+   ],
+   [
+    "直接胆红素",
+    "yellow"
+   ],
+   [
+    "红细胞分布宽度(SD)",
+    "yellow"
+   ],
+   [
+    "葡萄糖",
+    "yellow"
+   ],
+   [
+    "载脂蛋白A1/B",
+    "yellow"
+   ],
+   [
+    "载脂蛋白B",
+    "yellow"
+   ],
+   [
+    "间接胆红素",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前列腺增生",
+    "yellow"
+   ],
+   [
+    "右肺下叶散在小钙化灶",
+    "yellow"
+   ],
+   [
+    "右肾囊肿",
+    "yellow"
+   ],
+   [
+    "左下肢静脉曲张",
+    "yellow"
+   ],
+   [
+    "左肺下叶微小纤维结节灶",
+    "yellow"
+   ],
+   [
+    "甲状腺右叶结节",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "24": {
+  "name": "邵琳(日照市人民医院)",
+  "interp_id": 293,
+  "conclusion_len": 2697,
+  "conclusion_hash": "957af7284afbe4d0",
+  "indicators": [
+   [
+    "EBV病毒核抗原IgG抗体",
+    "yellow"
+   ],
+   [
+    "EB病毒衣壳抗原IgG(IgG/VCA)",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体",
+    "yellow"
+   ],
+   [
+    "天门冬氨酸氨基转移酶（AST）",
+    "yellow"
+   ],
+   [
+    "尿隐血",
+    "yellow"
+   ],
+   [
+    "肌红蛋白",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "ST段轻度改变",
+    "yellow"
+   ],
+   [
+    "子宫肌瘤",
+    "yellow"
+   ],
+   [
+    "心脏瓣膜返流",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "肝内血管瘤可能",
+    "yellow"
+   ],
+   [
+    "肝脏低密度灶",
+    "yellow"
+   ],
+   [
+    "肥胖",
+    "yellow"
+   ],
+   [
+    "肺结节",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ]
+  ]
+ },
+ "25": {
+  "name": "陈灿明(二级部门)",
+  "interp_id": 281,
+  "conclusion_len": 1707,
+  "conclusion_hash": "58a4fa0747f37a51",
+  "indicators": [
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "尿素氮",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "肌酐",
+    "yellow"
+   ],
+   [
+    "载脂蛋白A1",
+    "yellow"
+   ],
+   [
+    "载脂蛋白B",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣返流",
+    "yellow"
+   ],
+   [
+    "前列腺增大",
+    "yellow"
+   ],
+   [
+    "电轴右偏",
+    "yellow"
+   ],
+   [
+    "碳13尿素呼气试验阳性",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "血压偏低",
+    "yellow"
+   ]
+  ]
+ },
+ "26": {
+  "name": "蔡芳坤()",
+  "interp_id": 283,
+  "conclusion_len": 881,
+  "conclusion_hash": "38e6e9c6ca0173c2",
+  "indicators": [
+   [
+    "乙肝表面抗体",
+    "yellow"
+   ],
+   [
+    "肾小球滤过率",
+    "yellow"
+   ],
+   [
+    "谷草转氨酶",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "二尖瓣、三尖瓣少量反流",
+    "yellow"
+   ],
+   [
+    "左上肺叶实性小结节",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "27": {
+  "name": "李林青(山东大学齐鲁医院)",
+  "interp_id": 285,
+  "conclusion_len": 1443,
+  "conclusion_hash": "e74bd9b059a9cca3",
+  "indicators": [
+   [
+    "EB病毒核抗原IgG抗体",
+    "yellow"
+   ],
+   [
+    "EB病毒衣壳抗原IgG抗体",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体定量（发光）",
+    "yellow"
+   ],
+   [
+    "体重指数",
+    "yellow"
+   ],
+   [
+    "肌酸激酶",
+    "yellow"
+   ],
+   [
+    "脂肪滴",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前列腺疾病",
+    "yellow"
+   ],
+   [
+    "双侧外周动脉僵硬度增高",
+    "yellow"
+   ],
+   [
+    "双侧锁骨下动脉狭窄",
+    "yellow"
+   ],
+   [
+    "双侧颈动脉硬化并左侧斑块形成",
+    "yellow"
+   ],
+   [
+    "左侧下肢动脉中层钙化",
+    "yellow"
+   ],
+   [
+    "心脏瓣膜轻度反流",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "远端动脉血液灌注欠充足",
+    "yellow"
+   ]
+  ]
+ }
+}

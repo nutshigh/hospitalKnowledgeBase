@@ -32,6 +32,7 @@ def strip_think_tags(text) -> str:
     """剥离完整 think 块与孤立 think 标签，并清理多余前导空白。
 
     用于非流式完整文本（如最终回复、结构化输出前的纯文本字段）。
+    2026-08-29: 非 str 输入(None/dict)原样返回, 防 MedGo 异常返回炸链路。
     """
     if text is None:
         return None

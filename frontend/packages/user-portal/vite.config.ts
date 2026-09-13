@@ -5,11 +5,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3001,
-    // /api 同源代理到本地后端(:8000)。远程浏览器访问时由 vite 转发,
-    // 生产构建由 nginx 同源反代(与 doctor-portal 的旧配置一致)。
+    // 2026-08-31: API 同源代理 —— 远程浏览器 localhost 访问时, /api 由 vite 转发
+    // 到后端 8005, 无需用户额外转发 8005 端口(生产构建由 nginx 同源反代)
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: "http://127.0.0.1:8005",
         changeOrigin: true,
       },
     },
