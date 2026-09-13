@@ -43,11 +43,14 @@ function toGroups(indicators: any[], moduleOrder?: string[]) {
       flat.push(ind);
     }
   }
-  return {
-    groups: moduleOrder.filter((g: string) => groups.has(g))
-      .map((name) => ({ name, items: sortByColor(groups.get(name)!) })),
-    flat: sortByColor(flat),
-  };
+  const namedGroups = moduleOrder
+    .filter((g: string) => groups.has(g))
+    .map((name) => ({ name, items: sortByColor(groups.get(name)!) }));
+  if (namedGroups.length > 0 && flat.length > 0) {
+    namedGroups.push({ name: '其它指标', items: sortByColor(flat) });
+    return { groups: namedGroups, flat: [] };
+  }
+  return { groups: namedGroups, flat: sortByColor(flat) };
 }
 
 function countLevels(items: any[]): { red: number; yellow: number; green: number } {
@@ -258,7 +261,7 @@ export default function ReportDetailPage() {
         </div>
         {conclusionExpanded && (
           <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: 'var(--color-text)' }}>
-            {conclusionText || '未提取到结论'}
+            {conclusionText || '未提取到结论，请尝试重新上传'}
           </div>
         )}
       </div>
