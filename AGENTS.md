@@ -405,26 +405,32 @@ curl -s http://localhost:8004/v1/chat/completions -H 'Content-Type: application/
 
 ---
 
-## OCR 服务 8006 与 workers 环境(2026-09-03 起)
+## OCR 服务端口与本 checkout 口径(2026-09-13 核实)
 
-**事实**:
-- `backend/.venv`(主 venv)不含 paddle;OCR 用 8006 实例 —— 由 **wjyy2 的 uv python +
-  PYTHONPATH 指向共享 site-packages** 启动(paddle 包本体在 root 的
-  `/data/project/hospitalKnowledgeBase/backend/paddle_venv/lib/python3.10/site-packages`,
-  wjyy2 无权限直接执行该 venv 的 python,只能借 site-packages)。
-- 启动命令(8006 若丢失):
+**事实(以本 checkout `/data/project/hospitalKnowledgeBase` 为准)**:
+- OCR 端点由 `settings.OCR_BASE_URL` 决定,唯一客户端是 `app/core/vlm_client.py::VLMClient`
+  (模块单例 `vlm_client = VLMClient()`),**全仓库无任何代码硬编码 8006**。
+- 本 checkout `backend/.env:54` `OCR_BASE_URL=http://localhost:8001`,`start.sh` 不覆盖它,
+  运行中的 backend/workers 环境里也没有该变量 → **实际走 8001**,由 `start.sh` 用
+  `backend/paddle_venv` 启动(GPU3,`PADDLEOCR_VL_MODEL`/`PP_DOCLAYOUT_MODEL` 见 start.sh)。
+- 启动命令(8001 若丢失):
   ```bash
-  cd backend
-  SP=/data/project/hospitalKnowledgeBase/backend/paddle_venv/lib/python3.10/site-packages
-  PYTHONPATH=$SP setsid nohup \
-    /home/wjyy2/.local/share/uv/python/cpython-3.10.20-linux-x86_64-gnu/bin/python3.10 \
-    -m uvicorn paddle_ocr_service.main:app --host 0.0.0.0 --port 8006 \
-    >> /home/wjyy2/logs/paddle-8006.log 2>&1 < /dev/null &
+  cd /data/project/hospitalKnowledgeBase/backend
+  CUDA_VISIBLE_DEVICES=3 PADDLEOCR_VL_MODEL=/data/models/PaddleOCR-VL-1.5 \
+  PP_DOCLAYOUT_MODEL=/data/models/PP-DocLayoutV2 \
+  /data/project/hospitalKnowledgeBase/backend/paddle_venv/bin/python \
+  -m uvicorn paddle_ocr_service.main:app --host 0.0.0.0 --port 8001
   ```
-- `scripts/start_workers.sh` 已 `export OCR_BASE_URL=http://localhost:8006`(workers 的
-  图片型报告走 8006;系统级 8001(paddle_venv)对扫描页会 500,不要切回)。
-- 重启 workers 只 kill `/home/wjyy2` 侧(`grep -v /data/project`),root 侧(/data/project
-  下多组 worker + 8001)不能动。
+- **已知故障**: 8001 跑一段时间后 `/ocr` 会 500,报
+  `RuntimeError: int(Tensor) is not supported in static graph mode`(paddle 静态图)。
+  **重启 8001 即恢复**(2026-09-13 实测:重启后真实报告页 `/ocr` 返回 HTTP 200 + 正常
+  markdown)。批量重跑扫描件前先 curl 测一页 OCR。
+- `POST /ocr`,body `{"image_base64": ...}`,响应取 `markdown`(multipart 会 500)。
+
+**8006 的历史说明(勿混淆)**: 8006 是 `/home/wjyy2` 旧 checkout 手工起的 PaddleOCR 实例,
+只有那边 workers 的环境里带了 `OCR_BASE_URL=http://localhost:8006` 才走它;本目录代码
+从不引用 8006, 该实例已随 wjyy2 服务停用。本文件历史小节里若仍出现"走 8006 / 重启 8006",
+均为该历史环境的记录,在本 checkout 应读作"OCR 服务(当前 8001)"。
 
 ---
 
@@ -445,7 +451,7 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 指标层断言族覆盖需求①(挖除结论段→行式/列式提取, 防切段规则漂移指标)。
 
 **混合页 OCR(2026-09-04 立项)**: `_extract_pdf_text(hybrid=True)` 对"文本<100字
-且含≥2图"的页自动调 PaddleOCR(8006)补文本 —— 福建第二(文本化验页+图片结论页)
+且含≥2图"的页自动调 PaddleOCR(端点 = `OCR_BASE_URL`,本 checkout 为 8001)补文本 —— 福建第二(文本化验页+图片结论页)
 从"0 字结论"恢复出主体条目(1-9 号异常, 2/3/5 号 OCR 偶漏)。`process_task` 文本
 分支已 hybrid=True。OCR 页失败不影响整份。
 
@@ -558,8 +564,8 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
   后需重跑**全量已适配报告**(不止历史批次)验收。
 - **编号标题跨行未闭合 [**: "6、[甲状腺结节,\n考虑C-TIRADS3 类]" 拼接取段
   (马鞍山 LLM 波动时不再丢标题)。
-- **8006 OCR 500 处理**: 重启 8006(命令见"OCR 服务 8006"节)后 OCR 恢复, 图片型
-  报告(福建第二)结论页可正常提取; 批量重跑前先 curl 测一页 OCR。
+- **OCR 500 处理(本 checkout 走 8001)**: 重启 OCR 服务(命令见"OCR 服务端口与本 checkout
+  口径"节)后 OCR 恢复, 图片型报告(福建第二)结论页可正常提取; 批量重跑前先 curl 测一页 OCR。
 - **批量脚本 quirk**: `scripts/rerun_h003h004.py` 轮询需每轮 `c.commit()`(pymysql
   REPEATABLE READ 下同连接不刷新快照会永远读旧状态)。
 - **解读侧 tool-call 400 已根治(2026-09-12)**: H003-22(滨州)MedGo 生成截断
@@ -623,7 +629,7 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 2. **快速探测(秒级, 不调 LLM)**:
    `offline_indicator_assemble.py <pdf>`(指标侧组装)
    `offline_conclusion_assemble.py <pdf> --report-id N --db H00X`(结论切段/提取产物)。
-   需要看页面结构时 `LAYOUT_DEBUG=1`; 图片型结论页 `--hybrid` + `OCR_BASE_URL=http://localhost:8006`。
+   需要看页面结构时 `LAYOUT_DEBUG=1`; 图片型结论页 `--hybrid` + `OCR_BASE_URL=http://localhost:8001`(本 checkout 口径)。
 3. **LLM 快照采一次(只在需要观察 LLM 输出形态时)**:
    ```bash
    ABNORMALITY_LLM_SNAPSHOT_SAVE=1 ABNORMALITY_LLM_SNAPSHOT_DIR=backend/artifacts/llm_snapshots \
@@ -692,15 +698,15 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
   ("体重指数"/"体质指数"均放行 —— 27 齐鲁超重与体重指数 26.37 并存、马鞍山肥胖与
   体质指数并存, 用户 2026-09-09 拍板); 其余条目做规范化互比(剥括号单位缩写/尾缀数字+
   号, 互含需被包含方 ≥3 字, 防"碳13尿素呼气试验阳性"被指标"尿素(BUN)"2 字核心误拦)。
-- 福建第二(OCR 图片结论页): 结论页 2/3/5 号偶漏属 OCR 不稳定, 8006 重 OCR 可补全
-  (响应字段是 `markdown` 不是 `text`); 补全后重建 `conclusion_text` 再提取。
+- 福建第二(OCR 图片结论页): 结论页 2/3/5 号偶漏属 OCR 不稳定, 重 OCR(本 checkout 8001)
+  可补全(响应字段是 `markdown` 不是 `text`); 补全后重建 `conclusion_text` 再提取。
 
 ### 环境/操作备忘(2026-09-05/06 新增)
 - 23:56 批 13 份 PDF 在 `backend/storage/H001/batch/extracted/b4825d.../`; 广西/北京样本在
   仓库根 `体检报告样例/`(指标护栏直接引用)。两组 H003/H004 task/report id 20-27。
 - 该批报告结论区/指标区数据多轮手工重跑落库; 再改提取规则后如需同步线上, 参照
   "删表格式行→pipeline 落库→删 interpretation 重投→验证"流程(worker 会用 backfill 自动补结论)。
-- 8006 PaddleOCR HTTP 接口: POST /ocr, body `{"image_base64": ...}`(multipart 会 500),
+- PaddleOCR(本 checkout 8001)HTTP 接口: POST /ocr, body `{"image_base64": ...}`(multipart 会 500),
   响应取 `markdown`。
 
 ### Skill 调用约定(写入即生效)
@@ -793,7 +799,7 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 - 验证: 福建第二(H003/24)结论区 = 13 条(含"双髋关节骨质密度减少", 无"骨量减少/
   骨显微结构改变/生物力学性能下降"碎片); 第 9 点含"建议复查中段尿…"完整。
   护栏 103 passed。结论侧离线仿真: `scripts/offline_conclusion_assemble.py <pdf>
-  --report-id N --sync --db XXX [--hybrid]`(OCR 结论页报告需 --hybrid + OCR_BASE_URL=8006)。
+  --report-id N --sync --db XXX [--hybrid]`(OCR 结论页报告需 --hybrid + `OCR_BASE_URL` = 本 checkout 的 8001)。
 
 ---
 
@@ -880,7 +886,7 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 - 段级形态门落地(替代报告级): 每段产出行 result 非法 >20% 弃段; 继承段(region 无表头)
   行无 ref/unit/flag 交行式(叙述区/测量区); 弃检/未检/放弃检查 前缀入名称黑名单。
 - 全量护栏 259 passed(接线后布局通道全绿)。
-- 端到端(8 家金标 process+解读, OCR 8006): 黄红名单干净且与金标一致 ——
+- 端到端(8 家金标 process+解读, OCR): 黄红名单干净且与金标一致 ——
   厦门华西(林建生)2(甘油三酯/高密度脂蛋白; 酸碱度/隐血误黄消失)、
   厦门弘爱(戴伟平)12(11 真异常+乙肝两对半结论)、山东省立(王国瑞)13(尿胆原/体质指数等;
   核心抗体无标志黄消除)、日照人民(邵琳)6(免疫三项/尿隐血+1 等)、茂名人民(陈灿明)6(全真超ref)、
@@ -922,9 +928,9 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 ### H004 前 6 份端到端补齐与垃圾清理(2026-09-10)
 - 补齐 H004 USER6 漏跑的 6 份(石坤/张亚/谢国宾/欧阳庆/庞海锋/步新宇)端到端;
   通用工具 `scripts/e2e_rerun_reports.py`(--db/--reports/--user/--mode)已入库并实战。
-- 事故与修复: 钦州(欧阳庆)PDF 为纯扫描件(每页 1 图), 重跑时 8006 OCR 服务异常
-  (int(Tensor) 报错)导致指标被清成 0; 重启 8006 后重跑恢复 119 行(与基线一致)。
-  教训: 扫描件重跑前先确认 8006 健康; process 需在 backend cwd 运行(否则 .env 未读,
+- 事故与修复: 钦州(欧阳庆)PDF 为纯扫描件(每页 1 图), 重跑时 OCR 服务异常
+  (int(Tensor) 报错)导致指标被清成 0; 重启 OCR 后重跑恢复 119 行(与基线一致)。
+  教训: 扫描件重跑前先确认 OCR 服务(本 checkout 8001)健康; process 需在 backend cwd 运行(否则 .env 未读,
   RabbitMQ 403 guest 认证)。
 - 口径修正: 指标黄按 source='indicator' 对比;结论黄(source='conclusion')不计入
   (基线快照只含指标黄)。差异均为"旧假黄清除/旧漏黄恢复", 与护栏口径一致

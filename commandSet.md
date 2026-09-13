@@ -9,4 +9,4 @@ curl -X POST http://localhost:8000/api/v1/tenants -H "Content-Type: application/
 pkill -f "uvicorn app.main:app" && bash start.sh
 
 重启worker：
-pkill -f "app.modules.interpretation.worker" && pkill -f "app.modules.report.worker" && pkill -f "app.modules.report.extract_worker" && bash start.sh
+pkill -f "app.modules.*worker"; sleep 2; bash start.sh
