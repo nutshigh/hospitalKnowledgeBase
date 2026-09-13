@@ -248,6 +248,29 @@ def test_fenced_json_parsed(db):
     assert _json.loads(stored)["payload"]["summary"]["conclusion"] == "血糖回落"
 
 
+def test_synonym_trend_summary_key_parsed_and_cached(db):
+    """MedGo 偶发把 trend_summary 写成 tendency_summary:应归一后解析并写缓存。"""
+    from app.modules.user_profile.service import get_change_overview
+    from app.modules.interpretation.models import ReportInterpretation
+    import json as _json
+
+    for rid, val in [(1, "7.2"), (2, "6.4")]:
+        _report(db, rid, rdate=date(2025, 5, rid))
+        _indicator(db, rid, rid, "血糖", "空腹血糖", val)
+        _completed(db, rid)
+    _judgment(db, 1, 1, 1, "red")
+    db.commit()
+
+    synonym = _JSON_OK.replace("trend_summary", "tendency_summary")
+    with patch(_model_patch) as m:
+        m.return_value = _fake_model(synonym)
+        ok = get_change_overview(db, "123456", "张三")
+    assert ok["summary"] is not None
+    assert ok["summary"]["trend_summary"] == "红区略降"
+    stored = db.query(ReportInterpretation).filter_by(report_id=2).first().comparison_summary
+    assert _json.loads(stored)["payload"]["summary"]["trend_summary"] == "红区略降"
+
+
 def test_invalid_json_returns_none_and_no_cache(db):
     """纯非法 JSON(无缓存)→ summary=None、仍有关键指标、不写缓存。"""
     from app.modules.user_profile.service import get_change_overview

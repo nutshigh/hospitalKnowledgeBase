@@ -396,6 +396,15 @@ def _rank_key_indicators(db: Session, window: list) -> list[dict]:
     return ranked
 
 
+# MedGo 偶发把规范键写成近义名(如 tendency_summary),统一归一到四键校验口径。
+_CHANGE_KEY_ALIASES = {
+    "trend_summary": ("tendency_summary", "trend", "overall_summary", "overall_trend", "summary"),
+    "conclusion": ("conclusions", "result"),
+    "suggestions": ("suggestion", "advice", "recommendations"),
+    "precautions": ("precaution", "caution", "warnings"),
+}
+
+
 def _parse_change_json(content: str) -> Optional[dict]:
     """宽容解析 MedGo 输出的 JSON 四键对象;失败返回 None。"""
     if not content:
@@ -417,6 +426,12 @@ def _parse_change_json(content: str) -> Optional[dict]:
     if not isinstance(obj, dict):
         return None
     keys = ("trend_summary", "conclusion", "suggestions", "precautions")
+    for canon, aliases in _CHANGE_KEY_ALIASES.items():
+        if not isinstance(obj.get(canon), str):
+            for alt in aliases:
+                if isinstance(obj.get(alt), str):
+                    obj[canon] = obj[alt]
+                    break
     if not all(isinstance(obj.get(k), str) for k in keys):
         return None
     return {k: obj.get(k, "").strip() for k in keys}
