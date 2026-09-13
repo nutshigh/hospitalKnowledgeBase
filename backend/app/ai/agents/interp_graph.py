@@ -200,11 +200,13 @@ def _guard_sanitize_tool_calls(tool_calls):
             if not isinstance(args, dict):
                 raise ValueError("args not dict")
             fixed = {}
+            changed = False
             for k, v in args.items():
                 if isinstance(v, str) and len(v) > _GUARD_MAX_QUERY:
                     v = v[:_GUARD_MAX_QUERY]
+                    changed = True
                 fixed[k] = v
-            keep.append({**tc, "args": fixed})
+            keep.append({**tc, "args": fixed} if changed else tc)
         except Exception:
             dropped += 1
     if len(keep) > _GUARD_MAX_CALLS:
@@ -213,19 +215,39 @@ def _guard_sanitize_tool_calls(tool_calls):
     return keep, dropped
 
 
+def _guard_raw_tool_calls_bad(raw_tcs) -> bool:
+    """additional_kwargs["tool_calls"] 原始串中是否存在非法 arguments JSON。"""
+    for tc in raw_tcs or []:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function")
+        args = fn.get("arguments") if isinstance(fn, dict) else None
+        if isinstance(args, str) and args.strip():
+            try:
+                json.loads(args)
+            except Exception:
+                return True
+    return False
+
+
 def _guard_sanitize_message(m):
-    """返回 (消息, 丢弃数); AIMessage 的坏 tool_calls 移除、超长参数截断。"""
-    tcs = getattr(m, "tool_calls", None)
-    if not tcs:
-        return m, 0
-    keep, dropped = _guard_sanitize_tool_calls(tcs)
-    unchanged = (not dropped) and all(
-        isinstance(tc.get("args"), dict) for tc in tcs)
-    if unchanged:
-        return m, 0
-    upd = {"tool_calls": keep}
+    """返回 (消息, 丢弃数); 清洗三处坏 tool-call 串(2026-09-12 修复不完整问题):
+    ①tool_calls: args 非法/超长(截断或丢弃);
+    ②invalid_tool_calls: 截断 JSON 被 langchain 归档于此, **tool_calls 会为空** ——
+      旧守卫 `if not tcs: return` 直接跳过, 坏串随请求历史回传 vLLM(function-wrap
+      校验 400, H003-22 实例), 现一并清空;
+    ③additional_kwargs["tool_calls"]: 请求重建的原始坏串, 检测到非法 arguments 即清除。
+    """
+    tcs = list(getattr(m, "tool_calls", None) or [])
+    inv = list(getattr(m, "invalid_tool_calls", None) or [])
     akw = dict(getattr(m, "additional_kwargs", None) or {})
-    if "tool_calls" in akw:  # 原始坏串(请求重建来源)一并清除
+    raw_bad = _guard_raw_tool_calls_bad(akw.get("tool_calls"))
+    keep, dropped = _guard_sanitize_tool_calls(tcs)
+    dropped += len(inv)
+    if not dropped and not raw_bad and keep == tcs and not inv:
+        return m, 0
+    upd = {"tool_calls": keep, "invalid_tool_calls": []}
+    if raw_bad:
         akw.pop("tool_calls", None)
         upd["additional_kwargs"] = akw
     try:
@@ -283,7 +305,9 @@ class ToolCallGuardMiddleware(AgentMiddleware):
 def build_interp_agent():
     # 2026-08-27: 解读改 no_think —— MedGo 思考模式下长报告单条 15-40 分钟,
     # 解读为结构化 JSON 提取/生成, 思考收益低; no_think 约 3-5 分钟/条。
-    model = get_chat_model(streaming=False, no_think=True)
+    # 2026-09-12: 单请求超时 600s —— 模型退化循环(重复"研究分析…"直到截断)曾挂
+    # 12 分钟才由服务端 400 报错, 超时中断交由重试(正常单步 far below 600s)。
+    model = get_chat_model(streaming=False, no_think=True, request_timeout=600)
     model.max_tokens = 16384
     return create_agent(
         model=model,
@@ -296,7 +320,7 @@ def build_interp_agent():
 
 
 def build_report_model():
-    model = get_chat_model(streaming=False, no_think=True)
+    model = get_chat_model(streaming=False, no_think=True, request_timeout=600)
     model.max_tokens = 16384
     return model
 

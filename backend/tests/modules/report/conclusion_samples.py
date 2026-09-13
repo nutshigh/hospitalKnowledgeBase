@@ -53,7 +53,9 @@ SAMPLES = [
                        "1.甲状腺右叶囊实混合性回声团", "健康建议"],
          forbidden=["请您仔细阅读体检报告", "向专家咨询", "初审", "体检报告送达温馨提示", "免费向专家"],
          expected_titles=["甲状腺右叶囊实混合性回声团", "双肺下叶微小结节", "前列腺钙化", "肥胖"],
-         expected_summary_titles=["脂肪肝", "左肾结石", "前列腺钙化", "尿酸增高"]),
+         # 2026-09-12 用户口径: 贵港结论段只取"异常指标"+"健康建议", "检查汇总"
+         # (【彩超…】小结区)不提取 → summary 断言清空
+         expected_summary_titles=[]),
     dict(key="guangxirenmin_zhupinlong", rel="广西体检报告测试/广西壮族自治区人民医院.pdf",
          indicator_expected=['尿酸（UA）', '总胆固醇（TC）', '甘油三酯（TG）', '血红蛋白（HGB）', '乙型肝炎核心抗体'],
          must_contain=["原因有：生理性因素、前列腺增生", "8:前列腺稍大伴局部钙化", "13:慢性咽炎",
@@ -87,7 +89,10 @@ SAMPLES = [
          indicator_expected=['游离前列腺特异性抗原', '血清同型半胱氨酸', '肌酸激酶'],
          must_contain=["血肌酸激酶偏高", "甲状腺双叶多发囊性结节", "外耳道耵聍"],
          forbidden=["体检编号", "姓名：", "第 页"],
-         expected_titles=["血肌酸激酶偏高", "外耳道耵聍"]),
+         expected_titles=["血肌酸激酶偏高", "外耳道耵聍"],
+         # 2026-09-10: "2、胸部CT 平扫：右肺尖…" 半截方法名曾被当标题兜底填入
+         # (真名靠后续文本/LLM), 用户报告后加禁产断言。
+         forbidden_titles=["胸部CT", "甲状腺B", "腹部B"]),
     # 纯图片 PDF(钦州中/欧阳庆): 无文本层, 需 OCR 服务, 默认跳过
     dict(key="qinzhou_tcm_ouyangqing", rel="广西体检报告测试/广西钦州市中医医院.pdf", ocr=True,
          must_contain=["左肾内强回声团", "窦性心律不齐"],

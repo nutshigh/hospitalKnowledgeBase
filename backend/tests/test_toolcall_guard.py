@@ -1,35 +1,58 @@
-"""工具调用守卫单测(2026-09-10): 截断 JSON 丢弃、超长 query 截断、超量限流、合法原样。"""
-import sys
-import os
+"""tool-call 守卫单测(2026-09-12): 截断 JSON 被 langchain 归档 invalid_tool_calls
+时(tool_calls 为空), 旧守卫直接跳过导致坏串回传 vLLM 400(H003-22 实例)。
+"""
+from langchain_core.messages import AIMessage
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.ai.agents.interp_graph import _guard_sanitize_message, _GUARD_MAX_QUERY
 
-from app.ai.agents.interp_graph import (
-    _guard_sanitize_tool_calls, _GUARD_MAX_QUERY, _GUARD_MAX_CALLS,
-)
-
-
-def test_broken_json_dropped():
-    bad = {"name": "search_knowledge", "args": "{'query': '截断", "id": "b", "type": "tool_call"}
-    keep, dropped = _guard_sanitize_tool_calls([bad])
-    assert keep == [] and dropped == 1
+_BAD_ARGS = '[{"name": "search_knowledge", "args": {"query": "研究分析研究分析'
 
 
-def test_long_query_truncated_kept():
-    long_q = {"name": "search_knowledge", "args": {"query": "x" * 2000}, "id": "c", "type": "tool_call"}
-    keep, dropped = _guard_sanitize_tool_calls([long_q])
+def _msg(tool_calls=None, invalid_tool_calls=None, raw_tool_calls=None):
+    akw = {}
+    if raw_tool_calls is not None:
+        akw["tool_calls"] = raw_tool_calls
+    return AIMessage(content="", tool_calls=tool_calls or [],
+                     invalid_tool_calls=invalid_tool_calls or [],
+                     additional_kwargs=akw)
+
+
+def test_invalid_tool_calls_with_empty_tool_calls_are_cleared():
+    """核心回归: tool_calls 为空 + invalid_tool_calls 非空 → 必须清洗。"""
+    m = _msg(
+        tool_calls=[],
+        invalid_tool_calls=[{"name": "search_knowledge", "args": _BAD_ARGS,
+                             "id": "call_1", "error": None, "type": "invalid_tool_call"}],
+        raw_tool_calls=[{"id": "call_1", "type": "function",
+                         "function": {"name": "search_knowledge", "arguments": _BAD_ARGS}}],
+    )
+    out, dropped = _guard_sanitize_message(m)
+    assert dropped == 1
+    assert out.invalid_tool_calls == []
+    assert "tool_calls" not in (out.additional_kwargs or {})
+
+
+def test_raw_bad_arguments_cleared_even_without_invalid_list():
+    m = _msg(raw_tool_calls=[{"id": "c1", "type": "function",
+                              "function": {"name": "search_knowledge", "arguments": _BAD_ARGS}}])
+    out, dropped = _guard_sanitize_message(m)
+    assert "tool_calls" not in (out.additional_kwargs or {})
+
+
+def test_valid_message_untouched():
+    good = {"name": "search_knowledge", "args": {"query": "糖尿病"},
+            "id": "c1", "type": "tool_call"}
+    raw = [{"id": "c1", "type": "function",
+            "function": {"name": "search_knowledge", "arguments": '{"query": "糖尿病"}'}}]
+    m = _msg(tool_calls=[good], raw_tool_calls=raw)
+    out, dropped = _guard_sanitize_message(m)
+    assert dropped == 0 and out is m
+
+
+def test_overlong_query_truncated():
+    long_q = "高" * (_GUARD_MAX_QUERY + 200)
+    m = _msg(tool_calls=[{"name": "search_knowledge", "args": {"query": long_q},
+                          "id": "c1", "type": "tool_call"}])
+    out, dropped = _guard_sanitize_message(m)
     assert dropped == 0
-    assert len(keep[0]["args"]["query"]) == _GUARD_MAX_QUERY
-
-
-def test_too_many_calls_capped():
-    many = [{"name": "search_knowledge", "args": {"query": str(i)}, "id": str(i), "type": "tool_call"}
-            for i in range(_GUARD_MAX_CALLS + 8)]
-    keep, dropped = _guard_sanitize_tool_calls(many)
-    assert len(keep) == _GUARD_MAX_CALLS and dropped == 8
-
-
-def test_valid_call_unchanged():
-    ok = {"name": "search_knowledge", "args": {"query": "糖尿病"}, "id": "d", "type": "tool_call"}
-    keep, dropped = _guard_sanitize_tool_calls([ok])
-    assert keep == [ok] and dropped == 0
+    assert len(out.tool_calls[0]["args"]["query"]) == _GUARD_MAX_QUERY

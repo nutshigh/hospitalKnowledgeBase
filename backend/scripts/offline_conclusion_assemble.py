@@ -36,7 +36,8 @@ def run(pdf_path: str, hybrid: bool = False):
     conclusion = asyncio.run(_extract_conclusion_async(text, profile))
     if not conclusion:
         return None, None
-    items = asyncio.run(_extract_abnormalities_async(conclusion))
+    items = asyncio.run(_extract_abnormalities_async(
+        conclusion, weak_candidates=bool(profile.get("multi_findings"))))
     return conclusion, items
 
 

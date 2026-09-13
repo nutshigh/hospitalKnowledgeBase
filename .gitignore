@@ -31,3 +31,33 @@ storage/
 # OS
 .DS_Store
 Thumbs.db
+
+# 报告样例/过程/临时文件(2026-09-10 整理: 不入库, 磁盘保留)
+体检报告样例/
+backend/tests_tmp/
+mq_proxy.py
+0818三色规则.md
+体检项目指标标准表.md
+指标-疾病映射表.md
+docs/广西体检报告测试-问题与修复方案-2026-08-24.md
+
+# 一次性/新报告适配/验证脚本(非离线仿真; 磁盘保留, 不入库)
+backend/scripts/clean_*.py
+backend/scripts/create_test_user.py
+backend/scripts/demo/
+backend/scripts/dump_*.py
+backend/scripts/fix_*.py
+backend/scripts/import_*.py
+backend/scripts/rebuild_*.py
+backend/scripts/reflow_*.py
+backend/scripts/reindex_*.py
+backend/scripts/replay_*.py
+backend/scripts/rerun_*.py
+
+# 交接/命令/错误笔记(2026-09-10: 不入库, 磁盘保留)
+batchToDo.md
+报告样例/
+.superpowers/
+
+# 诊断产物(LLM 快照/结论 diff, 不入库)
+backend/artifacts/

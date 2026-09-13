@@ -339,6 +339,8 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
       迭代 8-9 轮纯属浪费)。正确节奏: ①真调**一次**取真实 LLM 响应**快照存文件**;
       ②后续调优全部用"快照重放"(LLM 输出固定, 后处理确定性, 秒级一轮);
       ③收敛后最后真调一次确认 + 端到端一次。只有需要观察 LLM 新输出形态时才再真调。
+      工具化(2026-09-10): `ABNORMALITY_LLM_SNAPSHOT_DIR=<dir>` 自动读快照重放,
+      `ABNORMALITY_LLM_SNAPSHOT_SAVE=1` 采快照(用法见"新医院报告适配 SOP")。
       确定性层改动(词表/锚点/断点)不涉 LLM, 广西+北京式"回归直验 + 最后重投一次"仍成立。
    手动改 DB 仅限一次性清理/预览, 不作验收(两次"结论全绿"教训)。
    **改 service 组装逻辑必须同步 offline 脚本**(防漂移;
@@ -355,6 +357,113 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
    已知唯一失败: `ctni`(广西人民"血清肌钙蛋白I 测定"名称内部空格, 能力未实现, 勿误当回归)。
    (注意: 本文件其它小节里历史遗留的"103 passed/护栏必跑/护栏内"字样不代表当前自动节奏,
    以本段验证纪律为准。)
+
+### H003/H004 全量重跑与规则收敛(2026-09-12)
+
+新代码批量重跑 13 份(H003 20/22-26, H004 21-27, 池州 26 在前), 端到端对照旧产物,
+暴露并修复一批 LLM 波动/形态边界(单测 81, 全量回归 279 passed):
+- **泛词无条件删**(`_dedup_generic_findings`): 纯泛词(结节/钙化灶/钙化/感染等)不是
+  独立异常, 不再要求"同批有更长条目"(日照"钙化"漏网)。"肺结节"泛称限**同部位**
+  (含"肺")才删, 防误删报告方真标题(马鞍山 `[CT 提示：肺结节]`)。
+- **纯部位词黑名单**(`_ANATOMY_ONLY_RE`): 二尖瓣/三尖瓣/主动脉瓣等单独成条=LLM 碎名
+  (弘爱"二尖瓣" vs 完整"二尖瓣、三尖瓣轻度反流")。
+- **fill 拒绝扩展**: 句子式("不一定有临床意义…"走 fill 不受 filter 滤卡管)+
+  "方法+提示+数字"残片("口腔科提示18"/"彩超检查提示1")。
+- **方向词候选拒绝引导句**: 行首版块符(▍等)与"以下/按照/列出/诊断标准…"引导词
+  (滨州"发现和其他异常"/"指标解读以下按照…"曾被切出为候选)。
+- **方向词候选拒绝科普/建议连续句(2026-09-12 柳州回归)**: 柳州(石坤, H004-1)
+  重跑被切出"检查化验结果略有异常/肝功能异常/①血脂异常/喝茶也可使血脂水平下降"
+  —— 枚举行判据收紧: 含句号/分号的行不产、行首圈号①-⑩跳过、stem 拒绝科普连接词
+  (可使|也可|是一种|者到|但是|因此|不主张|通过|如果|若)。**教训**: 方向词候选在
+  fill 层(filter 之后, 不经 junk-context), 候选规则必须自带语义门槛; 新规则上线
+  后需重跑**全量已适配报告**(不止历史批次)验收。
+- **编号标题跨行未闭合 [**: "6、[甲状腺结节,\n考虑C-TIRADS3 类]" 拼接取段
+  (马鞍山 LLM 波动时不再丢标题)。
+- **8006 OCR 500 处理**: 重启 8006(命令见"OCR 服务 8006"节)后 OCR 恢复, 图片型
+  报告(福建第二)结论页可正常提取; 批量重跑前先 curl 测一页 OCR。
+- **批量脚本 quirk**: `scripts/rerun_h003h004.py` 轮询需每轮 `c.commit()`(pymysql
+  REPEATABLE READ 下同连接不刷新快照会永远读旧状态)。
+- **解读侧 tool-call 400 已根治(2026-09-12)**: H003-22(滨州)MedGo 生成截断
+  tool_call → langchain 归档 `invalid_tool_calls`(此时 `tool_calls` 为空)→ 旧守卫
+  `if not tcs: return` 漏过 → 坏串随历史回传 vLLM(function-wrap 校验 400, 单次挂
+  12 分钟)。修复: `_guard_sanitize_message` 同时清 `invalid_tool_calls` 与
+  `additional_kwargs["tool_calls"]` 原始坏串(合法消息原样透过); 解读/报告模型加
+  `request_timeout=600`。单测 `tests/test_toolcall_guard.py`(4 条)。
+
+### 弱切分按院声明(2026-09-12 用户拍板)
+
+**背景**: "一行多发现"弱切分(`_parse_direction_phrases` 多方向行 /
+`_parse_numbered_multi_findings` 编号行多发现)在未见文本上会误切科普/建议
+(碎片多提), 而完全取消又会系统性漏提行内第二+发现(用户多轮追漏项均为此类)。
+**方案(用户拍板)**: **默认关闭**, 仅对已验证存在该排版且需规则补漏的医院在
+`report_profiles.py` 档案里声明 `multi_findings=True`(现:池州/福建省第二/广西人民)。
+- 调用链: `_extract_abnormalities_async(conclusion, weak_candidates=...)` →
+  `_postprocess_extracted_items(..., weak_candidates=)`; worker backfill 用
+  `_weak_candidates_enabled(db, report_id)`(读原始 PDF 文本匹配档案; 纯扫描件
+  提取为空 → 默认关, 靠【】标题/LLM); offline 脚本同构(profile 决定)。
+- 新医院默认净度优先(无弱切分); 若验收发现"行内多发现漏提", 再评估是否声明。
+- **护栏边界(用户已知晓)**: 护栏锁已验收产物, 发现不了新文本上的规则误切;
+  分隔符/短建议语义冲突靠"声明制 + 保守默认 + SOP 人工验收"治理。
+
+### H003 报告级三件套基线护栏(2026-09-12 建成, 09-12 口径修正)
+
+- 文件: `tests/modules/report/test_h003_baseline_guard.py`(13 份全量: 1-7,20,22-26)
+- **基线 = 用户验收过的 DB 结果快照**(`scripts/gen_h003_baseline.py` 从 DB 导出:
+  指标黄红名单 + conclusion_text 哈希 + 总检异常名单); 测试**直接读 DB 比对**, 秒级。
+- **口径修正原因**: 首版基线用"离线链产物", 不含 store 的跨线去重(cross-dup)且
+  混入迭代代码, 与 DB 验收态差 39 处(绝大多数是 cross-dup 设计内差异)。现以 DB
+  为唯一基准: 重跑后产物与验收态有任何不同即红 → 人工审 diff。
+- 更新流程: 重跑 gen(从 DB 导出) → `git diff baselines/*.json` 人工审 → 提交。
+- 迭代顺带修真问题: ①"腹型肥胖"黑名单误杀(防城港一 DB 真条目)已移除, 贵港多提
+  改由 profile 切段解决; ②"体重指数>24"数值碎片名加滤; ③池州"粘液丝"按口径回绿
+  (弱阳性≠异常, 仅提示列 ± 判黄)后重跑入基线。
+
+### H004 报告级三件套基线护栏(2026-09-12 建成, 09-12 口径修正)
+
+同 H003(见上), H004 全量 13 份(1-6, 21-27)同样以 **DB 验收快照**为基线:
+- 文件: `tests/modules/report/test_h004_baseline_guard.py`; 基线: `h004_baseline.json`
+- gen: `scripts/gen_h004_baseline.py`(从 DB 导出, 秒级); 更新: 重跑 gen → 人工审 diff
+- 至此 H003(13)+H004(13)= 26 份已适配报告全部锁入 DB 口径三件套基线。
+
+### 修复 match_profile 浅拷贝污染(2026-09-12, 重大)
+
+**现象**: 护栏测试暴露 —— 同进程内先跑 `_extract(日照 24)` 后, 柳州切段 1466→2503。
+**根因**: `report_profiles.match_profile` 用 `dict(DEFAULT)` **浅拷贝**, 命中档案时
+`merged.setdefault(f, []).extend(list(prof[f]))` 直接 extend 了模块级 DEFAULT 的
+**共享 list** → 该档案的 extra_break/skip/anchor **永久写进 DEFAULT**, 之后所有报告
+(长驻 worker 内)继承 → 跨报告切段污染(顺序依赖, 难复现)。
+**修复**: `merged = {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULT.items()}`
+**启示**: 此前多轮"重跑后结果漂移/怪结果"部分可能源于此; 凡模块级可变默认值,
+合并前必须深拷列表。
+
+### 新医院报告适配 SOP(2026-09-10 确立, 目标: 一份一管线, 不返工)
+
+1. **样本入库**: PDF 放 `体检报告样例/` 对应目录; `conclusion_samples.py` 登记
+   (精修样本强断言 must_contain/forbidden/expected_titles; 冒烟样本 `smoke: True`
+   + min_len —— 回归集断言是"必须包含 + **不得多产**"双向)。
+2. **快速探测(秒级, 不调 LLM)**:
+   `offline_indicator_assemble.py <pdf>`(指标侧组装)
+   `offline_conclusion_assemble.py <pdf> --report-id N --db H00X`(结论切段/提取产物)。
+   需要看页面结构时 `LAYOUT_DEBUG=1`; 图片型结论页 `--hybrid` + `OCR_BASE_URL=http://localhost:8006`。
+3. **LLM 快照采一次(只在需要观察 LLM 输出形态时)**:
+   ```bash
+   ABNORMALITY_LLM_SNAPSHOT_SAVE=1 ABNORMALITY_LLM_SNAPSHOT_DIR=backend/artifacts/llm_snapshots \
+     .venv/bin/python scripts/offline_conclusion_assemble.py <pdf> \
+     && ABNORMALITY_LLM_SNAPSHOT_DIR=backend/artifacts/llm_snapshots \
+     .venv/bin/python scripts/offline_conclusion_assemble.py <pdf>   # 之后走重放, 秒级
+   ```
+   重放命中日志: `abnormality snapshot replay: <sha1>.json (n)`; 不命中才真调。
+4. **问题修复的落地三件套**(按已踩坑教训固化):
+   - 结构差异 → `report_profiles.py` 数据化(锚点/断点/visual_sort/字段), **禁止按医院名写分支**;
+   - 名称形态差异 → 检查是否可被 `_write_norm`/`_cmp_norm`(入口化归一名)或
+     `_parse_direction_phrases`(多方向行)/`_parse_numbered_titles`(编号/【】/★/子编号)
+     规则覆盖, 优先改规则而非加特例;
+   - 最小复现片段补 `tests/modules/report/test_extraction_units.py`(纯函数断言)。
+5. **收敛验收**: 快照重放全绿后, **最后真调一次**(删掉/绕开快照)确认 + 端到端一次
+   (重 process + 删 interpretation 重投, 见验证纪律); 解析层改动按纪律提醒用户跑全量
+   回归(`pytest tests/modules/report/ tests/test_safety_net.py -q`)。
+   改 worker 代码后必须重启 worker(`scripts/start_workers.sh` 前先 kill 旧进程)再验证。
+
 
 ### 结论侧工程化收尾(2026-09-09, 用户四项决策)
 1. **医院特判审计结论**: 逻辑层无按医院名的运行时分支 —— 布局/锚点/断点/综述插页/
@@ -630,3 +739,56 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 - 修复: _FINDINGS_STOP_SKIP_RE 加"姓名·性别·年龄(+编号)"无冒号页眉模式
   (^名2-8字·(男|女)·年龄(空格 编号)?$); 该行收集时跳过。
 - 验证: conclusion_text 无页眉残留; 结论区 4 条稳定; 护栏 263 passed。
+
+### H004 前 6 份端到端补齐与垃圾清理(2026-09-10)
+- 补齐 H004 USER6 漏跑的 6 份(石坤/张亚/谢国宾/欧阳庆/庞海锋/步新宇)端到端;
+  通用工具 `scripts/e2e_rerun_reports.py`(--db/--reports/--user/--mode)已入库并实战。
+- 事故与修复: 钦州(欧阳庆)PDF 为纯扫描件(每页 1 图), 重跑时 8006 OCR 服务异常
+  (int(Tensor) 报错)导致指标被清成 0; 重启 8006 后重跑恢复 119 行(与基线一致)。
+  教训: 扫描件重跑前先确认 8006 健康; process 需在 backend cwd 运行(否则 .env 未读,
+  RabbitMQ 403 guest 认证)。
+- 口径修正: 指标黄按 source='indicator' 对比;结论黄(source='conclusion')不计入
+  (基线快照只含指标黄)。差异均为"旧假黄清除/旧漏黄恢复", 与护栏口径一致
+  (钦州二 钾(K) 黄保留、裸眼视力去黄; 步新宇 弃检去黄; 桂林 干化学酮体恢复)。
+- 垃圾清理(黑名单/清洗): 身份证/证件号码/N岁/体检次数 入名称黑名单;
+  尿沉渣名称前缀参考("0-1个/LP颗粒管型"→"颗粒管型")落库前清洗;
+  结论"需要进一步/进一步诊治"入 junk 强词 + safety-net 过滤;
+  `_parse_numbered_titles` 数字直接接字母("50mm需要…")不再误判编号。
+  重跑 1/2/3/5/6 后全部垃圾消失, 黄红稳定; 护栏 263 passed。
+
+### 结论兜底标题/泛称回归修复(2026-09-10 深夜, 用户报告三例)
+- 步新宇(北京医院): 编号兜底标题把"2、胸部CT 平扫：右肺尖间隔旁型肺气肿"解析成半截
+  方法名"胸部CT"(方法词表不认"部位+CT"), "甲状腺B"/"腹部B"同; 真名由 LLM 承担。
+  修: `_is_junk_fallback_title`(纯方法/检查名 + 科普定义句"X是指…")在
+  `_parse_numbered_titles`/`_parse_summary_item_titles` 产出处过滤。
+- 柳州(石坤): "肥胖"(LLM 科普句)与"轻度肥胖"(原文标题)并存 —— 泛称未去重。
+  修: `_dedup_generic_findings`(程度前缀限定名保留, 去泛称; "肺结节"泛称在存在其它
+  结节条目时去)挂 `_postprocess_extracted_items` 尾部。
+- 钦州二(庞海锋): "肺结节"来自科普句, 真名"右肺中叶内侧段微小结节"已在 —— 同上去除。
+- 测试变厚: 结论回归加 `forbidden_titles` 反向断言(步新宇样本禁 "胸部CT/甲状腺B/腹部B");
+  `test_extraction_units.py` 加 4 条纯函数断言; 护栏 265 passed。
+- **教训(为什么此前没测出)**: 结论回归的历史断言是"期望标题必须在"(包含式), 没有
+  "不得多产"维度; 且 these 问题产生在重跑(新链)后的兜底/后处理层, 旧 DB 数据非护栏对象。
+  今后新形态问题修复后, 同步补"禁产断言"(forbidden_titles/纯函数)。
+
+### 结论多发现行/泛称/变体归一去重(2026-09-11 凌晨, 用户报告四例)
+- 厦门华西(林建生): "龋齿"与"47龋齿"重复 → `_DENTAL_PREFIX_RE` 牙位前缀剥离
+  ("47龋齿"→"龋齿")后归一去重; 组合整串("双肺散在小结节，多系炎性结节"各段已
+  独立成条)丢弃。
+- 厦门弘爱(戴伟平): 漏"龋齿/牙龈炎/牙结石/轻度脂肪肝/超重/左肺下叶少许纤维灶" ——
+  编号行"4.残根；龋齿；牙龈炎；牙结石（+）"多发现只解析首词; 修: 编号行含分号 →
+  整段作 title 交 `_expand_title_segments` 拆条(HL 只取首词会漏后项);
+  `_expand_title_segments` 长串拆分阈值 ≥3→≥2(救"超重"); 尾"（+）"清洗。
+- 山东省立(王国瑞): 漏"超重" —— 多发现连串"…增高，载脂蛋白B 增高，超重"中
+  2 字短发现被长串拆分阈值(<3)丢弃(非体质指数去重, 见上条修复)。
+- 日照人民(邵琳): ①"高血压/胸痛"= LLM 从科普句挖词; junk 检查源改用**未加工原文
+  (raw_text)**, 加工文本裁句会丢建议词("如您有胸闷、胸痛…建议专科诊治");
+  ②"ST 段轻度改变"空格变体 + "肝内血管瘤/可能""子宫肌瘤/可能"重复 → `_norm_key`
+  (去空白/尾缀"可能")归一后去重。
+- 防御沉淀: `test_extraction_units.py` +4 条纯函数断言(junk 源/组合整串/牙位/短发现
+  展开); 护栏 265→267 passed。
+- **答复口径(为何"之前没问题又出现")**: 结论条目主要由 LLM 提取, 每次端到端重跑都
+  重新调用 LLM(非确定) → 集合会相对上次验收快照漂移(漏/多/写法变体); 规则层的
+  解析盲区(编号行只取首词)与变体未归一使这些漂移放大。非某一次规则修改"引入"了这些
+  条目, 是"重跑换 LLM 输出 + 盲区/变体"叠加。今后: 重跑后需对结论条目做一次 diff 抽查;
+  新形态问题修复后同步补禁产/纯函数断言。

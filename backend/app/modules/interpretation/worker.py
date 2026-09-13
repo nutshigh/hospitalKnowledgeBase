@@ -12,6 +12,31 @@ from app.modules.report.batch_service import BatchService
 _log = logging.getLogger("app.interp.worker")
 
 
+def _weak_candidates_enabled(db, report_id: int) -> bool:
+    """报告是否启用弱切分候选(profile multi_findings, 默认关)。
+
+    2026-09-12: 弱切分(多发现行/多方向行)按院声明 —— 这里用原始 PDF 文本匹配
+    档案(文本报告 <1s; 纯扫描件提取为空 → 默认关, 其条目靠【】标题/LLM)。
+    """
+    try:
+        from app.modules.report.models import ReportInfo, ReportTask
+        from app.modules.report.service import _extract_pdf_text, _load_report_profiles
+        info = db.query(ReportInfo).filter(ReportInfo.id == report_id).first()
+        if not info or not info.task_id:
+            return False
+        task = db.query(ReportTask).filter(ReportTask.id == info.task_id).first()
+        if not task or not task.original_file_path:
+            return False
+        text = _extract_pdf_text(task.original_file_path, hybrid=False)
+        if not text:
+            return False
+        match_profile, _ = _load_report_profiles()
+        return bool(match_profile(text).get("multi_findings"))
+    except Exception as e:
+        _log.warning("weak_candidates probe failed report=%d: %s", report_id, e)
+        return False
+
+
 def handle_interpretation_task(message: dict):
     routing_key = message.get("_routing_key", "interpretation.normal")
     # bulk 时段过滤:非窗口期直接 requeue
@@ -55,7 +80,9 @@ def handle_interpretation_task(message: dict):
                         ), {"iid": existing.id}).scalar()
                         if not has_ab:
                             import asyncio
-                            items = asyncio.run(_extract_abnormalities_async(report_info.conclusion_text))
+                            items = asyncio.run(_extract_abnormalities_async(
+                                report_info.conclusion_text,
+                                weak_candidates=_weak_candidates_enabled(db, report_id)))
                             if items:
                                 _store_abnormalities(db, report_id, existing.id, items)
                                 _log.info("backfill abnormalities report=%d count=%d", report_id, len(items))
@@ -94,7 +121,9 @@ def handle_interpretation_task(message: dict):
                     ).order_by(ReportInterpretation.id.desc()).first()
                     if interp:
                         import asyncio
-                        items = asyncio.run(_extract_abnormalities_async(report_info.conclusion_text))
+                        items = asyncio.run(_extract_abnormalities_async(
+                                report_info.conclusion_text,
+                                weak_candidates=_weak_candidates_enabled(db, report_id)))
                         if items:
                             _store_abnormalities(db, report_id, interp.id, items)
                         # 刷新解释统计（含结论异常）

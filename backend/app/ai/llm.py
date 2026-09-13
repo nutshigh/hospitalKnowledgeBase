@@ -15,7 +15,8 @@ async def _guarded(coro):
         return await coro
 
 
-def get_chat_model(streaming: bool = False, no_think: bool = False) -> ChatOpenAI:
+def get_chat_model(streaming: bool = False, no_think: bool = False,
+                   request_timeout: float | None = None) -> ChatOpenAI:
     """根据 LLM_PROVIDER 构造 LangChain ChatOpenAI。
 
     local  → 本地 MedGo (Qwen3-32B 医疗模型) via vLLM serve (OpenAI 兼容接口)
@@ -35,7 +36,7 @@ def get_chat_model(streaming: bool = False, no_think: bool = False) -> ChatOpenA
             api_key=settings.REMOTE_LLM_API_KEY,
             temperature=settings.REMOTE_LLM_TEMPERATURE,
             max_tokens=settings.REMOTE_LLM_MAX_TOKENS,
-            timeout=None,
+            timeout=request_timeout,
             streaming=streaming,
             extra_body=extra_body,
         )
@@ -46,7 +47,7 @@ def get_chat_model(streaming: bool = False, no_think: bool = False) -> ChatOpenA
         api_key=settings.MEDGO_API_KEY,
         temperature=settings.MEDGO_TEMPERATURE,
         max_tokens=settings.MEDGO_MAX_TOKENS,
-        timeout=None,
+        timeout=request_timeout,
         streaming=streaming,
         extra_body=extra_body,
     )

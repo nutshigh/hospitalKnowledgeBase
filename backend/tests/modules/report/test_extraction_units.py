@@ -31,11 +31,11 @@ from app.modules.report.service import (
     ("尿酸升高", {"尿酸(UA)", "尿蛋白(PRO)"}, True),
     # 碳13尿素呼气试验阳性 含指标"尿素(BUN)"2 字核心 → 不拦(互含需 ≥3 字)
     ("碳13尿素呼气试验阳性", {"尿素(BUN)", "尿素氮", "肌酐"}, False),
-    # 超重: 指标名"体重指数"(27 齐鲁)不拦; "身高体重指数"/BMI(崇左)拦
+    # 2026-09-12 用户验收: "超重"一律放行(崇左旧口径作废); "体重指数"仍拦
     ("超重", {"体重指数"}, False),
     ("超重", {"体质指数"}, False),
-    ("超重", {"身高体重指数"}, True),
-    ("超重", {"BMI"}, True),
+    ("超重", {"身高体重指数"}, False),
+    ("超重", {"BMI"}, False),
     # 高密度脂蛋白 类方向词词根匹配
     ("高密度脂蛋白降低", {"高密度脂蛋白(HDL)"}, True),
     # 字符交集阈值 3: 骨密度 vs 低密度脂蛋白胆固醇 共享 {度,密} 不拦
@@ -387,3 +387,281 @@ def test_disc_pure_segment_fragment_filtered():
         [{"item_name": "L3 - 4", "suggestion": "", "deviation": None, "is_urgent": False}],
         source_text="x", title_names=[])
     assert out == []
+
+
+# === 2026-09-10: 结论兜底标题过滤 / 泛称去重(用户报告三例) ===
+def test_fallback_title_junk_filter():
+    from app.modules.report.service import _is_junk_fallback_title, _parse_numbered_titles
+    assert _is_junk_fallback_title("胸部CT")
+    assert _is_junk_fallback_title("甲状腺B")
+    assert _is_junk_fallback_title("腹部B")
+    assert _is_junk_fallback_title("肺结节是指肺内直径≤3cm的类圆形或不规则形病灶")
+    assert not _is_junk_fallback_title("右肺尖间隔旁型肺气肿")
+    titles = _parse_numbered_titles(
+        "2、胸部CT 平扫：右肺尖间隔旁型肺气肿。\n"
+        "3、甲状腺B 超：甲状腺双叶多发囊性结节，大者0.3cm×0.2cm。")
+    assert "胸部CT" not in titles and "甲状腺B" not in titles
+
+
+def test_dedup_generic_findings():
+    from app.modules.report.service import _dedup_generic_findings
+    items = [{"item_name": "肥胖"}, {"item_name": "轻度肥胖"},
+             {"item_name": "肺结节"}, {"item_name": "右肺中叶内侧段微小结节"}]
+    names = [i["item_name"] for i in _dedup_generic_findings(items)]
+    assert "轻度肥胖" in names and "肥胖" not in names
+    assert "右肺中叶内侧段微小结节" in names and "肺结节" not in names
+
+
+# === 2026-09-11: junk 检查必须用未加工原文(加工裁句会漏滤"胸痛"类科普挖词) ===
+def test_junk_context_uses_raw_source():
+    from app.modules.report.service import _postprocess_extracted_items
+    ct = ("【肌红蛋白降低】存在于心脏和骨骼的横纹肌中。一般降低无临床意义，"
+          "如您有胸闷、胸痛、心悸等不适，建议专科诊治。")
+    out, _ = _postprocess_extracted_items([{"item_name": "胸痛"}], "裁剪文本占位",
+                                          raw_text=ct)
+    assert "胸痛" not in [i["item_name"] for i in out]
+
+
+def test_new_generic_dedup_and_expand():
+    from app.modules.report.service import _dedup_generic_findings, _expand_title_segments
+    items = [{"item_name": "双肺散在小结节"}, {"item_name": "多系炎性结节"},
+             {"item_name": "双肺散在小结节，多系炎性结节"},
+             {"item_name": "牙结石（+）"}, {"item_name": "47龋齿"}]
+    names = [i["item_name"] for i in _dedup_generic_findings(items)]
+    assert "双肺散在小结节，多系炎性结节" not in names
+    assert "牙结石" in names and "龋齿" in names
+    segs = _expand_title_segments("低密度脂蛋白胆固醇增高，载脂蛋白B 增高，超重")
+    assert any(n == "超重" for n, _s in segs)
+
+
+# === 2026-09-10: 名称归一入口化(_write_norm / _cmp_norm) ===
+
+def test_cmp_norm_unifies_forms():
+    from app.modules.report.service import _write_norm, _cmp_norm
+    # 书写归一: 全角标点/空格
+    assert _write_norm("腹部B 超") == "腹部B超"
+    assert _write_norm("尿蛋白（PRO）") == "尿蛋白(PRO)"
+    # 比较归一: 剥检查前缀/括号/结论测定/尾数字符号
+    assert _cmp_norm("彩超提示肝囊肿") == "肝囊肿"
+    assert _cmp_norm("尿酸(UA)") == "尿酸"
+    assert _cmp_norm("乙肝两对半结论") == "乙肝两对半"
+    assert _cmp_norm("尿蛋白1+") == "尿蛋白"
+    # 方向词保留(调用方按需剥离)
+    assert _cmp_norm("间接胆红素偏高") == "间接胆红素偏高"
+
+
+# === 2026-09-10: 多方向行规则候选(_parse_direction_phrases, 结构收权) ===
+
+def test_direction_phrases_multi_abnormal_line():
+    from app.modules.report.service import _parse_direction_phrases
+    txt = ("3 、【 生 化 Ⅱ】\n"
+           "间接 胆红 素偏高 载脂蛋白E 偏低  脂 蛋 白( a )偏 高\n"
+           "尿潜 血( B L D) +1  尿 比 重 偏 高 酸 碱 度 偏低  维生 素 C 弱阳性  红 细 胞 计数 偏高\n")
+    got = _parse_direction_phrases(txt)
+    for want in ("间接胆红素偏高", "载脂蛋白E偏低", "脂蛋白(a)偏高",
+                 "尿潜血(BLD)+1", "尿比重偏高", "酸碱度偏低",
+                 "维生素C弱阳性", "红细胞计数偏高"):
+        assert want in got, f"{want} missing in {got}"
+
+
+def test_direction_phrases_skip_single_and_advice_lines():
+    from app.modules.report.service import _parse_direction_phrases
+    txt = ("抗碱 血红 蛋白偏 高\n"                      # 单方向行: 不产
+           "建议 您 定期复查 心 脏 彩 超 。\n"          # 建议行(含方向词?无成对): 不产
+           "如出 现 胸 闷 、 心 悸 等 不 适 ， 请 及 时 就 诊 ， 避 免 病 情 加 重\n")
+    assert _parse_direction_phrases(txt) == []
+
+
+def test_direction_candidate_covered_by_llm_stem():
+    # LLM 给"间接胆红素"(dev=偏高) → 不再补"间接胆红素偏高"(词根覆盖)
+    txt = "间接 胆红 素偏高 载脂蛋白E 偏低  脂 蛋 白( a )偏 高\n"
+    items = [{"item_name": "间接胆红素", "suggestion": "", "deviation": "偏高", "is_urgent": False}]
+    out, _ = _postprocess_extracted_items(items, txt, raw_text=txt, weak_candidates=True)
+    names = [i["item_name"].replace(" ", "") for i in out]
+    assert "间接胆红素" in names and "间接胆红素偏高" not in names
+    assert "载脂蛋白E偏低" in names or "载脂蛋白E" in names
+
+
+def test_weak_candidates_default_off():
+    # 2026-09-12 用户口径: 弱切分(多发现/多方向行)默认关闭, 仅 profile 声明院启用
+    txt = "间接 胆红 素偏高 载脂蛋白E 偏低  脂 蛋 白( a )偏 高\n"
+    items = [{"item_name": "间接胆红素", "suggestion": "", "deviation": "偏高", "is_urgent": False}]
+    out, _ = _postprocess_extracted_items(items, txt, raw_text=txt)  # 默认 False
+    names = [i["item_name"].replace(" ", "") for i in out]
+    assert "载脂蛋白E偏低" not in names, "默认不应启用弱切分候选"
+
+
+def test_multi_findings_profile_flags():
+    # 声明院: 池州/福建第二/广西人民 启用; 其它默认关
+    from app.modules.report.report_profiles import match_profile
+    assert match_profile("池州市人民医院 体检报告").get("multi_findings") is True
+    assert match_profile("福建省第二人民医院").get("multi_findings") is True
+    assert match_profile("广西壮族自治区人民医院").get("multi_findings") is True
+    assert match_profile("某不存在的医院").get("multi_findings") is False
+
+
+# === 2026-09-10: LLM 名契约 —— 幻觉名(源文不可定位)必须被滤 ===
+
+def test_llm_hallucinated_name_filtered():
+    txt = "★  窦性心动过缓:\n★  前列腺增大:"
+    items = [{"item_name": "十二指肠溃疡", "suggestion": "", "deviation": None,
+              "is_urgent": False}]
+    from app.modules.report.service import _filter_junk_abnormalities
+    out = _filter_junk_abnormalities(items, source_text=txt, title_names=[])
+    assert out == [], "源文中不存在该名, 应作为幻觉滤除"
+
+
+# === 2026-09-11: 终检去重(泛词碎片/同义写法) ===
+
+def _items(*names):
+    return [{"item_name": n, "suggestion": "", "deviation": None, "is_urgent": False}
+            for n in names]
+
+
+def test_generic_finding_dropped_when_qualified_exists():
+    from app.modules.report.service import _dedup_generic_findings
+    out = _dedup_generic_findings(_items("结节", "肺结节", "钙化灶", "肝内钙化灶", "前列腺偏大"))
+    names = [i["item_name"] for i in out]
+    assert "结节" not in names and "钙化灶" not in names
+    assert "肺结节" in names and "肝内钙化灶" in names and "前列腺偏大" in names
+
+
+def test_generic_finding_filtered_even_without_qualified():
+    # 2026-09-12 收紧: 纯泛词本身不是独立异常, 无条件滤(日照"钙化"误落展示)
+    from app.modules.report.service import _dedup_generic_findings
+    out = _dedup_generic_findings(_items("结节", "钙化"))
+    assert out == []
+
+
+def test_synonym_dedup_urine_occult_blood():
+    from app.modules.report.service import _dedup_generic_findings
+    out = _dedup_generic_findings(_items("尿隐血", "尿潜血(BLD)+1"))
+    assert len(out) == 1
+    # 保留更长(信息更全)者
+    assert out[0]["item_name"] == "尿潜血(BLD)+1"
+
+
+# === 2026-09-12: 端到端抽查暴露的两条垃圾名 ===
+
+def test_method_prompt_prefix_stripped_for_keju_variants():
+    from app.modules.report.service import _strip_check_prefix
+    assert _strip_check_prefix("口腔科提示18") == "18"
+
+
+def test_junk_names_from_trial_run_filtered():
+    from app.modules.report.service import _filter_junk_abnormalities
+    txt = ("口腔科\n口腔科提示:18、28、38牙智齿\n"
+           "直接胆红素:不一定有临床意义,如连续多次升高")
+    items = [
+        {"item_name": "口腔科提示18", "suggestion": "", "deviation": None, "is_urgent": False},
+        {"item_name": "不一定有临床意义,如连续多次升高", "suggestion": "",
+         "deviation": None, "is_urgent": False},
+    ]
+    out = _filter_junk_abnormalities(items, source_text=txt, title_names=[])
+    assert out == [], out
+
+
+def test_fill_rejects_sentence_and_method_fragment_titles():
+    # fill 在滤卡之后, 需自拒: 句子式标题/方法前缀残片(2026-09-12 端到端抽查)
+    txt = ("8.不一定有临床意义,如连续多次升高\n"
+           "口腔科提示18、28、38牙智齿\n"
+           "2、前列腺偏大\n")
+    out, _ = _postprocess_extracted_items([], txt, raw_text=txt)
+    names = [i["item_name"].replace(" ", "") for i in out]
+    assert "不一定有临床意义,如连续多次升高" not in names
+    assert "口腔科提示18" not in names
+    assert "前列腺偏大" in names
+
+
+def test_direction_phrases_skip_section_guide_lines():
+    # 滨州"▍异常指标解读以下按照疾病诊断、阳性发现和其他异常，列出…" 引导句
+    # 含多个方向词但非条目, 不得切出"发现和其他异常"/"指标解读以下按照疾病诊断阳性"
+    from app.modules.report.service import _parse_direction_phrases
+    txt = "▍异常指标解读以下按照疾病诊断、阳性发现和其他异常，列出本次体检所发现的问题\n"
+    assert _parse_direction_phrases(txt) == []
+
+
+def test_anatomy_only_and_section_junk_filtered():
+    from app.modules.report.service import _filter_junk_abnormalities
+    txt = "8.二尖瓣、三尖瓣轻度反流多属于生理性，不需特殊处理。"
+    out = _filter_junk_abnormalities(
+        [{"item_name": "二尖瓣", "suggestion": "", "deviation": None, "is_urgent": False}],
+        source_text=txt, title_names=[])
+    assert out == [], out
+
+
+def test_numbered_title_unclosed_bracket_across_lines():
+    # 马鞍山 25: "6、[甲状腺结节,\n考虑C-TIRADS3 类]" 跨行未闭合 → 拼接取段
+    from app.modules.report.service import _parse_numbered_titles
+    txt = "5、[三尖瓣少量反流]\n6、[甲状腺结节,\n考虑C-TIRADS3 类]\n7、[中性粒细胞偏低"
+    got = _parse_numbered_titles(txt)
+    assert "甲状腺结节" in got and "三尖瓣少量反流" in got
+
+
+def test_pulmonary_nodule_generic_only_same_lung():
+    # "肺结节"泛称只有当同批存在同部位(含"肺")更精确结节条目时才删;
+    # 不得因"甲状腺结节"误删报告方真标题(马鞍山 25)
+    from app.modules.report.service import _dedup_generic_findings
+    kept = _dedup_generic_findings(_items("甲状腺结节", "肺结节"))
+    assert "肺结节" in [i["item_name"] for i in kept]
+    dropped = _dedup_generic_findings(_items("肺结节", "右肺中叶内侧段微小结节"))
+    assert "肺结节" not in [i["item_name"] for i in dropped]
+
+
+def test_fill_rejects_method_prompt_number_fragment():
+    # 潮州 23: "彩超检查提示1" 由 fill 产出 → 拒
+    txt = "彩超检查提示1\n2、前列腺偏大\n"
+    out, _ = _postprocess_extracted_items([], txt, raw_text=txt)
+    names = [i["item_name"].replace(" ", "") for i in out]
+    assert "彩超检查提示1" not in names
+
+
+def test_direction_phrases_reject_prose_and_circle_number():
+    # 柳州(H004-1)重跑回归: 科普/建议连续句 + 圈号序号头 不得切出候选
+    # ("检查化验结果略有异常"/"肝功能异常"/"①血脂异常"/"喝茶也可使血脂水平下降")
+    from app.modules.report.service import _parse_direction_phrases
+    txt = (
+        "检查化验结果略有异常，具体根据以下体检诊断建议进行相应诊治，3-6个月定期进行异常指标复查。\n"
+        "血脂偏高，肝功能异常者到健康管理中心门诊就诊，在医师指导下降酶降脂治疗。定期复查血脂、肝功及B超。\n"
+        "①血脂异常是一种血脂代谢异常引起的疾病，分为遗传性和环境因素引起。\n"
+        "运动可使血脂水平下降。喝茶也可使血脂水平下降，特别是喝绿茶，但是喝茶可以使钙、铁吸收障碍。\n"
+    )
+    assert _parse_direction_phrases(txt) == []
+
+
+# === 2026-09-12 H003 验收批(用户逐家报错) ===
+
+def test_conjoined_fatty_liver_overweight_split():
+    # 崇左: 【脂肪肝】【超重】被拼成"脂肪肝超重" → 拆两条
+    txt = "【脂肪肝】【超重】脂肪肝(脂肪性肝病)是以…"
+    items = [{"item_name": "脂肪肝超重", "suggestion": "", "deviation": None, "is_urgent": False}]
+    out, _ = _postprocess_extracted_items(items, txt, raw_text=txt)
+    names = [i["item_name"] for i in out]
+    assert "脂肪肝" in names and "超重" in names and "脂肪肝超重" not in names
+
+
+def test_true_name_ending_with_obesity_not_split():
+    txt = "向心性肥胖"
+    items = [{"item_name": "向心性肥胖", "suggestion": "", "deviation": None, "is_urgent": False}]
+    out, _ = _postprocess_extracted_items(items, txt, raw_text=txt)
+    assert "向心性肥胖" in [i["item_name"] for i in out]
+
+
+def test_measure_desc_and_prose_tail_filtered():
+    # 2026-09-12 口径更新: "腹型肥胖/腰臀比"黑名单移除(防城港一"腹型肥胖"是
+    # DB 验收真条目); 贵港多提由 profile 切段(仅"异常指标+健康建议")解决。
+    from app.modules.report.service import _postprocess_extracted_items
+    txt = "（2）病理性红细胞增多见于：地中海贫血等"
+    items = [
+        {"item_name": "病理性红细胞增多见于", "suggestion": "", "deviation": None, "is_urgent": False},
+    ]
+    out, _ = _postprocess_extracted_items(items, txt, raw_text=txt)
+    assert [i["item_name"] for i in out] == []
+
+
+def test_imaging_description_tail_trimmed():
+    txt = "7、右肺下叶微小磨玻璃类结节，较前相仿。"
+    items = [{"item_name": "右肺下叶微小磨玻璃类结节，较前相仿", "suggestion": "",
+              "deviation": None, "is_urgent": False}]
+    out, _ = _postprocess_extracted_items(items, txt, raw_text=txt)
+    assert [i["item_name"] for i in out] == ["右肺下叶微小磨玻璃类结节"]

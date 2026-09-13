@@ -28,6 +28,10 @@ DEFAULT = {
     "extra_break": [],
     "extra_skip": [],
     "extra_anchor": [],
+    # 2026-09-12: 弱切分(多发现行/多方向行候选)按院声明 —— 默认关闭(新医院默认
+    # 保守净度优先), 仅已验证存在"一行多发现"排版且需规则补漏的医院启用:
+    # 池州(多方向行)/福建第二(编号行多发现)/广西人民(编号行多发现)
+    "multi_findings": False,
 }
 
 PROFILES = [
@@ -48,6 +52,10 @@ PROFILES = [
          extra_anchor=["三、体检异常结果及医学建议"]),  # 22 厦门弘爱(表格结论, 需行重组)
     dict(keywords=["日照"],
          anchor_only=True, extra_anchor=["医学建议"]),  # 24 日照人民
+    # 贵港东晖(用户 2026-09-12 口径): 结论段只取"异常指标"+"健康建议"两段,
+    # "检查汇总"是体检项目明细(项目名非结果)不提取
+    dict(keywords=["东晖医院"],
+         anchor_only=True, extra_anchor=["异常指标"]),
     dict(keywords=["医 生 建 议"],
          anchor_only=True,
          extra_anchor=[r"医\s*生\s*建\s*议"],
@@ -72,8 +80,14 @@ PROFILES = [
     # 无临床内容)。只取 体检综述+健康指导建议 两段, 断在"温馨提醒"前。
     dict(keywords=["池州市人民医院"],
          anchor_only=True,
+         multi_findings=True,  # 多方向行候选(尿比重偏高 酸碱度偏低 …)
          extra_anchor=[r"^体\s*检\s*综\s*述\s*$", r"^健康指导建议"],
          extra_break=["温馨提醒"]),
+    # 2026-09-12: 弱切分声明(编号行多发现 → 规则补漏; 用户验收依赖:
+    # 福建第二"牙石堆积/尿隐血微量/双髋…"、广西人民"十二指肠球部溃疡/
+    # 心室早期复极 T波改变/水平椎管狭窄")
+    dict(keywords=["福建省第二人民医院"], multi_findings=True),
+    dict(keywords=["广西壮族自治区人民医院"], multi_findings=True),
 
 ]
 
@@ -83,7 +97,11 @@ def match_profile(text: str) -> dict:
     命中多个档案(莆田报告同时含"莆田九十五医院"与"出入境边防检查站"字样), 首个命中
     返回会让专用锚点被通用档案顶掉; 合并时 extra_break/skip/anchor 拼接, anchor_only
     取或。未命中返回 DEFAULT。"""
-    merged = dict(DEFAULT)
+    # 2026-09-12: 必须深拷列表字段 —— dict(DEFAULT) 浅拷贝时
+    # merged["extra_*"] 与 DEFAULT 共享同一 list, 后续 setdefault().extend()
+    # 会把命中档案的规则**永久写进模块级 DEFAULT**, 污染长驻进程里之后所有
+    # 报告(护栏测试暴露: 日照(24)之后柳州切段 1466→2503)。
+    merged = {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULT.items()}
     hit = False
     for prof in PROFILES:
         if not any(kw in text for kw in prof.get("keywords", [])):
@@ -97,6 +115,8 @@ def match_profile(text: str) -> dict:
             merged["table_conclusion"] = True
         if prof.get("review_block"):
             merged["review_block"] = True
+        if prof.get("multi_findings"):
+            merged["multi_findings"] = True
         for f in ("extra_break", "extra_skip", "extra_anchor"):
             if prof.get(f):
                 merged.setdefault(f, []).extend(list(prof[f]))

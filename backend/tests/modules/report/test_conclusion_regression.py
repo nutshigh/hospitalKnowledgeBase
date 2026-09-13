@@ -98,6 +98,10 @@ def test_deterministic_titles(sample):
     titles = set(_parse_numbered_titles(text))
     for t in sample["expected_titles"]:
         assert t in titles, f"[{sample['key']}] 确定性标题解析缺: {t!r}"
+    # 2026-09-10: 兜底标题不得多产(方法名半截/科普句; 用户 09-10 报告的问题)
+    for t in sample.get("forbidden_titles", []):
+        assert t not in titles, (
+            f"[{sample['key']}] 兜底标题不应有 {t!r}; 实际 {sorted(titles)}")
 
 
 @pytest.mark.parametrize("sample", SUMMARY_TITLE_SAMPLES, ids=[s["key"] for s in SUMMARY_TITLE_SAMPLES])
