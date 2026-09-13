@@ -169,31 +169,12 @@ export default function ReportDetailPage() {
   const displayName = (ind: any) => ind.explanation || ind.item_name;
   // === END STRATEGY ===
 
-  // 分离结论型指标和化验型指标，结论型优先剔除与化验型同名的
-  // 2026-08-31: 名称变体也视为重复(互相包含, 如结论"肌酸激酶" vs 指标"血肌酸激酶")
-  // 2026-09-01: 只对"异常指标"(黄/红)去重 —— 绿色指标("甲状腺"/"呼吸"/"钙"
-  // 等短名、"右侧耳前瘘管鼻"检查项)不拦截结论条目; 包含匹配要求双方≥4字
-  // (防短名"甲状腺"⊂"甲状腺结节"误滤)。
-  const conclusionIndicators = rawIndicators.filter(isConclusionIndicator);
   const regularIndicators = rawIndicators.filter((ind: any) => !isConclusionIndicator(ind));
-  const regAnomaly = regularIndicators.filter((ind: any) =>
-    ind.color_level === 'yellow' || ind.color_level === 'red');
-  const regularNames = regAnomaly.map((ind: any) => displayName(ind));
-  const isRegularDup = (n: string) => regularNames.some(rn =>
-    rn && (rn === n || (rn.length >= 4 && n.length >= 4 && (rn.includes(n) || n.includes(rn)))));
-  // 结论条目内部: 短名被更长结论名包含 → 剔除(如"钙化灶" vs "肝内钙化灶")
-  const concNames = conclusionIndicators.map((ind: any) => displayName(ind));
-  const isConcSub = (n: string) => concNames.some(cn =>
-    cn && cn !== n && cn.length >= 4 && n.length >= 4 && cn.includes(n));
-  const filteredConclusion = conclusionIndicators.filter((ind: any) => {
-    const n = displayName(ind);
-    return !isRegularDup(n) && !isConcSub(n);
-  });
-  const displayIndicators = [...regularIndicators, ...filteredConclusion].sort((a, b) =>
+  const displayIndicators = [...regularIndicators].sort((a, b) =>
     (COLOR_ORDER[a.color_level] ?? 3) - (COLOR_ORDER[b.color_level] ?? 3));
 
   const { groups, flat } = toGroups(displayIndicators, moduleOrder);
-  const totalCount = displayIndicators.length;
+  const levelCounts = countLevels(regularIndicators);
 
   const conclusionText = report.conclusion_text ? cleanConclusionText(report.conclusion_text) : '';
 
@@ -243,11 +224,11 @@ export default function ReportDetailPage() {
         <div style={{
           display: 'flex', gap: 8, marginBottom: 16, padding: '12px 16px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)',
         }}>
-          <span style={{ color: 'var(--color-red)', fontWeight: 600, fontSize: 13 }}>红区 {interpretation.red_count}</span>
+          <span style={{ color: 'var(--color-red)', fontWeight: 600, fontSize: 13 }}>红区 {levelCounts.red}</span>
           <span style={{ color: 'var(--color-border)' }}>|</span>
-          <span style={{ color: 'var(--color-yellow)', fontWeight: 600, fontSize: 13 }}>黄区 {interpretation.yellow_count}</span>
+          <span style={{ color: 'var(--color-yellow)', fontWeight: 600, fontSize: 13 }}>黄区 {levelCounts.yellow}</span>
           <span style={{ color: 'var(--color-border)' }}>|</span>
-          <span style={{ color: 'var(--color-green)', fontWeight: 600, fontSize: 13 }}>绿区 {interpretation.green_count}</span>
+          <span style={{ color: 'var(--color-green)', fontWeight: 600, fontSize: 13 }}>绿区 {levelCounts.green}</span>
         </div>
       )}
 
