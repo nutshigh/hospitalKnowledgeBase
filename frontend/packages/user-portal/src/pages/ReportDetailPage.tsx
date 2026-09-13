@@ -177,6 +177,7 @@ export default function ReportDetailPage() {
   const levelCounts = countLevels(regularIndicators);
 
   const conclusionText = report.conclusion_text ? cleanConclusionText(report.conclusion_text) : '';
+  const conclusionBadge = overallLevel === 'red' ? 'red' : 'yellow';
 
   return (
     <Layout title={report.name || '报告详情'}>
@@ -244,13 +245,12 @@ export default function ReportDetailPage() {
             cursor: 'pointer',
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+          <span style={{
+            fontSize: 13, fontWeight: 600, color: 'var(--color-text-secondary)',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
             📋 总检建议与结论
-            {conclusionText && !conclusionExpanded && (
-              <span style={{ fontWeight: 400, marginLeft: 8, fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                {conclusionText.slice(0, 40)}...
-              </span>
-            )}
+            <ColorBadge level={conclusionBadge} size="sm" />
           </span>
           {conclusionText ? (
             conclusionExpanded ? <UpOutlined style={{ fontSize: 12 }} /> : <DownOutlined style={{ fontSize: 12 }} />
