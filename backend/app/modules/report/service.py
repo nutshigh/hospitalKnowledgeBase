@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import logging
 import os
@@ -8,6 +7,7 @@ from typing import Optional, List
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.ai.async_run import run_async
 from app.config import settings
 from app.modules.report.models import ReportTask, ReportInfo, ReportIndicator
 from app.core.vlm_client import vlm_client
@@ -3055,7 +3055,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         elif report_raw_text and len(report_raw_text) > 100:
             # Text-based PDF: use LLM on extracted full text
             try:
-                conclusion = asyncio.run(_extract_conclusion_async(report_raw_text, compiled))
+                conclusion = run_async(_extract_conclusion_async(report_raw_text, compiled))
                 if conclusion:
                     report.conclusion_text = conclusion
                     db.commit()
@@ -3174,7 +3174,7 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
 
 def _parse_text_with_llm(text: str) -> dict:
     """Send extracted PDF text to LLM for indicator parsing."""
-    return asyncio.run(_parse_text_with_llm_async(text))
+    return run_async(_parse_text_with_llm_async(text))
 
 
 async def _parse_text_with_llm_async(text: str) -> dict:

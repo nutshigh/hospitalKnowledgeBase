@@ -28,19 +28,17 @@ def test_knowledge_crud_to_rag_pipeline():
 
 
 def test_agent_tools_available_in_graph():
-    """chat 和 interp 图都能拿到 CHAT_TOOLS / INTERP_TOOLS"""
+    """chat 图拿 CHAT_TOOLS; interp 图可编译(检索步已改确定性, 不再建 ReAct agent)。"""
     with patch("app.ai.agents.chat_graph.get_chat_model") as mock_model, \
-         patch("app.ai.agents.interp_graph.get_chat_model"), \
          patch("app.ai.agents.tools.ai_rag"):
         mock_model.return_value = MagicMock()
         mock_model.return_value.bind_tools.return_value = MagicMock()
 
-        from app.ai.agents.tools import CHAT_TOOLS, INTERP_TOOLS
+        from app.ai.agents.tools import CHAT_TOOLS
         from app.ai.agents.chat_graph import build_chat_agent
         from app.ai.agents.interp_graph import build_interp_graph
 
         assert len(CHAT_TOOLS) == 6
-        assert len(INTERP_TOOLS) == 2
 
         chat_g = build_chat_agent("RPT001")
         interp_g = build_interp_graph("H001", MagicMock())

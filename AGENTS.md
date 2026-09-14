@@ -977,3 +977,83 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
   解析盲区(编号行只取首词)与变体未归一使这些漂移放大。非某一次规则修改"引入"了这些
   条目, 是"重跑换 LLM 输出 + 盲区/变体"叠加。今后: 重跑后需对结论条目做一次 diff 抽查;
   新形态问题修复后同步补禁产/纯函数断言。
+
+---
+
+## 解读知识检索 = 确定性 planner/executor(2026-09-13, 消除 ReAct 退化循环)
+
+**事实**: 「AI 解读」的知识检索步**不再**是模型自驱 ReAct 工具 agent。原
+`build_interp_agent()`(`create_agent` + `SEARCH_SYSTEM_PROMPT` + `ConfirmSchema` +
+`InterpKnowledgeMiddleware` + `ToolCallGuardMiddleware`)已全部**退役删除**。
+现为纯函数两段式, 在新文件 `backend/app/ai/agents/knowledge_search.py`:
+- `plan_knowledge_search(abnormal_indicators)` —— 按 `item_name` 去重, 每指标一条
+  `SearchCall(indicator, query=item_name, fallback_queries)`, fallback 由
+  `normalize_item_name`/`resolve_canonical`/去括号/斜杠拆分确定性生成(上限 3)。
+- `execute_search_plan(hospital_id, plan)` —— 单趟执行: 首选空则依次试 fallback,
+  命中即停; 全空/异常只记日志跳过, 绝不冒泡。
+- `run_knowledge_search(...)` 为图节点入口; `agent_search_knowledge` 节点名保留
+  (`interp_graph.py`), 仅节点体替换。
+
+**原因(真实事故)**: H004 report 31 因 MedGo 单步生成退化循环(批量 tool-call 数组
+无 `maxItems`)挂约 30min, OpenAI client 默认 `max_retries=2` 又把 600s 超时放大到
+30min, 与 RabbitMQ `consumer_timeout` 撞车导致**消息丢失**、报告卡 `processing`。
+且实测 agent 只是把指标名原样照抄为 query, 无选词增值。
+
+**不要做的事**: ❌ 不要重新引入 `create_agent`/`with_structured_output` 让模型"看结果
+再决定"的循环检索; 若将来确需模型选词, 只允许**单次结构化输出** planner(有
+`max_tokens`/超时上限)。❌ 不要把该步的归属名改成 standard 名(须与
+`indicator_judgment.item_name` 一致)。
+
+**契约**: `knowledge_results` 形状不变(文档 key=int entry_id; KG key=`kg:<title>`),
+`_generate_report`/`_merge_citations`/`persist(summary_refs)` 全依赖此形状。
+
+**测试**: `backend/tests/test_interp_knowledge_search.py`(去重/fallback/空结果容错/
+不调 LLM/refs 形状 12 条); `tests/test_toolcall_guard.py` 随守卫退役已删除;
+`tests/ai/agents/test_interp_graph.py` 的 middleware 用例、`test_tools.py`/
+`test_integration.py` 的 `INTERP_TOOLS` 断言已清理(`INTERP_TOOLS` 已删)。
+
+**同日加固(两项, 针对 report 31 事故)**:
+- `get_chat_model`(`app/ai/llm.py`)新增 `max_retries: int = 0` 默认关掉 openai SDK
+  自动重试(原默认 2, 会把单次 600s 超时放大到 3×600=1800s=30min, 撞 RabbitMQ
+  `consumer_timeout` 30min → 消息丢失)。快速失败交由应用层 retry 队列兜底。
+- 解读看门狗 `app/core/interp_watchdog.py`(main.py startup 启动, 类似 batch_sweeper):
+  周期(`INTERP_WATCHDOG_INTERVAL` 默认 300s)扫描各租户库 `report_interpretation`
+  中 `status in (processing,pending)` 且 `created_at` 超过
+  `INTERP_WATCHDOG_STALL_THRESHOLD`(默认 1800s)的行, **先置 pending 再重投**解读任务
+  (必须先置: worker running-skip 会跳过 processing/completed); 已有 completed 解读的
+  报告跳过; 内存 `_nudged` 去重防同窗口反复重投; 单次投递失败只记日志不中断。
+  配置 `INTERP_WATCHDOG_ENABLED/INTERVAL/STALL_THRESHOLD`(`app/config.py`)。
+  测试: `tests/test_interp_watchdog.py`(6 条) + `tests/ai/test_llm.py`(3 条) +
+  `test_main_wiring.py::test_interp_watchdog_starts_on_startup_and_cancels_on_shutdown`。
+
+---
+
+## 异步 LLM 调用必须走 run_async, 不再用 asyncio.run(2026-09-14, report 33 事故)
+
+**事实**: 所有运行时的 `asyncio.run(_guarded(model.ainvoke(...)))` 已改为
+`app/ai/async_run.py::run_async(...)`(线程级常驻事件循环)。
+
+**根因(report 33 直接失败)**: `langchain_openai` 对默认 async httpx client 做**进程级
+缓存**(`_cached_async_httpx_client`, key=base_url/timeout) → 所有 `ChatOpenAI` 实例
+共享同一个 `httpx.AsyncClient`。而 `asyncio.run()` 每次新建并关闭一个事件循环; 共享
+client 连接池里的 transport 残留绑定在**已关闭**的循环上, 下一次 `asyncio.run` 去关闭
+该连接时抛 `RuntimeError('Event loop is closed')` → 被包装为
+`openai.APIConnectionError: Connection error.`。诊断关键: `id(m.root_async_client._client)`
+在所有实例上相同; 纯 `openai.AsyncOpenAI` 无此问题(它每个实例自建 client)。
+
+**触发条件**: 同一进程内 `generate_report`(生成) → `judge`(审核) → judge 判 fail →
+`generate_report` 二次生成。第二次 `asyncio.run` 命中。judge 首次即通过的报告不会触发。
+
+**改法**: `run_async` 用 `threading.local()` 为每个线程复用一个常驻 loop, 共享 client
+始终绑定同一循环。改动点: `interp_graph._generate_report`、`judge_graph.run_judge`、
+`interpretation/worker.py`(2× `_extract_abnormalities_async`)、`report/service.py`
+(2× 解析)、`user_profile/service.py`(change overview)。`risk/gen_candidates_v2.py`
+是开发脚本, 未改。
+
+**不要做的事**: ❌ 不要在任何进程内再引入 `asyncio.run()` 调 LangChain 模型(会复发);
+❌ 不要删/关 `run_async` 的常驻 loop(循环一关, 共享 client 又变孤儿)。
+
+**测试**: `tests/ai/test_async_run.py`(同线程复用单 loop / 绑定资源跨调用存活 /
+跨线程独立, 4 条); `tests/ai/agents/test_interp_graph.py` 增
+`test_generate_report_does_not_use_asyncio_run` 与 `test_run_judge_does_not_use_asyncio_run`。
+复现脚本(修复前 run2 必失败, 修复后 6/6 OK): 连续 `run_async(fresh_model.ainvoke)`。

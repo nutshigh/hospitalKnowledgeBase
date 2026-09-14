@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     BATCH_CHUNK_TIMEOUT: int = 7200            # 2h,孤儿 uploading 阈值
     BATCH_SWEEP_INTERVAL: int = 300            # 5min
     BATCH_SWEEP_STALL_THRESHOLD: int = 1800    # 30min
+    # 解读看门狗: 巡检卡死在 processing/pending 的解读行并重投
+    INTERP_WATCHDOG_ENABLED: bool = True
+    INTERP_WATCHDOG_INTERVAL: int = 300        # 5min
+    INTERP_WATCHDOG_STALL_THRESHOLD: int = 1800  # 30min, 须 > consumer_timeout
     BULK_WINDOW_START: int = 22
     BULK_WINDOW_END: int = 8
     BATCH_FILE_MAX_SIZE: int = 52428800        # 50MB

@@ -1,14 +1,14 @@
 # 检后随访：外部 App 接入接口文档
 
 > **读者**：外部 App（医院 HIS / 第三方系统）的后端与前端 Agent。本文档只描述**随访 + 复查提醒**这一块
-> 如何接入；登录/鉴权与报告、聊天、画像等基础接口见 `docs/app-integration-guide.md`（其中 §8.4 也有本功能
+> 如何接入；登录/鉴权与报告、聊天、画像等基础接口见 `docs/app-integration-guide.md`（其中 §8.3 也有本功能
 > 的摘要，本文档是它的展开版）。
 >
 > 本功能已上线代码版本见 commit `0125621` 起（分支 `feat/user-notification`），后端路由
 > `backend/app/modules/followup/router.py`、service `backend/app/modules/followup/service.py`，
 > 数据库：平台模板表在 `hospital_template`，随访/通知实例表在各自 `hospital_<id>` 租户库。
 >
-> **改本功能后端时**：改完需同步更新本文档 + `docs/app-integration-guide.md` §8.4 + AGENTS.md「检后随访表」
+> **改本功能后端时**：改完需同步更新本文档 + `docs/app-integration-guide.md` §8.3 + AGENTS.md「检后随访表」
 > 一节，并跑 `backend/tests/followup`。
 
 ---
@@ -31,6 +31,26 @@
 | 办结 | 用户提交问卷即 `completed`，**不可重复提交** |
 | 提醒与问卷 | 同事务一起生成；无激活模板时两者都不生成（后端记 `app.followup` 日志） |
 | 删除报告 | `DELETE /reports/{id}` 会级联清理该报告的问卷/答卷/通知，App 侧列表可能因此变少 |
+
+### 1.1 用户旅程（体检者视角）
+
+一条从「体检出异常」到「完成随访」的闭环，供 App 设计页面与状态提示时对照：
+
+1. **报告解读完成那一刻（用户无感）**：解读结果为红/黄 → 后端自动建一份 `pending` 问卷 +
+   一条 `recheck_reminder` 站内通知；绿报告什么都不生成。
+2. **用户下次打开 App**：靠轮询 `GET /notifications/unread-count` 拿到未读数，在「随访」tab
+   显示红点。**用户没打开 App 时不会收到任何手机推送**，只有打开后才可能知道有提醒。
+3. **进入随访中心**：`GET /followup/center` 列出 `pending` 卡片，卡片直接展示该报告的异常指标
+   快照与体检日期；顶层 `has_pending` 供首屏提示「有问卷待填」。
+4. **打开问卷**：`GET /followup/{id}` 按生成时的题目快照渲染（single=radio / multiple=checkbox /
+   text=textarea）。问卷与当前平台模板无关。
+5. **填写并提交**：`POST /followup/{id}/submit` 成功 → `status=completed`，**不可重复提交**，
+   之后可 `GET` 回看答案；校验失败统一 400 中文提示。
+6. **处理提醒**：问卷填完通知**不会自动消失/已读**，需 App 显式调
+   `POST /notifications/{id}/read` 或 `/notifications/read-all` 才清红点。
+
+一句话：对用户就是「体检有异常 → App 里出现随访问卷 + 复查提醒 → 点进去回答几个健康问题 → 完成」。
+它是系统自动发的**固定问卷 + 异常指标复查清单**，不是医生在线随访；全程**无推送、靠轮询**。
 
 ---
 
@@ -256,6 +276,6 @@ App 若用非 user 角色会 403；请只用 app-login 的 user token。
 
 ## 9. 变更同步纪律
 
-- 改动本功能的**接口路径/参数/字段/错误码/校验**时，三处文档必须同步：本文档、`docs/app-integration-guide.md` §8.4（含 §10 映射表、错误码、检查单）、`AGENTS.md`「检后随访表」。
+- 改动本功能的**接口路径/参数/字段/错误码/校验**时，三处文档必须同步：本文档、`docs/app-integration-guide.md` §8.3（含 §10 映射表、错误码、检查单）、`AGENTS.md`「检后随访表」。
 - 平台模板题目改版只影响**之后**生成的问卷（快照），但**这是产品行为而非接口变更**，App 无需改。
 - 后端回归：`cd backend && .venv/bin/python -m pytest -q tests/followup`。

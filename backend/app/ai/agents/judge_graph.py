@@ -10,7 +10,6 @@ max_tokens 截断,然后 hermes parser 报 "EOF while parsing a list at line
 32767"(参见 errorRecord.md 2026-07-14 第二次事故)。改用纯文本模式 + 显式
 strip_think_tags + json/repair_json 解析,thinking 就能正常吐出再被剥离。
 """
-import asyncio
 import json
 import logging
 import re
@@ -21,6 +20,7 @@ from langchain.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.ai.agents.think_filter import strip_think_tags
+from app.ai.async_run import run_async
 from app.ai.llm import get_chat_model, _guarded
 
 logger = logging.getLogger("app.judge")
@@ -137,7 +137,7 @@ def run_judge(state: dict) -> dict:
     t0 = time.time()
     try:
         model = build_judge_model()
-        resp = asyncio.run(_guarded(model.ainvoke([
+        resp = run_async(_guarded(model.ainvoke([
             ("system", JUDGE_SYSTEM_PROMPT),
             ("user", review_text),
         ]))).content

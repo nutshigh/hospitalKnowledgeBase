@@ -131,6 +131,26 @@ def test_T13_sweeper_starts_on_startup_and_cancels_on_shutdown():
         assert main_mod.app.state.batch_sweeper_task.cancelled()
 
 
+def test_interp_watchdog_starts_on_startup_and_cancels_on_shutdown():
+    """startup hook 创建解读看门狗任务; shutdown 取消它。"""
+    import app.main as main_mod
+
+    started = []
+
+    async def _fake_start():
+        started.append(True)
+        await asyncio.Event().wait()
+
+    with patch.object(main_mod, "start_interp_watchdog", _fake_start):
+        with TestClient(main_mod.app) as client:
+            assert started, "start_interp_watchdog should have run on startup"
+            task = getattr(main_mod.app.state, "interp_watchdog_task", None)
+            assert task is not None
+            assert not task.cancelled()
+
+        assert main_mod.app.state.interp_watchdog_task.cancelled()
+
+
 def test_T14_setup_logging_called_in_create_app(monkeypatch):
     """create_app() 进入时 setup_logging 应被调用一次。"""
     import app.main as main_mod

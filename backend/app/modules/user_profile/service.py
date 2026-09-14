@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import logging
@@ -8,6 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+from app.ai.async_run import run_async
 from app.modules.report.models import ReportInfo, ReportIndicator
 from app.modules.interpretation.models import ReportInterpretation, IndicatorJudgment
 from app.core.term_normalizer import normalize_item_name
@@ -441,7 +441,7 @@ def _call_llm_for_change_overview(prompt: str) -> Optional[dict]:
     """调 MedGo 生成总览。失败/解析失败返回 None 并记 warning。"""
     try:
         model = get_chat_model(streaming=False)
-        resp = asyncio.run(_guarded(model.ainvoke([("user", prompt)], max_tokens=1024)))
+        resp = run_async(_guarded(model.ainvoke([("user", prompt)], max_tokens=1024)))
         return _parse_change_json(strip_think_tags(resp.content or ""))
     except Exception as e:
         logger.warning("change overview LLM call failed: %s", e)

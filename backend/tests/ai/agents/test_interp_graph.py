@@ -19,31 +19,6 @@ def test_build_interp_graph_returns_compiled():
         assert graph is not None
 
 
-def test_interp_knowledge_middleware_extracts_refs_dict():
-    """InterpKnowledgeMiddleware 从 search_knowledge 结果提取 {entry_id: ref}"""
-    import json
-    from langchain.messages import ToolMessage
-    from langgraph.types import Command
-    from app.ai.agents.interp_graph import InterpKnowledgeMiddleware
-
-    mw = InterpKnowledgeMiddleware()
-    tool_msg = ToolMessage(
-        content=json.dumps([{"entry_id": 101, "title": "知识A", "content": "...", "score": 0.9, "source": "document"}]),
-        tool_call_id="call_1",
-    )
-    request = MagicMock()
-    request.tool_call = {"name": "search_knowledge", "id": "call_1", "args": {}}
-    handler = MagicMock(return_value=tool_msg)
-
-    result = mw.wrap_tool_call(request, handler)
-    assert isinstance(result, Command)
-    kr = result.update["knowledge_results"]
-    assert 101 in kr
-    assert kr[101]["entry_id"] == 101
-    assert kr[101]["title"] == "知识A"
-    assert kr[101]["source"] == "document"
-
-
 def test_report_interpretation_has_summary_refs_and_quality_note():
     """ReportInterpretation 模型含 summary_refs / quality_note 字段"""
     from app.modules.interpretation.models import ReportInterpretation
@@ -265,6 +240,62 @@ def test_generate_report_increments_judge_retry_count_on_abnormal_branch():
         mock_inj.side_effect = lambda text, sources, **kw: (text, [])
         result = _generate_report(state, MagicMock())
     assert result["judge_retry_count"] == 1
+
+
+def test_generate_report_does_not_use_asyncio_run(monkeypatch):
+    """回归(report 33): 反复 asyncio.run 会让 langchain 共享 httpx client 跨已关闭
+    循环 → APIConnectionError。_generate_report 必须走 run_async(常驻循环)。"""
+    import asyncio
+    from app.ai.agents.interp_graph import _generate_report
+
+    def _boom(*a, **k):
+        raise AssertionError("asyncio.run must not be used")
+
+    monkeypatch.setattr(asyncio, "run", _boom)
+    state = {
+        "abnormal_indicators": [{"indicator_id": 5, "item_name": "ALT", "result_value": "62",
+                                 "unit": "U/L", "ref_range_low": "0", "ref_range_high": "40",
+                                 "deviation": "high", "color_level": "yellow"}],
+        "knowledge_results": {},
+        "user_id": "123456", "name": "张三", "hospital_id": "H001", "report_id": 1,
+        "overall_level": "yellow", "red_count": 0, "yellow_count": 1, "green_count": 10,
+    }
+    with patch("app.ai.agents.interp_graph.build_report_model") as mock_build, \
+         patch("app.ai.agents.interp_graph.inject_citations",
+               side_effect=lambda t, s, **k: (t, [])), \
+         patch("app.ai.agents.interp_graph.strip_think_tags", side_effect=lambda x: x):
+        m = MagicMock()
+        mock_build.return_value = m
+        m.ainvoke = AsyncMock(return_value=MagicMock(
+            content='{"overall_summary":"S","abnormal_focus":"A","trend_note":"T",'
+                    '"suggestions":"G","risk_alert":"R"}'))
+        result = _generate_report(state, MagicMock())
+    assert result["report"].overall_summary == "S"
+
+
+def test_run_judge_does_not_use_asyncio_run(monkeypatch):
+    """judge 同样走 run_async, 不再 asyncio.run(共享 httpx client 回归)。"""
+    import asyncio
+    from app.ai.agents.judge_graph import run_judge
+    from app.ai.agents.interp_graph import InterpretationReport
+
+    def _boom(*a, **k):
+        raise AssertionError("asyncio.run must not be used")
+
+    monkeypatch.setattr(asyncio, "run", _boom)
+    state = {
+        "report": InterpretationReport(overall_summary="x", abnormal_focus="x",
+                                        trend_note="", suggestions="", risk_alert=""),
+        "references": [{"ref_id": 1, "entry_id": 12, "title": "A", "source": "document"}],
+        "abnormal_indicators": [{"indicator_id": 5, "item_name": "ALT", "result_value": "62",
+                                  "unit": "U/L", "deviation": "high", "color_level": "yellow"}],
+    }
+    with patch("app.ai.agents.judge_graph.build_judge_model") as mb, \
+         patch("app.ai.agents.judge_graph.strip_think_tags", side_effect=lambda x: x):
+        mb.return_value = MagicMock(ainvoke=AsyncMock(return_value=MagicMock(
+            content='{"passed": true, "issues": [], "suggestions": ""}')))
+        res = run_judge(state)
+    assert res["passed"] is True
 
 
 def test_router_returns_summaries_and_references():

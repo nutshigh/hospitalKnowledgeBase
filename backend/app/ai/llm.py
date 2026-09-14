@@ -16,7 +16,8 @@ async def _guarded(coro):
 
 
 def get_chat_model(streaming: bool = False, no_think: bool = False,
-                   request_timeout: float | None = None) -> ChatOpenAI:
+                   request_timeout: float | None = None,
+                   max_retries: int = 0) -> ChatOpenAI:
     """根据 LLM_PROVIDER 构造 LangChain ChatOpenAI。
 
     local  → 本地 MedGo (Qwen3-32B 医疗模型) via vLLM serve (OpenAI 兼容接口)
@@ -25,6 +26,10 @@ def get_chat_model(streaming: bool = False, no_think: bool = False,
     no_think=True 时禁用 Qwen3 thinking(extra_body enable_thinking=false):
     用于"提取/格式化"类任务(指标解析、结论/异常提取),该场景长思考会拖慢
     链路数分钟至数十分钟;解读/聊天等需要思考质量的任务保持默认(False)。
+
+    max_retries 默认 0: 关闭 openai SDK 的自动重试(其默认 2)。否则单请求
+    600s 超时会被重发 3 次(≈30min), 与 RabbitMQ consumer_timeout(30min)撞车
+    导致消息丢失(report 31 事故)。快速失败交由应用层重试队列兜底。
     """
     extra_body = None
     if no_think:
@@ -39,6 +44,7 @@ def get_chat_model(streaming: bool = False, no_think: bool = False,
             timeout=request_timeout,
             streaming=streaming,
             extra_body=extra_body,
+            max_retries=max_retries,
         )
     # local: MedGo via vLLM
     return ChatOpenAI(
@@ -50,4 +56,5 @@ def get_chat_model(streaming: bool = False, no_think: bool = False,
         timeout=request_timeout,
         streaming=streaming,
         extra_body=extra_body,
+        max_retries=max_retries,
     )

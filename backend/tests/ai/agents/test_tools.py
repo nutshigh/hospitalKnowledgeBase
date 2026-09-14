@@ -27,13 +27,6 @@ def test_chat_tools_contains_six_names():
     }
 
 
-def test_interp_tools_contains_two_names():
-    """INTERP_TOOLS 只含 search_knowledge + get_triage_rules"""
-    from app.ai.agents.tools import INTERP_TOOLS
-    names = {t.name for t in INTERP_TOOLS}
-    assert names == {"search_knowledge", "get_triage_rules"}
-
-
 def test_agent_context_dataclass():
     """AgentContext 包含 hospital_id/report_id/user_id/name"""
     from app.ai.agents.tools import AgentContext

@@ -7,6 +7,7 @@ from app.core.logging_config import setup_logging
 from app.core.rabbitmq import rabbitmq, _NackOnce, TaskMessage
 from app.core.retry import backoff_for_retry, is_bulk_window_now
 from app.ai.agents import run_interpretation_agent
+from app.ai.async_run import run_async
 from app.modules.report.batch_service import BatchService
 
 _log = logging.getLogger("app.interp.worker")
@@ -80,8 +81,7 @@ def handle_interpretation_task(message: dict):
                             "SELECT COUNT(*) FROM indicator_judgment ij JOIN report_indicator ri ON ij.indicator_id = ri.id WHERE ij.interpretation_id = :iid AND ri.raw_text IS NOT NULL"
                         ), {"iid": existing.id}).scalar()
                         if not has_ab:
-                            import asyncio
-                            items = asyncio.run(_extract_abnormalities_async(
+                            items = run_async(_extract_abnormalities_async(
                                 report_info.conclusion_text,
                                 weak_candidates=_weak_candidates_enabled(db, report_id)))
                             if items:
@@ -127,8 +127,7 @@ def handle_interpretation_task(message: dict):
                         ReportInterpretation.status == "completed",
                     ).order_by(ReportInterpretation.id.desc()).first()
                     if interp:
-                        import asyncio
-                        items = asyncio.run(_extract_abnormalities_async(
+                        items = run_async(_extract_abnormalities_async(
                                 report_info.conclusion_text,
                                 weak_candidates=_weak_candidates_enabled(db, report_id)))
                         if items:

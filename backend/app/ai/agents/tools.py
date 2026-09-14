@@ -186,5 +186,3 @@ CHAT_TOOLS: list[BaseTool] = [
     search_knowledge, get_report_indicators, get_report_summary,
     get_user_history_reports, get_indicator_history, get_triage_rules,
 ]
-
-INTERP_TOOLS: list[BaseTool] = [search_knowledge, get_triage_rules]

@@ -1,24 +1,17 @@
-import asyncio
 import json
 import logging
 import re
 import time
 from datetime import datetime
-from typing import Annotated, List, Optional, TypedDict
+from typing import List, Optional, TypedDict
 
-from langchain.agents import AgentState, create_agent
-from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.structured_output import ToolStrategy
-from langchain.messages import HumanMessage, ToolMessage
-from langchain.tools.tool_node import ToolCallRequest
 from langgraph.graph import StateGraph, END
-from langgraph.types import Command
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from typing_extensions import NotRequired
 
-from app.ai.agents.tools import AgentContext, INTERP_TOOLS
+from app.ai.async_run import run_async
+from app.ai.agents.knowledge_search import run_knowledge_search
 from app.ai.agents.think_filter import strip_think_tags
 from app.ai.agents.citation_matcher import inject_citations
 from app.ai.agents.judge_graph import run_judge
@@ -45,22 +38,6 @@ def _fix_ref_range(ind: dict) -> None:
             ind["ref_range_high"] = m.group(2)
 
 logger = logging.getLogger("app.interp")
-
-SEARCH_SYSTEM_PROMPT = """你是医学知识检索工具的执行器。你**唯一**能做的是对每个异常指标调用 search_knowledge 工具。
-
-强制规则：
-- 禁止输出任何医学分析、解读、建议或诊断——你只负责检索，不做判断
-- 对用户列出的每一个指标名，必须分别调用一次 search_knowledge（使用指标名作为查询词）
-- 如果某个指标第一次没搜到好结果，换一个查询词再试一次
-- 所有指标检索完成后，用 ConfirmSchema 汇报已完成的指标列表
-- 绝对不要直接回答用户——你必须使用工具
-
-如果用户没有列出指标，直接用 ConfirmSchema 返回空列表。"""
-
-
-class ConfirmSchema(BaseModel):
-    searched_indicators: list[str] = Field(default_factory=list, description="已完成检索的指标名称列表")
-
 
 GENERATE_SYSTEM_PROMPT = """你是专业的体检报告解读医生助手。基于提供的医学知识和异常指标，撰写一份结构化的综合解读报告。
 
@@ -95,16 +72,6 @@ class Citation(BaseModel):
     source: str = "document"
 
 
-def _merge_knowledge_results(current: dict, update: dict) -> dict:
-    merged = dict(current or {})
-    merged.update(update or {})
-    return merged
-
-
-class InterpAgentState(AgentState):
-    knowledge_results: Annotated[dict, _merge_knowledge_results]
-
-
 class InterpState(TypedDict):
     hospital_id: str
     report_id: int
@@ -122,202 +89,6 @@ class InterpState(TypedDict):
     green_count: int
     judge_result: dict
     judge_retry_count: int
-
-
-def _extract_refs_dict_from_tool_result(result) -> dict:
-    msgs = []
-    if isinstance(result, Command):
-        msgs = (result.update or {}).get("messages", [])
-    else:
-        msgs = [result]
-    refs_dict = {}
-    for m in msgs:
-        if isinstance(m, ToolMessage):
-            try:
-                data = json.loads(m.content)
-                if isinstance(data, list):
-                    for r in data:
-                        eid = r.get("entry_id")
-                        source = r.get("source", "document")
-                        content = r.get("content", "")
-                        title = r.get("title", "")
-                        if eid is not None:
-                            refs_dict[eid] = {"entry_id": eid, "title": title, "source": source, "content": content}
-                        elif source == "knowledge_graph":
-                            kg_key = f"kg:{title}"
-                            if kg_key not in refs_dict:
-                                refs_dict[kg_key] = {"entry_id": None, "title": title, "source": "knowledge_graph", "content": content}
-            except (json.JSONDecodeError, TypeError):
-                pass
-    return refs_dict
-
-
-class InterpKnowledgeMiddleware(AgentMiddleware):
-    def wrap_tool_call(self, request: ToolCallRequest, handler):
-        result = handler(request)
-        if request.tool_call["name"] == "search_knowledge":
-            refs_dict = _extract_refs_dict_from_tool_result(result)
-            if refs_dict:
-                if isinstance(result, Command):
-                    update = dict(result.update or {})
-                    update["knowledge_results"] = refs_dict
-                    return Command(update=update)
-                return Command(update={"knowledge_results": refs_dict, "messages": [result]})
-        return result
-
-    async def awrap_tool_call(self, request: ToolCallRequest, handler):
-        # 异步路径同步实现:agent_search_knowledge 用 asyncio.run(agent.ainvoke(...))
-        # 走 langgraph 的 ainvoke 链路,会调用 awrap_tool_call 而非 sync wrap_tool_call。
-        # 不实现 awrap_tool_call 会抛 NotImplementedError 导致解读失败(retry_count=3)。
-        result = await handler(request)
-        if request.tool_call["name"] == "search_knowledge":
-            refs_dict = _extract_refs_dict_from_tool_result(result)
-            if refs_dict:
-                if isinstance(result, Command):
-                    update = dict(result.update or {})
-                    update["knowledge_results"] = refs_dict
-                    return Command(update=update)
-                return Command(update={"knowledge_results": refs_dict, "messages": [result]})
-        return result
-
-
-
-# === 2026-09-10: 工具调用守卫(planner 层容错) ===
-# 背景: MedGo/vLLM 一次生成的批量检索 tool_calls 超长被截断 → arguments JSON 非法 →
-# 请求历史携带坏串 → vLLM 400(Invalid JSON, function-wrap 校验)→ 解读 failed 重试 3 次。
-# 策略(不改模型): 请求前清洗历史(防 400); 响应后校验/限流(防坏调用执行与入历史);
-# 超长 query 截断(保留调用, 尽量不丢覆盖面), 非法调用丢弃并记日志。
-_GUARD_MAX_QUERY = 600      # 单个参数超长截断(检索 query 无需超长)
-_GUARD_MAX_CALLS = 12       # 单轮工具调用数量上限(超出丢弃并在日志计数)
-
-
-def _guard_sanitize_tool_calls(tool_calls):
-    keep, dropped = [], 0
-    for tc in tool_calls or []:
-        try:
-            args = tc.get("args")
-            if isinstance(args, str):
-                args = json.loads(args)  # 截断的 JSON 会在此抛错 → 丢弃
-            if not isinstance(args, dict):
-                raise ValueError("args not dict")
-            fixed = {}
-            changed = False
-            for k, v in args.items():
-                if isinstance(v, str) and len(v) > _GUARD_MAX_QUERY:
-                    v = v[:_GUARD_MAX_QUERY]
-                    changed = True
-                fixed[k] = v
-            keep.append({**tc, "args": fixed} if changed else tc)
-        except Exception:
-            dropped += 1
-    if len(keep) > _GUARD_MAX_CALLS:
-        dropped += len(keep) - _GUARD_MAX_CALLS
-        keep = keep[:_GUARD_MAX_CALLS]
-    return keep, dropped
-
-
-def _guard_raw_tool_calls_bad(raw_tcs) -> bool:
-    """additional_kwargs["tool_calls"] 原始串中是否存在非法 arguments JSON。"""
-    for tc in raw_tcs or []:
-        if not isinstance(tc, dict):
-            continue
-        fn = tc.get("function")
-        args = fn.get("arguments") if isinstance(fn, dict) else None
-        if isinstance(args, str) and args.strip():
-            try:
-                json.loads(args)
-            except Exception:
-                return True
-    return False
-
-
-def _guard_sanitize_message(m):
-    """返回 (消息, 丢弃数); 清洗三处坏 tool-call 串(2026-09-12 修复不完整问题):
-    ①tool_calls: args 非法/超长(截断或丢弃);
-    ②invalid_tool_calls: 截断 JSON 被 langchain 归档于此, **tool_calls 会为空** ——
-      旧守卫 `if not tcs: return` 直接跳过, 坏串随请求历史回传 vLLM(function-wrap
-      校验 400, H003-22 实例), 现一并清空;
-    ③additional_kwargs["tool_calls"]: 请求重建的原始坏串, 检测到非法 arguments 即清除。
-    """
-    tcs = list(getattr(m, "tool_calls", None) or [])
-    inv = list(getattr(m, "invalid_tool_calls", None) or [])
-    akw = dict(getattr(m, "additional_kwargs", None) or {})
-    raw_bad = _guard_raw_tool_calls_bad(akw.get("tool_calls"))
-    keep, dropped = _guard_sanitize_tool_calls(tcs)
-    dropped += len(inv)
-    if not dropped and not raw_bad and keep == tcs and not inv:
-        return m, 0
-    upd = {"tool_calls": keep, "invalid_tool_calls": []}
-    if raw_bad:
-        akw.pop("tool_calls", None)
-        upd["additional_kwargs"] = akw
-    try:
-        return m.model_copy(update=upd), dropped
-    except Exception:
-        return m, 0
-
-
-class ToolCallGuardMiddleware(AgentMiddleware):
-    """请求前/响应后的 tool_calls 守卫(防 vLLM Invalid JSON 400; 限批量/长度)。"""
-
-    def _sanitize_request(self, request):
-        dropped = 0
-        new_msgs = []
-        for m in request.messages:
-            nm, d = _guard_sanitize_message(m)
-            new_msgs.append(nm)
-            dropped += d
-        if dropped:
-            logger.warning("toolcall guard: 请求历史清洗, 丢弃 %d 个坏/超限 tool_call", dropped)
-            return request.override(messages=new_msgs), dropped
-        return request, 0
-
-    def _sanitize_response(self, response):
-        dropped = 0
-        result = getattr(response, "result", None)
-        if result is None:
-            nm, d = _guard_sanitize_message(response)
-            if d:
-                logger.warning("toolcall guard: 响应清洗, 丢弃 %d 个坏/超限 tool_call", d)
-            return nm
-        new_res = []
-        changed = False
-        for m in result:
-            nm, d = _guard_sanitize_message(m)
-            new_res.append(nm)
-            dropped += d
-            if nm is not m:
-                changed = True
-        if dropped:
-            logger.warning("toolcall guard: 响应清洗, 丢弃 %d 个坏/超限 tool_call", dropped)
-        if changed:
-            response.result = new_res
-        return response
-
-    def wrap_model_call(self, request, handler):
-        request, _ = self._sanitize_request(request)
-        return self._sanitize_response(handler(request))
-
-    async def awrap_model_call(self, request, handler):
-        request, _ = self._sanitize_request(request)
-        return self._sanitize_response(await handler(request))
-
-
-def build_interp_agent():
-    # 2026-08-27: 解读改 no_think —— MedGo 思考模式下长报告单条 15-40 分钟,
-    # 解读为结构化 JSON 提取/生成, 思考收益低; no_think 约 3-5 分钟/条。
-    # 2026-09-12: 单请求超时 600s —— 模型退化循环(重复"研究分析…"直到截断)曾挂
-    # 12 分钟才由服务端 400 报错, 超时中断交由重试(正常单步 far below 600s)。
-    model = get_chat_model(streaming=False, no_think=True, request_timeout=600)
-    model.max_tokens = 16384
-    return create_agent(
-        model=model,
-        tools=INTERP_TOOLS,
-        system_prompt=SEARCH_SYSTEM_PROMPT,
-        response_format=ToolStrategy(ConfirmSchema),
-        middleware=[InterpKnowledgeMiddleware(), ToolCallGuardMiddleware()],
-        state_schema=InterpAgentState,
-    )
 
 
 def build_report_model():
@@ -425,7 +196,7 @@ def _generate_report(state: InterpState, db: Session) -> dict:
 按 system 提示的 5 节字段返回 JSON。"""
 
     model = build_report_model()
-    resp = asyncio.run(_guarded(model.ainvoke([
+    resp = run_async(_guarded(model.ainvoke([
         ("system", GENERATE_SYSTEM_PROMPT),
         ("user", user_content),
     ]))).content
@@ -613,23 +384,10 @@ def build_interp_graph(hospital_id: str, db: Session):
         return {"abnormal_indicators": abnormal}
 
     def agent_search_knowledge(state: InterpState) -> dict:
-        if not state.get("abnormal_indicators"):
-            return {"knowledge_results": {}}
-        names = [ind["item_name"] for ind in state["abnormal_indicators"]]
-        agent = build_interp_agent()
-        all_results = {}
-        batch_size = 10
-        for i in range(0, len(names), batch_size):
-            batch = names[i:i + batch_size]
-            user_content = "\n".join(f"- {n}" for n in batch)
-            result = asyncio.run(_guarded(agent.ainvoke(
-                {"messages": [HumanMessage(content=user_content)]},
-                config={"recursion_limit": settings.AGENT_MAX_ITERATIONS * 2},
-                context=AgentContext(hospital_id=state["hospital_id"]),
-            )))
-            batch_results = result.get("knowledge_results", {}) or {}
-            all_results.update(batch_results)
-        return {"knowledge_results": all_results}
+        # 2026-09-13: 改确定性 planner/executor(见 knowledge_search.py), 消除模型
+        # 自驱 ReAct 循环。节点名保持不变以免改图边。
+        return {"knowledge_results": run_knowledge_search(
+            state["hospital_id"], state.get("abnormal_indicators") or [])}
 
     def generate_report(state: InterpState) -> dict:
         return _generate_report(state, db)

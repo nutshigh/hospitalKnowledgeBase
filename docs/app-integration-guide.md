@@ -137,7 +137,12 @@ curl -X POST http://localhost:8000/api/v1/auth/app-login \
   app-login 换新 token 重试一次。
 - **医院隔离**：`hospital_id` 从 JWT 取，前端/App **不要传**。数据按用户所在医院库隔离。
 - **双锚定**：`role='user'` 时后端用 `user_id == 后六位 AND name == 姓名` 双条件过滤
-  报告/会话。因此一个用户**只能看到/操作自己的数据**。
+  **列表类**接口（`GET /reports`、`chat/sessions*`、`profile/*`、`followup/*`、
+  `notifications/*`），用户只能看到/操作自己的数据。
+- **已知差异（报告详情/删除，勿依赖此处隔离）**：`GET /reports/{report_id}` 与
+  `DELETE /reports/{report_id}` **未做**双锚定归属校验，仅按 JWT 医院库内的
+  `report_id` 定位。即持有同院有效 user token 时，拿到任意 `report_id` 即可读取/删除
+  （可能为他人报告）。App 侧不要据此接口做越权假设，隔离需以后端补齐校验为准。
 
 ---
 
@@ -349,22 +354,52 @@ GET /api/v1/profile/overview
 ```
 
 响应：`{ user_summary, indicator_trends, abnormal_distribution }`（无数据时各为空/None）。
+`user_summary` 含累计报告数、最早/最近日期、最近一份的红/黄/绿计数与总体等级；
+`abnormal_distribution` 为历史异常指标分布（最多 20 项）。
 
-### 8.2 报告对比
+> **走势入选（2026-09-10 起）**：`indicator_trends` 由该用户最近
+> `PROFILE_TREND_REPORT_LIMIT`（默认 3）份报告聚合，仅保留窗口内**出现过红/黄**的指标
+> （含血常规子项，正常/绿色的指标不出现），每份报告 ≤1 点；排序为「最近一次异常 红>黄 →
+> 极差降序 → 标准名」，上限 `PROFILE_TREND_MAX_ITEMS`（默认 10）。每项含 `item_name`、
+> `item_name_standard`、`unit`、`points[]`、`trend_direction`、`latest_deviation`。
+
+### 8.2 跨报告健康变化总览
 
 ```
-GET /api/v1/profile/compare?report_id=<required>&baseline_id=<optional>
+GET /api/v1/profile/change-overview
 ```
 
-### 8.3 AI 总结
+自动对比该用户**最近 N 份已完成 AI 解读**（`report_interpretation.status='completed'`）的报告，
+`N = PROFILE_TREND_REPORT_LIMIT`（默认 3，按 `report_date` 升序取最近 N 份，无日期的报告视为最旧）。
+**一次返回全部数据**，供 App 直接渲染，无需二次轮询。`role='user'` 双锚定接口，
+app-login JWT **直接可用**。
 
-```
-GET /api/v1/profile/ai-summary?report_id=<required>&baseline_id=<required>
-```
+响应：
 
-响应：`{ "ai_summary": "<文本>", "cached": <bool> }`。
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| reports | list | 窗口内每份报告头，按日期升序：`report_id`/`report_date`/`overall_level`/`red_count`/`yellow_count`/`green_count` |
+| covered | int | 窗口内报告数 |
+| reason | string\|null | 仅不足 2 份时返回 `"insufficient"` |
+| key_indicators | list | 关键指标（见下）；窗口内无异常时为空 |
+| summary | object\|null | MedGo 生成的四键 `{ trend_summary, conclusion, suggestions, precautions }`；生成/解析失败为 `null` |
+| cached | bool | 是否命中服务端缓存 |
 
-### 8.4 检后随访与复查提醒 `followup` / `notifications`
+`key_indicators[]` 每项：`item_name`、`item_name_standard`、`unit`、`latest_value`（字符串原样）、
+`latest_color`（最新一份的判定色，red/yellow/green/null）、`direction`（up/down/null）、
+`delta_pct`（首尾变化百分比，可 null）、`points[]`（`{report_id, report_date, value, color, item_name, unit}` 升序）。
+
+行为要点：
+- 入选与「指标走势」**同口径**：窗口内任一点红/黄即入选（含血常规子项），排序为「最近一次
+  异常 红>黄 → 极差降序 → 标准名」，上限 `PROFILE_TREND_MAX_ITEMS`（默认 10）。
+- **不足 2 份**已完成解读报告时降级返回，不报错：
+  `{ reports:[], covered:<已解读数>, reason:"insufficient", key_indicators:[], summary:null, cached:false }`。
+- `summary` 首次生成或缓存失效时同步调 MedGo，可能需数秒；命中缓存则秒回。App 可先渲染
+  `reports`/`key_indicators`，再填 `summary`；`summary` 为 `null` 时正常展示其余字段即可。
+- 解读 worker 完成解读后会预热缓存；窗口变化（报告增减/重解读）自动失效重算。
+- 无后六位存量用户返回 `covered=0` 的降级结构。
+
+### 8.3 检后随访与复查提醒 `followup` / `notifications`
 
 > **专项展开版**（含完整字段/校验/轮询约定/前端参考实现/注意点）见
 > `docs/followup-app-integration.md`，App 接入优先读那份。
@@ -431,7 +466,7 @@ GET /api/v1/auth/me
 | UploadPage | `POST /reports/upload` + `GET /reports/tasks/{id}` 轮询 |
 | ReportDetailPage | `GET /reports/{id}`、`GET /interpretations/{id}`、`GET /reports/tasks/{id}`、`DELETE /reports/{id}`、会话创建/消息 |
 | ChatPage / ChatPanel | `GET /chat/sessions`、`POST /chat/sessions`、`GET /chat/sessions/{id}/messages`、`POST /chat/sessions/{id}/messages`(SSE) |
-| ProfilePage | `GET /profile/overview`、`GET /profile/compare`、`GET /profile/ai-summary` |
+| ProfilePage | `GET /profile/overview`、`GET /profile/change-overview` |
 | 报告详情指标折叠展示 | `GET /reports/{id}` / `GET /interpretations/{id}` 按 `module_order`+`indicators[].group` 分组折叠渲染 |
 | 随访中心 / 问卷填写 | `GET /followup/center`、`GET /followup/{id}`、`POST /followup/{id}/submit` |
 | 随访 tab 未读红点 | `GET /notifications/unread-count`（每 30s 轮询） |
@@ -471,4 +506,5 @@ GET /api/v1/auth/me
 - [ ] 填问卷 `POST /followup/{id}/submit` 成功 → 该随访 `status=completed`；重复提交 → 400
 - [ ] 建会话 → SSE 发消息 → 收到 token/done 事件
 - [ ] `GET /profile/overview` 返回画像
+- [ ] `GET /profile/change-overview`：≥2 份已完成解读报告返回 `covered>=2` + `key_indicators`；不足 2 份返回 `reason=insufficient`（不报错）
 - [ ] token 到期后重调 app-login 幂等换新
