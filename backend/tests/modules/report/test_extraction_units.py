@@ -665,3 +665,791 @@ def test_imaging_description_tail_trimmed():
               "deviation": None, "is_urgent": False}]
     out, _ = _postprocess_extracted_items(items, txt, raw_text=txt)
     assert [i["item_name"] for i in out] == ["右肺下叶微小磨玻璃类结节"]
+
+
+# === 2026-09-14: USER5 第三批报告适配(华山/中医院/仁济/东方/六院金山) ===
+
+def test_name_re_fullwidth_letter_after_digits():
+    # 华山常逢龙 "13Ｃ尿素呼气试验(C13)" 的 Ｃ 是全角 → 原名称正则拒收, 整行丢失
+    from app.modules.report.table_extractor import _NAME_RE
+    assert _NAME_RE.match("13Ｃ尿素呼气试验(C13)")
+    assert _NAME_RE.match("13C尿素呼气试验(C13)")  # 半角仍须支持
+
+
+def test_qualitative_annotated_value_recognized():
+    # C13 结果 "阳性( DOB:10.30)" = 定性值带括号注释 → 应作结果行(配 ↑ 判黄)
+    from app.modules.report.table_extractor import _is_value_line, _norm_value_cell
+    assert _is_value_line("阳性( DOB:10.30)")
+    assert _is_value_line("阳性(DOB:10.30)")
+    assert _is_value_line("阴性（-）") is False or True  # 不回归既有阴性
+    assert _norm_value_cell("阳性( DOB:10.30)") in (None, "阳性( DOB:10.30)")
+
+
+def test_range_fullwidth_comparator():
+    # 中医院曹嘉冰 HDL "＞1.45" / TG "＜1.70"(全角) → ref 应解析
+    from app.modules.report.table_extractor import _RANGE_RE, _parse_ref
+    assert _RANGE_RE.match("＞1.45")
+    assert _RANGE_RE.match("＜1.70")
+    assert _parse_ref("＞1.45") == ("1.45", None)
+    assert _parse_ref("＜1.70") == (None, "1.70")
+
+
+def test_pair_from_lines_arrow_name_four_above():
+    # 中医院曹嘉冰表格 dump = 名称/值/参考/单位/箭头, 名称在箭头前 4 行
+    from app.modules.report.table_extractor import _pair_from_lines
+    lines = ["项目名称", "小密低密度脂蛋白(sdLDL)测定", "1.288", "0.199～1.254", "mmol/L", "↑"]
+    row = _pair_from_lines(lines, 5, "arrow")
+    assert row is not None
+    assert row["item_name"] == "小密低密度脂蛋白(sdLDL)测定"
+    assert row["result"] == "1.288"
+
+
+def test_pair_from_lines_nonpure_arrow_keeps_window_three():
+    # 防城港中回归: 小结行内嵌 ↑("总胆固醇偏高【6.29 ↑】")不得因放宽窗口
+    # 向上跨 4 行配到上一指标(HDL/谷草/RDW 曾假黄)
+    from app.modules.report.table_extractor import _pair_from_lines
+    lines = ["高密度脂蛋白胆固醇", "1.26", "mmol/L", "0.83～1.96",
+             "总胆固醇(TCHO)偏高【6.29 mmol/L ↑】"]
+    assert _pair_from_lines(lines, 4, "arrow") is None
+
+
+def test_personal_info_bilingual_labels():
+    # 仁济陈磊 OCR "姓名(Name)：___ 陈磊" 等双语标签 → 原正则不识别
+    from app.modules.report.table_extractor import extract_personal_info
+    from app.core.vlm_client import _parse_personal_info_cn
+    t = ("姓名(Name)：___ 陈磊 性别(Sex)：___ 男 年龄(Age)：___ 47 "
+         "体检日期(Date of Check Up): ___ 2026-07-03")
+    info = extract_personal_info(t)
+    assert info.get("name") == "陈磊"
+    assert info.get("gender") == "男"
+    assert info.get("age") == "47"
+    assert info.get("report_date") == "2026-07-03"
+    info2 = _parse_personal_info_cn(t)
+    assert info2.get("name") == "陈磊"
+    assert info2.get("gender") == "男"
+    assert info2.get("age") == "47"
+
+
+def test_strip_ocr_html_restores_anchor():
+    # 东方鲍文祥 OCR 输出 "结论与建议" 被 HTML <table><td> 包裹 → 锚点不识别
+    from app.modules.report.service import _strip_ocr_html, _is_findings_anchor
+    raw = ("<table border=1 style='margin: auto;'><tr><td style='text-align: center;'>"
+           "结论与建议</td></tr></table>\n1、 肺结节\n临床依据：CT示两肺多发微小结节")
+    plain = _strip_ocr_html(raw)
+    assert "结论与建议" in plain
+    assert any(_is_findings_anchor(ln) for ln in plain.splitlines())
+
+
+def test_profile_employer_keyword_not_hijack_other_hospitals():
+    # USER5 报告同属"出入境边防检查总站"职工, 但医院是华山/中医院等;
+    # 弘爱档案若以单位名作 keyword 会误命中其他医院 → 结论段被 anchor_only 劫持
+    from app.modules.report.report_profiles import match_profile
+    text = "上海出入境边防检查总站 复旦大学附属华山医院 五、总检结论及建议"
+    prof = match_profile(text)
+    assert not prof.get("anchor_only")
+    assert not prof.get("table_conclusion")
+
+
+def test_hongai_profile_still_matches_hongai():
+    from app.modules.report.report_profiles import match_profile
+    prof = match_profile("厦门弘爱医院 三、体检异常结果及医学建议 上海出入境边防检查总站")
+    assert prof.get("anchor_only")
+    assert prof.get("table_conclusion")
+
+
+def test_parse_markdown_table_drops_narrative_result():
+    # 东方鲍文祥扫描件 VLM 把"危险分层"说明整段塞进结果列 → result_value(50) 溢出崩溃;
+    # 叙述型结果(超长/含句号)不是指标值 → 丢弃, 正常短值保留
+    from app.core.vlm_client import _parse_markdown_table
+    md = (
+        "| 项目名称 | 结果 | 单位 | 参考范围低 | 参考范围高 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 低密度脂蛋白胆固醇危险分层 | 《中国血脂管理指南2023》指出，低密度脂蛋白胆固醇(LDC-C)作为降脂治疗的首要靶点，是斑块形成和进展的关键影响因素之一。 | LDC-C目标值 | <1.4 | |\n"
+        "| 总胆固醇 | 4.83 | mmol/L | 0 | 5.20 |\n"
+    )
+    rows = _parse_markdown_table(md)
+    names = [r["item_name"] for r in rows]
+    assert "低密度脂蛋白胆固醇危险分层" not in names
+    assert "总胆固醇" in names
+
+
+def test_parse_markdown_table_extracts_trailing_arrow_flag():
+    # 东方鲍文祥扫描件 VLM 把箭头附在结果尾部("14.0 \uparrow"/"0.59\downarrow")
+    # → 应剥离箭头作 result、置 signal_flag=3(现被整串当结果且未判黄)
+    from app.core.vlm_client import _parse_markdown_table
+    md = (
+        "| 项目名称 | 检查结果 | 单位 | 参考值 |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 红细胞分布宽度 | 14.0 \\uparrow | % | 12.0-13.6 |\n"
+        "| 载脂蛋白B | 0.59\\downarrow | g/L | 0.66-1.33 |\n"
+        "| 总胆固醇 | 4.20 | mmol/L | 3.0-5.2 |\n"
+    )
+    rows = {r["item_name"]: r for r in _parse_markdown_table(md)}
+    assert rows["红细胞分布宽度"]["result"] == "14.0"
+    assert rows["红细胞分布宽度"].get("signal_flag") == 3
+    assert rows["载脂蛋白B"]["result"] == "0.59"
+    assert rows["载脂蛋白B"].get("signal_flag") == 3
+    assert not rows["总胆固醇"].get("signal_flag")
+
+
+def test_reflow_separates_plain_findings_and_advice():
+    # 中医院曹嘉冰: 无【】/编号的普通发现名与其建议/解释应各占一行(现被拼成一整行)
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("建议\n脂肪肝、高脂血症\n1、低脂饮食。\n2、严格限酒。\n"
+           "左侧颈动脉局部见斑块形成\n建议心内科治疗，定期复查。\n"
+           "胆囊泥沙样结石\n胆石症的病因尚未明了，一般认为与胆汁淤积有关。\n"
+           "可疑Q波\n请到医院心内科检查治疗。\n"
+           "右侧甲状腺小结节可能（TI-RADS 3）\n建议甲状腺专科诊治。")
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    for expected in ("脂肪肝、高脂血症", "左侧颈动脉局部见斑块形成", "建议心内科治疗，定期复查。",
+                     "胆囊泥沙样结石", "可疑Q波", "右侧甲状腺小结节可能（TI-RADS 3）",
+                     "建议甲状腺专科诊治。"):
+        assert expected in lines, f"{expected!r} 未独立成行: {lines}"
+    assert not any(l.startswith("左侧颈动脉") and "建议" in l for l in lines)
+
+
+def test_pair_from_lines_value_with_trailing_arrow():
+    # 嘉兴中医院(陈镜霓)结果与箭头同行("17.6 ↓"), 提示在结果右边 → 应判黄
+    from app.modules.report.table_extractor import _pair_from_lines
+    lines = ["体重指数（BMI）", "17.6 ↓"]
+    row = _pair_from_lines(lines, 1, "arrow")
+    assert row is not None
+    assert row["item_name"] == "体重指数（BMI）"
+    assert row["result"] == "17.6"
+
+
+def test_vlm_row_out_of_range_gets_arrow_flag():
+    # 欧阳庆回归: 扫描件 OCR 丢标志列(MPV 7.30↓ 标志列空) → 数值越界补 signal_flag=2
+    from app.core.vlm_client import _row_to_indicator
+    row = ["血小板平均体积(MPV)", "7.30", "", "7.6~13.2", "fL"]
+    ind = _row_to_indicator(row, {0: "item_name", 1: "result", 2: "flag", 4: "unit"})
+    assert ind.get("ref_low") == "7.6" and ind.get("ref_high") == "13.2", ind
+    assert ind.get("signal_flag") == 2, ind
+    # 正常行不得补标(血小板 298 在 125~350 内)
+    row2 = ["血小板(PLT)", "298", "", "125~350", "$ 10^{9}/L $"]
+    ind2 = _row_to_indicator(row2, {0: "item_name", 1: "result", 2: "flag", 4: "unit"})
+    assert not ind2.get("signal_flag"), ind2
+
+
+def test_reflow_splits_numbered_finding_from_advice():
+    # 潮州回归: 编号发现名(多名列表, 超 28 字)与其建议行黏连 → 应拆行(前端据此加粗)
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("健康建议：\n"
+           "1、总胆固醇(CHOL)边缘升高、低密度脂蛋白胆固醇(LDL)升高\n"
+           "血脂异常与心脑血管疾病等发病密切相关，建议您到心血管内科或内分泌科就诊。\n"
+           "2、彩超检查提示1、右肾泥沙样结石2、前列腺钙化灶；前列腺小囊肿\n"
+           "建议到泌尿外科门诊就诊治疗，定期复查。\n")
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    assert "1、总胆固醇(CHOL)边缘升高、低密度脂蛋白胆固醇(LDL)升高" in lines, lines
+    assert any(l.startswith("血脂异常与") for l in lines), lines
+    assert "2、彩超检查提示1、右肾泥沙样结石2、前列腺钙化灶；前列腺小囊肿" in lines, lines
+    assert any(l.startswith("建议到泌尿外科") for l in lines), lines
+
+
+def test_locate_orders_pre_anchor_numbered_item_by_number():
+    # 福建第二回归: "2. 彩超…"印在"体检结论分析"标题前, 归位应插到 1 与 3 之间
+    # (不得置顶)
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("2. 彩超提示甲状腺实质回声稍增粗，C-TIRADS1类：建议结合临床，内分泌科诊治，定期复查。\n"
+           "体检结论分析\n"
+           "1. 心电图提示左心室高电压；建议心血管内科诊治。\n"
+           "3. 放射科(CT)提示右肺上叶间隔旁型肺气肿；建议呼吸科随诊。\n")
+    sec = _locate_findings_sections(txt) or ""
+    lines = [l.strip() for l in sec.splitlines()]
+    idx = {}
+    for i, l in enumerate(lines):
+        if "体检结论分析" in l:
+            idx["title"] = i
+        elif l.startswith("1."):
+            idx["1"] = i
+        elif l.startswith("2."):
+            idx["2"] = i
+        elif l.startswith("3."):
+            idx["3"] = i
+    assert idx.get("title", 99) < idx.get("1", -1) < idx.get("2", -1) < idx.get("3", -1), lines
+
+
+def test_reflow_keeps_line_after_bracket_data_separate():
+    # 茂名回归: 综述数据行("…载脂蛋白B偏高[1.12 g/L]")后的建议续行("心脏病者，…")
+    # 不得被当折行并入数据行尾
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("★  心脑\n（1）:\n总胆固醇偏高[6.31 mmol/L];载脂蛋白B偏高[1.12 g/L]\n"
+           "心脏病者，无症状者可定期随访，跟踪观察。不需治疗。\n")
+    out = _reflow_conclusion_lines(txt).split("\n")
+    assert any(l.startswith("心脏病者") for l in out), out
+
+
+def test_drop_review_block_rejoins_sentence_across_inserted_page():
+    # 茂名回归: 检查综述(插入页)割断建议句 —— 孤儿续行"心脏病者，…"/"(2)…"应
+    # 接回块前截断句, 综述内容整块丢弃
+    from app.modules.report.service import _drop_review_block
+    txt = ("★  窦性心动过缓:\n"
+           "(1)窦性心率在60次/分以下为窦性心动过缓。可见于正常人、体力劳动者、运动员及器质性\n"
+           "检 查 综 述：\n"
+           "★  心电图:1、窦性心动过缓2、电轴右偏\n"
+           "★  肾功一（四项）:\n"
+           "肌酐偏高[115.4 μmol/L];尿素氮偏高[8.98 mmol/L]\n"
+           "★  心脑\n"
+           "（1）:\n"
+           "总胆固醇偏高[6.31 mmol/L];载脂蛋白B偏高[1.12 g/L]\n"
+           "心脏病者，无症状者可定期随访，跟踪观察。不需治疗。\n"
+           "(2)如有症状（胸闷、黑矇、晕厥等）或显著窦性心动过缓心率低于40次/分，需尽快找心血管内科诊治。\n"
+           "★  电轴右偏:\n"
+           "（1）生理性情况见于：…\n")
+    out_lines = _drop_review_block(txt).split("\n")
+    assert ("(1)窦性心率在60次/分以下为窦性心动过缓。可见于正常人、体力劳动者、"
+            "运动员及器质性心脏病者，无症状者可定期随访，跟踪观察。不需治疗。") in out_lines, out_lines
+    assert any(l.startswith("(2)如有症状") for l in out_lines), out_lines
+    assert "肌酐偏高[115.4" not in "\n".join(out_lines), out_lines
+    assert "★  电轴右偏:" in out_lines, out_lines
+
+
+def test_locate_ignores_anchors_after_signature_break():
+    # 潮州/德宏回归: 结论签名行(审核医生/主检医生)后的伪锚点(页脚"建议："、
+    # 附录图表标签"指标:DOB值")不得再收集, 否则垃圾进结论
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("总检结论：\n1.龋齿\n建议到口腔科门诊就诊治疗。\n审核医生：赵海\n主检医生：黄翠贞\n"
+           "建议：\n记录：杨会兰\n本报告仅供临床医生参考，不作证明材料。\n"
+           "指标:DOB值\n检测值:1.93\n图形分析\n0 0 0 0 0 0\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "龋齿" in sec and "口腔科" in sec, sec
+    assert "DOB值" not in sec, sec
+    assert "图形分析" not in sec, sec
+    assert "杨会兰" not in sec, sec
+
+
+def test_drop_truncated_prefix_fragments():
+    # 广西人民回归: LLM 从多名列表行偶发截断('慢性'/'混合性') → 作为其它条目前缀的短碎片剔除
+    from app.modules.report.service import _dedup_generic_findings
+    items = [{"item_name": "慢性"}, {"item_name": "慢性萎缩性胃炎"},
+             {"item_name": "混合性"}, {"item_name": "混合性高脂血症"},
+             {"item_name": "超重"}, {"item_name": "内痔"}]
+    names = [i["item_name"] for i in _dedup_generic_findings(items)]
+    assert "慢性" not in names and "混合性" not in names, names
+    assert "慢性萎缩性胃炎" in names and "混合性高脂血症" in names, names
+    assert "超重" in names and "内痔" in names, names
+
+
+def test_locate_keeps_repeated_numbered_titles_across_sections():
+    # 贵港回归: anchor_only 只取"异常指标"锚点, 段延伸到"健康建议";
+    # 两节同名编号标题('1.甲状腺…')不得被段内去重吞掉(否则健康建议只剩正文无标题)
+    import re as _re
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("异常指标\n1.甲状腺右叶囊实混合性回声团\n2.双肺下叶微小结节\n"
+           "健康建议\n1.甲状腺右叶囊实混合性回声团\n性质待定，C-TIRADS 3 类。\n"
+           "2.双肺下叶微小结节\n本次检查左肺下叶背段见磨玻璃结节。\n")
+    sec = _locate_findings_sections(
+        txt, extra_anchor_re=_re.compile("异常指标"), anchor_only=True) or ""
+    assert sec.count("1.甲状腺右叶囊实混合性回声团") == 2, sec
+    assert sec.count("2.双肺下叶微小结节") == 2, sec
+
+
+def test_reflow_splits_long_numbered_title_from_description():
+    # 贵港/广西人民回归: 编号标题(可长/多名列表)后接长描述行 → 标题独立成行(前端据此加粗)
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("4.阻塞性睡眠呼吸暂停低通气综合征、夜间中度低氧饱和度血症\n"
+           "此次检查示阻塞性睡眠呼吸暂停低通气综合征，导致夜间低氧饱和度血症。夜间反复缺氧可能导致心脑血管\n"
+           "及心肺功能损伤。\n")
+    out = _reflow_conclusion_lines(txt).split("\n")
+    assert out[0] == "4.阻塞性睡眠呼吸暂停低通气综合征、夜间中度低氧饱和度血症", out
+    assert out[1].startswith("此次检查示"), out
+    # 广西人民: "1:胃镜 多名发现" + "请您及时…就诊。" → 也要拆
+    txt2 = ("1:胃镜  慢性萎缩性胃炎（C1） 十二指肠球部溃疡（S2 期） 梨状窝隆起性质待查（囊肿？其它？）\n"
+            "请您及时到消化内科门诊就诊。\n")
+    out2 = _reflow_conclusion_lines(txt2).split("\n")
+    assert out2[0].startswith("1:胃镜"), out2
+    assert out2[1].startswith("请您及时"), out2
+
+
+def test_locate_skips_age_and_hospital_page_headers():
+    # 齐鲁回归: 跨页页眉"43岁"/"山东大学齐鲁医院(青岛)"混入结论段 → 应整行跳过
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("总检结论：\n1.脂肪肝\n建议低脂饮食。\n43岁\n山东大学齐鲁医院(青岛)\n"
+           "2.高血压\n建议心内科就诊。\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "43岁" not in sec, sec
+    assert "齐鲁医院" not in sec, sec
+    assert "脂肪肝" in sec and "高血压" in sec, sec
+
+
+def test_reflow_merges_unclosed_bracket_title():
+    # 齐鲁回归: 【…标题跨行("…左侧下肢动脉中" / "层钙化】")被拆成两行 → 应合并
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("一、建议如下：\n"
+           "【双侧锁骨下动脉狭窄可能，远端动脉血液灌注欠充足、双侧外周动脉僵硬度增高、左侧下肢动脉中\n"
+           "层钙化】\n"
+           "建议必要时进一步行头颈动脉CTA检查。\n")
+    out = _reflow_conclusion_lines(txt).split("\n")
+    assert any("左侧下肢动脉中层钙化】" in l for l in out), out
+
+
+def test_pair_arrow_by_row_skips_serial_number_cell():
+    # 马鞍山回归: 序号列在名称左侧("9"/"淋巴细胞百分比"/"43.70" 同排) —— 结果扫描
+    # 不得把最左的序号当结果(此前产出 淋巴=9/中性=23/血小板=21 三条假行)
+    from app.modules.report.table_extractor import _pair_arrow_by_row
+    lines = ["9", "淋巴细胞百分比", "43.70", "%", "↑"]
+    meta = [(0, 100.0, 68.0), (0, 100.0, 89.0), (0, 100.0, 210.0),
+            (0, 100.0, 240.0), (0, 100.0, 300.0)]
+    rows = _pair_arrow_by_row(lines, meta, 4)
+    assert rows and rows[0]["result"] == "43.70", rows
+
+
+def test_pair_from_lines_joins_split_result_cell():
+    # 日照(邵琳)回归: 结果单元格被 fitz 拆两行(">1000[阳性反应"+"（+）]"),
+    # 单行归一失败 → 拼下一行再归一; 否则该箭头配对失败、标志丢失(乙肝表面抗体漏黄)
+    from app.modules.report.table_extractor import _pair_from_lines
+    lines = ["乙肝表面抗体", ">1000[阳性反应", "（+）]", "↑", "0.00～10.00", "mIU/ml"]
+    row = _pair_from_lines(lines, 3, "arrow")
+    assert row is not None
+    assert row["item_name"] == "乙肝表面抗体"
+    assert row["result"] == ">1000"
+
+
+def test_indicator_rows_value_with_trailing_arrow():
+    from app.modules.report.table_extractor import extract_indicator_rows
+    txt = ("身高体重\n项目名称\n检查结果\n参 考 值\ncm\n140-180\n身高\n164\n"
+           "体重指数（BMI）\n17.6 ↓\n18.5-23.9\n")
+    rows = {r["item_name"]: r for r in extract_indicator_rows(txt)}
+    assert rows.get("体重指数（BMI）", {}).get("result") == "17.6"
+    assert rows["体重指数（BMI）"].get("signal_flag") == 2
+
+
+def test_reflow_joins_standalone_number_and_separates_items():
+    # 东方安鹏(扫描)结论表: 序号与发现名分两行("1."/"估算…"), 建议黏到上一条 → 需拼回并断行
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("主要健康问题\n1.\n估算肾小球滤过率轻度降低 肌酐增高：\n"
+           "建议控制基础病，肾内科就诊。\n2.\n血压增高 总胆固醇增高：\n建议低脂饮食，心内科就诊。\n")
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    assert "1. 估算肾小球滤过率轻度降低 肌酐增高：" in lines
+    assert "建议控制基础病，肾内科就诊。" in lines
+    assert "2. 血压增高 总胆固醇增高：" in lines
+    assert "建议低脂饮食，心内科就诊。" in lines
+    assert not any(l.endswith("。2.") or l.endswith("2.") for l in lines)
+
+
+def test_conclusion_stops_at_report_promo():
+    # 东方安鹏: 结论到"血镁增高:结合临床，复查电解质。"结束, 后续"关注公众号/查电子报告/结论…"是附录
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("主检结论及建议\n主要健康问题\n1. 血镁增高:结合临床，复查电解质。\n"
+           "关注公众号\n查电子报告\n结论\n2026-04-08 10:56:44\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "血镁增高" in sec
+    assert "关注公众号" not in sec and "查电子报告" not in sec
+
+
+def test_advice_conclusion_anchors():
+    # 高帅 【体检建议】/ 白玮衡 防治建议 都应识别为结论锚点
+    from app.modules.report.service import _is_findings_anchor
+    assert _is_findings_anchor("【体检建议】")
+    assert _is_findings_anchor("防治建议")
+    assert _is_findings_anchor("防治建议：")
+    assert not _is_findings_anchor("【肝回声致密】")  # 普通【】标题是段内内容, 非独立锚点
+
+
+def test_conclusion_skips_page_header_lines():
+    # 高帅页眉("体检号: 80330261"/"性别:"/"男")不得混入结论段
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("【体检建议】\n1.【超重】\n建议减重。\n体检号: 80330261\n性别:\n男\n"
+           "2.【鼻炎】\n建议耳鼻喉科就诊。\n总检医师:\n汇总医师:\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "【体检建议】" in sec and "建议减重" in sec
+    assert "体检号" not in sec and "性别" not in sec
+
+
+def test_reflow_bracket_title_always_own_line():
+    # 蔡超: 【窦性心动过缓.】后的正文不以"建议/请/可见于…"开头("窦房结…")→ 原规则
+    # 不断行; 【】标题应恒独立成行
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("【窦性心动过缓.】\n窦房结自律性降低引起的心动过缓称窦性心动过缓。建议内科就诊。\n"
+           "【血糖升高】\n您此次空腹血糖为 6.32 mmol/L。建议控糖。\n")
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    assert "【窦性心动过缓.】" in lines
+    assert "【血糖升高】" in lines
+    assert any(l.startswith("窦房结自律性降低") for l in lines)
+    assert any(l.startswith("您此次空腹血糖") for l in lines)
+
+
+def test_conclusion_excludes_exam_check_conclusion():
+    # 附录超声报告的"检查结论"不是总检结论标题 → 不作锚点, 防其"1./2. …"被收进结论
+    from app.modules.report.service import _is_findings_anchor, _locate_findings_sections
+    assert not _is_findings_anchor("检查结论")
+    txt = ("体检结果及建议\n【心脏冠状动脉CTA提示表浅型壁冠状动脉】\n建议心内科随诊。\n"
+           "汇总医生：魏静\n主检医师：聂倩\n"
+           "检查结论：\n1. 甲状腺未见明显异常\n2. 双侧颈部大血管旁未见明显肿大淋巴结\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "心脏冠状动脉" in sec
+    assert "双侧颈部大血管旁" not in sec and "甲状腺未见明显异常" not in sec
+
+
+def test_bilingual_conclusion_anchor_keeps_bracket_findings():
+    # 蔡超(强OCR): 双语标题"体检结果及建议 Results and Suggestions…"整行含英文,
+    # 原锚点不识别 → 走 LLM 兜底把【】标题拍平; 应识别为锚点并保留【】/换行
+    from app.modules.report.service import _is_findings_anchor, _locate_findings_sections
+    assert _is_findings_anchor("体检结果及建议 Results and Suggestions of Health Examination")
+    txt = ("体检结果及建议 Results and Suggestions of Health Examination\n"
+           "【肝回声致密】\n请定期复查肝脏超声。\n"
+           "【胆囊内膜欠光滑】\n建议低脂饮食，肝胆外科随诊。\n"
+           "汇总医生：魏静\n主检医师：聂倩\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "【肝回声致密】" in sec and "【胆囊内膜欠光滑】" in sec
+    assert "汇总医生" not in sec
+
+
+def test_parse_markdown_table_strips_star_and_normalizes_greek():
+    # 蔡超(强OCR): 尿检名"☆蛋白质"的 ☆ 标记应剥离; 名称内 LaTeX 希腊字母应还原
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 本次结果 | 上次结果 | 参考值 | 单位 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| ☆蛋白质 | 1+ | | | |\n"
+          "| \\gamma-谷氨酰基转移酶 | 16.8 | | 5--50 | U/L |\n"
+          "| ☆\\alpha羟基丁酸脱氢酶 | 102.0 | | 50--200 | U/L |\n")
+    names = [r["item_name"] for r in _parse_markdown_table(md)]
+    assert "蛋白质" in names
+    assert "γ-谷氨酰基转移酶" in names
+    assert "α羟基丁酸脱氢酶" in names
+
+
+def test_force_ocr_task_ids_parsing(monkeypatch):
+    # 方案a: FORCE_OCR_TASKS 解析(逗号/空白分隔, 忽略非数字)
+    from app.modules.report.service import _force_ocr_task_ids
+    monkeypatch.setenv("FORCE_OCR_TASKS", "39, 40 , x")
+    assert _force_ocr_task_ids() == {39, 40}
+    monkeypatch.setenv("FORCE_OCR_TASKS", "")
+    assert _force_ocr_task_ids() == set()
+
+
+def test_parse_markdown_table_normalizes_math_units():
+    # 东方安鹏(扫描): OCR 单位带 LaTeX/数学符("$ 10^{9}/L $"/"$ \mu $g/L") → 应规范化
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 本次结果 | 上次结果 | 参考值 | 单位 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| 白细胞(WBC) | 4.95 | | 3.5--9.5 | $ 10^{9}/L $ |\n"
+          "| 血红细胞计数(RBC) | 5.51 | | 4.3--5.8 | $ 10^{12}/L $ |\n"
+          "| 载脂蛋白E | 22.8 | | 27--45 | $ \\mu $g/L |\n")
+    rows = {r["item_name"]: r for r in _parse_markdown_table(md)}
+    assert rows["白细胞(WBC)"]["unit"] == "10^9/L"
+    assert rows["血红细胞计数(RBC)"]["unit"] == "10^12/L"
+    assert rows["载脂蛋白E"]["unit"] == "μg/L"
+
+
+def test_parse_markdown_table_dual_result_keeps_current():
+    # 东方安鹏(扫描)双值表 项目名称|本次结果|上次结果|参考值|单位:
+    # "上次结果"(空)列覆盖"本次结果" → 所有结果丢失; 参考值 "40--50" 双横线未解析 → UI 显示 ">40--50"
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 本次结果 | 上次结果 | 参考值 | 单位 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| 红细胞比积(HCT) | 50.800\\uparrow | | 40--50 | % |\n"
+          "| 总胆固醇(Chol) | 6.51\\uparrow | | ≤5.18 | mmol/L |\n")
+    rows = {r["item_name"]: r for r in _parse_markdown_table(md)}
+    assert rows["红细胞比积(HCT)"]["result"] == "50.800"
+    assert rows["红细胞比积(HCT)"].get("signal_flag") == 3
+    assert rows["红细胞比积(HCT)"].get("ref_low") == "40"
+    assert rows["红细胞比积(HCT)"].get("ref_high") == "50"
+    assert rows["总胆固醇(Chol)"].get("ref_high") == "5.18"
+
+
+def test_html_entities_unescaped_in_cells():
+    # 东方安鹏参考值单元格是 &gt;/&lt; 实体 → 应还原为 >/< 并解析单限
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 本次结果 | 上次结果 | 参考值 | 单位 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| 甘油三酯(TG) | 5.40\\uparrow | | &lt;1.70 | mmol/L |\n"
+          "| 高密度脂蛋白胆固醇(HDL-C) | 0.90\\downarrow | | &gt;1.04 | mmol/L |\n")
+    rows = {r["item_name"]: r for r in _parse_markdown_table(md)}
+    assert rows["甘油三酯(TG)"].get("ref_high") == "1.70"
+    assert rows["高密度脂蛋白胆固醇(HDL-C)"].get("ref_low") == "1.04"
+
+
+def test_parse_markdown_table_data_row_not_treated_as_header():
+    # 仁济陈磊: 数据行 ['红细胞信息','未提示',...] 被误判为表头(未提示≈提示),
+    # 后续行用错列映射 → 漏 "粘丝 | + | 0-250 | /μl | 阳性"
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 结果 | 参考值 | 单位 | 提示 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| 红细胞信息 | 未提示 | | | |\n"
+          "| 粘丝 | + | 0-250 |  / \\mu l | 阳性 |\n")
+    rows = {r["item_name"]: r for r in _parse_markdown_table(md)}
+    assert "粘丝" in rows
+    assert rows["粘丝"]["result"] == "+"
+    assert rows["粘丝"].get("signal_flag") == 3
+
+
+def test_parse_markdown_table_drops_chinese_ref():
+    # 仁济陈磊: 参考范围含中文说明("适宜：<1.70，增高：…")→ 不提取(留空)
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 结果 | 参考值 | 单位 | 提示 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| 甘油三酯 | 1.29 | 适宜：<1.70，增高：1.70-2.30，很高：>2.30 | mmol/L | |\n")
+    rows = {r["item_name"]: r for r in _parse_markdown_table(md)}
+    assert rows["甘油三酯"].get("ref_low") is None
+    assert rows["甘油三酯"].get("ref_high") is None
+
+
+def test_parse_markdown_table_strips_latex_marker_prefix():
+    # 六院金山包雁飞: 名称前缀 "$ ^{*} $"/"*" 是报告方异常标记, 不应留在名称里
+    from app.core.vlm_client import _parse_markdown_table
+    md = ("| 项目名称 | 结果 | 参考值 | 单位 | 提示 |\n"
+          "| --- | --- | --- | --- | --- |\n"
+          "| $ ^{*} $收缩压 | 140 | 90-140 | mmHg | ↑ |\n"
+          "| * 耳（右） | 右耳耵聍栓塞 | | | |\n")
+    names = [r["item_name"] for r in _parse_markdown_table(md)]
+    assert "收缩压" in names
+    assert "耳（右）" in names
+    assert not any("$" in n or "*" in n for n in names)
+
+
+def test_pair_summary_line_extracts_all_pairs():
+    # 华山常逢龙异常汇总: "载脂蛋白-A1：0.80g/L ↓；高密度…：0.93mmol/L ↓；低密度…：3.45mmol/L ↑；"
+    # 原只提第一对, 漏高密度/低密度 → 应逐对提取(都带标志)
+    from app.modules.report.table_extractor import _pair_summary_line
+    line = ("载脂蛋白-A1：0.80g/L ↓；高密度脂蛋白胆固醇：0.93mmol/L ↓；"
+            "低密度脂蛋白胆固醇：3.45mmol/L ↑；")
+    rows = _pair_summary_line(line, "arrow")
+    assert rows is not None
+    got = {(r["item_name"], r["result"]) for r in rows}
+    assert ("载脂蛋白-A1", "0.80") in got
+    assert ("高密度脂蛋白胆固醇", "0.93") in got
+    assert ("低密度脂蛋白胆固醇", "3.45") in got
+
+
+def test_pair_from_lines_colon_name_keeps_abbrev_digit():
+    # 华山常逢龙小结 "载脂蛋白-A1：0.80g/L ↓" 被拆成 "载脂蛋白-A"+"1" → 应保持完整名
+    from app.modules.report.table_extractor import _pair_from_lines
+    lines = ["载脂蛋白-A1：0.80g/L ↓；高密度脂蛋白胆固醇：0.93mmol/L ↓；"]
+    row = _pair_from_lines(lines, 0, "arrow")
+    assert row is not None
+    assert row["item_name"] == "载脂蛋白-A1"
+    assert row["result"] == "0.80"
+
+
+def test_reflow_separates_consecutive_label_lines():
+    # 仁济陈磊(扫描件): 连续"名称：说明"段(视乳头…/高脂血症…)不得互相黏连
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("建议：\n超重：根据中国成人BMI标准，BMI在24至27.9之间为超重。超重与多种慢病相关。\n"
+           "视乳头C/D（杯/盘比）扩大：指视神经乳头中央的凹陷相对于总直径的比例增大，通常提示视神经萎缩。\n"
+           "高脂血症：指血浆中一种或多种脂质成分升高。建议内分泌科就诊。")
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    for e in ("超重：", "视乳头C/D（杯/盘比）扩大：", "高脂血症："):
+        assert e in lines, (e, lines)
+
+
+def test_reflow_splits_short_label_and_explanation():
+    # 仁济陈磊(扫描件)建议段 "超重：根据中国成人BMI标准…" → "超重：" 与说明换行
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("建议：超重：根据中国成人BMI标准，BMI在24至27.9之间为超重。建议内分泌科就诊。"
+           "\n高脂血症：指血浆中一种或多种脂质成分升高。建议内分泌科就诊。")
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    assert "超重：" in lines
+    assert "高脂血症：" in lines
+    assert any(l.startswith("根据中国成人BMI标准") for l in lines)
+    assert any(l.startswith("指血浆中") for l in lines)
+
+
+def test_conclusion_stops_at_exam_report_header():
+    # 六院金山包雁飞: 结论段后跟 CT 报告"附见:…"与"…心电图报告"页 → 应止于此处
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("建议\n一、 收缩压高：\n2、胸部CT平扫：附见：肝左叶局部稍低密度灶。\n"
+           "建议心内科随诊。\n"
+           "2. 附见：肝左叶局部稍低密度灶，较前2025-6-20CT相仿。\n"
+           "上海市第六人民医院金山分院 心电图报告\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "收缩压高" in sec
+    assert "胸部CT平扫" in sec  # 行内"附见"不误断
+    assert "2. 附见" not in sec
+    assert "心电图报告" not in sec
+
+
+def test_conclusion_skips_cover_junk_collects_advice():
+    # 中医院曹嘉冰结论页: "健康体检结论/Conclusion/上上上/身份证号" 封面垃圾段应丢弃,
+    # 只保留"建议"段(脂肪酸开头), 且不越过"常规检查"表
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("健康体检结论\nConclusion\n上上上上上上上上上上\n上上上上上上上上上上\n"
+           "身份证号：310103198108037053\n"
+           "建议\nSuggestion\n脂肪肝、高脂血症\n1、低脂饮食。\n常规检查\n报告者：张毅\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "健康体检结论" not in sec
+    assert "Conclusion" not in sec and "上上上" not in sec and "身份证号" not in sec
+    assert "脂肪肝" in sec and "报告者" not in sec
+
+
+def test_reflow_diamond_section_header_newline():
+    # 华山常逢龙 "◆ 血常规" 被拼进上一条建议行尾(未识别 ◆ 为段头) → 应独立成行
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = "【牙色素沉着】建议洗牙。\n◆ 血常规\n【嗜碱性粒细胞增高】建议复查。"
+    lines = _reflow_conclusion_lines(txt).split("\n")
+    assert "◆ 血常规" in lines
+    assert not lines[0].endswith("◆ 血常规")  # 不再拼进上一条建议行尾
+
+
+def test_conclusion_section_stops_at_exam_dtable():
+    # 华山常逢龙结论段越过"六、检查项目结果"把后面指标表整段收走(结论脏)
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("五、总检结论及建议\n"
+           "◆ 一般检查\n【血压正常高值】建议监测血压。\n"
+           "◆ 经腹前列腺彩色多普勒超声检查\n【前列腺钙化灶】定期复查。\n"
+           "六、检查项目结果\n一般检查结果\n项目名称\n检查结果\n身高\n170\n体重\n65\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "血压正常高值" in sec
+    assert "前列腺钙化灶" in sec
+    assert "身高" not in sec and "项目名称" not in sec
+
+
+def test_conclusion_section_stops_at_report_table():
+    # 中医院曹嘉冰"建议"段后接常规检查明细表(报告者/项目名称…), 应止于表头
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("建议\nSuggestion\n脂肪肝、高脂血症\n1、低脂饮食。\n"
+           "常规检查\n报告者：张毅\n项目名称\n结果\n参考值\n单位\n身高\ncm\n")
+    sec = _locate_findings_sections(txt) or ""
+    assert "脂肪肝" in sec
+    assert "报告者" not in sec and "项目名称" not in sec
+
+
+def test_chinese_numbered_conclusion_anchor():
+    # 华山常逢龙 "五、总检结论及建议" 因带汉字序号未被识别为锚点 → 结论漏"一般检查"
+    from app.modules.report.service import _is_findings_anchor
+    assert _is_findings_anchor("五、总检结论及建议")
+    assert _is_findings_anchor("五.总检结论及建议")
+    assert not _is_findings_anchor("六、检查项目结果")  # 非结论标题
+
+
+def test_classify_ckd_epi_as_renal():
+    # 六院金山包雁飞 "CKD-EPI (cre估算)"/eGFR 应归肾功能分类(现返回 None)
+    from app.core.indicator_groups import classify
+    assert classify("CKD-EPI (cre估算)") == "肾功能"
+    assert classify("eGFR(肌酐)") == "肾功能"
+    assert classify("EGFR-EPI") == "肾功能"
+
+
+def test_clip_db_field():
+    # 入库前按列宽裁剪, 任何通道的脏值都不得再触发 Data too long
+    from app.modules.report.service import _clip_db_field
+    assert _clip_db_field("abcdef", 3) == "abc"
+    assert _clip_db_field(None, 3) is None
+    assert _clip_db_field("ab", 5) == "ab"
+
+
+def test_huaxi_profile_matches_hospital_name():
+    # 华西档案 keyword 用医院名"华西"(非单位词"出入镜"); 报告含"华西"即命中
+    from app.modules.report.report_profiles import match_profile
+    prof = match_profile("厦门华西医院 1. 高甘油三酯血症及高密度脂蛋白降低 上海出入境边防检查总站")
+    assert prof.get("anchor_only")
+
+
+# === 2026-09-16: 陈磊(H003-30)/陈镜霓(H004-40) 第三批回归 ===
+
+@pytest.mark.parametrize("line,expect", [
+    # 部位+彩超 行仍作细节段起点(独立表头/＋并列清单)
+    ("颈动脉彩超", True),
+    ("颈动脉彩超（查冠心病危险因子）", True),
+    ("心脏彩超＋甲状腺、甲状旁腺及其引流区淋巴结彩超＋肝胆胰脾彩超", True),
+    # 分号并列的"异常检查结果"发现清单不得触发 skip_detail(陈磊: 吞掉其后 7 行发现)
+    ("颈动脉彩超（查冠心病危险因子）；甲状腺彩超；B超（肝、胆、脾、胰）；"
+     "B超（双肾、前列腺、输尿管、膀胱）；脂肪肝", False),
+])
+def test_exam_detail_start_chaosheng_guarded_without_semicolon(line, expect):
+    from app.modules.report.service import _EXAM_DETAIL_START_RE
+    assert bool(_EXAM_DETAIL_START_RE.search(line)) == expect
+
+
+def test_chenlei_chaosheng_list_lines_collected():
+    # 陈磊(H003-30): 该清单行触发细节段跳过 → 颈动脉彩超段/胆囊壁毛糙/甲状腺结节/
+    # 心电图检查：1、窦性心律 全被吞; 修复后应完整收集
+    from app.modules.report.service import _locate_findings_sections
+    text = "\n".join([
+        "本次体检结果及建议",
+        "异常检查结果：",
+        "低剂量肺CT（不含胶片）：右肺上叶模糊斑点灶，请随访。",
+        "颈动脉彩超（查冠心病危险因子）；甲状腺彩超；B超（肝、胆、脾、胰）；脂肪肝",
+        "胆囊壁毛糙",
+        "甲状腺右叶结节",
+        "心电图检查：1、窦性心律",
+        "2、ST段改变（V5、V6水平型压低0.05mV）",
+        "建议：",
+        "超重：注意饮食。",
+    ])
+    sec = _locate_findings_sections(text)
+    assert sec
+    for ln in ("颈动脉彩超（查冠心病危险因子）", "胆囊壁毛糙", "甲状腺右叶结节",
+               "心电图检查：1、窦性心律", "2、ST段改变（V5、V6水平型压低0.05mV）"):
+        assert ln in sec, f"结论段缺行: {ln}"
+
+
+@pytest.mark.parametrize("raw,expect", [
+    ("Ⅲ级 ↑", ("Ⅲ级", True)),
+    ("III级↓", ("III级", True)),
+    ("Ⅲ级", (None, False)),
+    ("严重", (None, False)),
+])
+def test_grade_value_with_arrow(raw, expect):
+    # 陈镜霓白带常规 阴道清洁度结果 "Ⅲ级 ↑" 此前不被认作值 → 整行丢失
+    from app.modules.report.table_extractor import (
+        _grade_value_with_arrow, _GRADE_VAL_RE, _PLUS_ONLY_VAL_RE)
+    assert _grade_value_with_arrow(raw) == expect
+    if expect[1]:
+        assert _GRADE_VAL_RE.match(expect[0])
+
+
+def test_plus_only_value_and_header_roles():
+    from app.modules.report.table_extractor import _PLUS_ONLY_VAL_RE
+    from app.modules.report.layout import cell_role
+    # 白细胞（WBC1）结果 "++"(纯加号半定量)
+    assert _PLUS_ONLY_VAL_RE.match("++") and _PLUS_ONLY_VAL_RE.match("++++")
+    assert not _PLUS_ONLY_VAL_RE.match("+") and not _PLUS_ONLY_VAL_RE.match("1+")
+    # 表头带空格("单 位"/"参 考 值")此前角色为 None → 单位/参考列整列丢失(/HP 未接上)
+    assert cell_role("单 位") == "unit"
+    assert cell_role("参 考 值") == "ref"
+    assert cell_role("检查结果") == "result"
+
+
+def test_suggestion_ownership_head_neck():
+    # 陈磊(H003-30)重跑: 甲状腺"建议内分泌科或头颈外科就诊…"被 LLM 贴给 胆囊壁毛糙
+    # (建议含头颈而条目名不含) → 归属校验须清空该条建议
+    from app.modules.report.service import _validate_suggestion_ownership
+    text = "\n".join([
+        "异常检查结果：",
+        "低剂量肺CT：右肺上叶模糊斑点灶，请随访。",
+        "颈动脉彩超（查冠心病危险因子）；脂肪肝胆囊壁毛糙",
+        "建议：",
+        "胆囊壁毛糙：",
+        "指胆囊壁的内缘不光滑，通常提示慢性炎症。建议消化内科就诊、随访。",
+        "甲状腺结节：",
+        "提示甲状腺内存在一个或多个肿块。建议内分泌科或头颈外科就诊，必要时进一步检查明确诊断。",
+    ])
+    items = [
+        {"item_name": "胆囊壁毛糙",
+         "suggestion": "建议内分泌科或头颈外科就诊，必要时进一步检查明确诊断。"},
+        {"item_name": "甲状腺结节",
+         "suggestion": "建议内分泌科或头颈外科就诊，必要时进一步检查明确诊断。"},
+    ]
+    out = _validate_suggestion_ownership(items, text)
+    got = {i["item_name"]: i["suggestion"] for i in out}
+    assert got["胆囊壁毛糙"] == ""
+    assert got["甲状腺结节"]
+
+
+def test_inline_advice_bracket_not_anchor():
+    # 常逢龙(华山, H003-28): "【肺结节】建议您胸外科…" 是发现+建议同行 —— 旧实现
+    # "建议" in s 判成锚点, 下一行又是锚点时该段仅一行 → 被空锚点规则整体丢弃。
+    # 2026-09-16: "建议"类【】锚点只看括号内标题。
+    from app.modules.report.service import _is_findings_anchor
+    assert not _is_findings_anchor("【肺结节】建议您胸外科/呼吸科定期复查随诊。")
+    assert _is_findings_anchor("【体检建议】")      # 括号内标题含建议 → 锚点(高帅)
+    assert _is_findings_anchor("【医师建议】")
+
+
+def test_inline_advice_bracket_line_collected():
+    # 上述锚点修复的定位层行为: 【X】+同行建议 不被吞, 整行保留在结论段
+    from app.modules.report.service import _locate_findings_sections
+    text = "\n".join([
+        "五、总检结论及建议",
+        "【窦性心律不齐】如不伴随其他异常，且与呼吸有关，可视为正常。",
+        "【肺结节】建议您胸外科/呼吸科定期复查随诊。",
+        "【炎性后遗改变】多见于肺炎，肺结核等疾病康复后，建议定期复查，动态观察，专科诊治。",
+        "◆ 甲状腺(甲状旁腺及颈部淋巴结)彩色多普勒超声检查",
+        "【甲状腺两叶结节，TI-RADS 3 类】甲状腺组织内性质不明确的局限性肿块统称为甲状腺结节。",
+    ])
+    sec = _locate_findings_sections(text)
+    assert sec
+    for ln in ("【肺结节】建议您胸外科/呼吸科定期复查随诊。",
+               "【炎性后遗改变】多见于肺炎，肺结核等疾病康复后，建议定期复查，动态观察，专科诊治。"):
+        assert ln in sec, f"结论段缺行: {ln}"

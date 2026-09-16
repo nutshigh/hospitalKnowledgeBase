@@ -37,3 +37,12 @@ body {
 }
 
 h1, h2, h3 { font-family: var(--font-display); }
+
+/* 2026-09-16: 指标分组展开态背景区分 —— ghost Collapse 展开内容加浅灰底+圆角,
+   与未展开的组标题行区分(否则连成一片分不清展开范围) */
+.indicator-collapse > .ant-collapse-item-active > .ant-collapse-content > .ant-collapse-content-box {
+  background: var(--color-bg);
+  border-radius: 8px;
+  padding: 6px 14px;
+  margin-bottom: 10px;
+}

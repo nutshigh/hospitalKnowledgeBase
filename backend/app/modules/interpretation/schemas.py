@@ -22,6 +22,9 @@ class IndicatorJudgmentSchema(BaseModel):
     source: Optional[str] = None
     explanation: Optional[str] = None
     # === END STRATEGY ===
+    # 2026-09-14: 结论条目 ↔ conclusion_text 原文句映射(前端红区命中句标红定位)
+    origin_row: Optional[int] = None
+    origin_line: Optional[str] = None
 
 
 class InterpretationReportSchema(BaseModel):

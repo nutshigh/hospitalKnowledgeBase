@@ -8,6 +8,7 @@
 贵港 +腰臀比(报告结论"腰臀比增高")、防城港一 +乙肝核心抗体(HBcAb)(红字且 ref 0-0.15 超 100 倍))。
 钦州市中医医院 = 图片型 PDF(文本规则不可用, OCR 服务对 8 页 500, 环境遗留 → skip)。
 """
+import json
 import os
 import re
 import sys
@@ -209,3 +210,65 @@ class TestGxBjJudgmentChain:
         names = [i["item_name"] for i in inds]
         for exp in expected:
             assert any(exp in n or n in exp for n in names), f"{tag} 缺关键指标 {exp}"
+
+
+# === 2026-09-15: 各地汇总 13 份(H003 6 + H004 7)接入 ===
+# 期望名单 = DB 验收快照(tests/modules/report/baselines/h003|h004_baseline.json,
+# gen 脚本 norm() 已去空格) —— 与广西/北京 13 份同口径: 当前代码重提取 → 判定链
+# 黄红名单 vs 快照。目的: 锁"已适配报告不被后续改动改坏"。
+SUMM = os.path.join(SAMPLES, "各地汇总")
+# 2026-09-16: 第三批 10 份样例在本仓库 体检报告样例/0-第三批
+B3 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "0-第三批")
+_BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
+
+_BASELINE_CASES = {
+    "德宏(毕建国)": ("h003", "20", os.path.join(SUMM, "德宏州人民_H003_10.pdf")),
+    "滨州(董延广)": ("h003", "22", os.path.join(SUMM, "滨州人民_H003_10.PDF")),
+    "潮州第一": ("h003", "23", os.path.join(SUMM, "潮州第一_H003_10.pdf")),
+    "福建第二": ("h003", "24", os.path.join(SUMM, "福建第二_H003_10.PDF")),
+    "马鞍山(陈田)": ("h003", "25", os.path.join(SUMM, "马鞍山人民_H003_10.pdf")),
+    "池州": ("h003", "26", os.path.join(SUMM, "池州人民_H003_10.pdf")),
+    "华西(林建生)": ("h004", "21", os.path.join(SUMM, "厦门华西_H004_11.pdf")),
+    "弘爱(戴伟平)": ("h004", "22", os.path.join(SUMM, "厦门弘爱_H004_11.pdf")),
+    "山东省立(王国瑞)": ("h004", "23", os.path.join(SUMM, "山东省立_H004_11.pdf")),
+    "日照(邵琳)": ("h004", "24", os.path.join(SUMM, "日照人民_H004_11.pdf")),
+    "茂名(陈灿明)": ("h004", "25", os.path.join(SUMM, "茂名人民_H004_11.pdf")),
+    "莆田(蔡芳坤)": ("h004", "26", os.path.join(SUMM, "莆田九十五_H004_11.pdf")),
+    "齐鲁(李林青)": ("h004", "27", os.path.join(SUMM, "齐鲁青岛_H004_11.pdf")),
+    # 2026-09-16: 第三批 10 份中可走文本规则链的 5 份 ——
+    # 27 鲍文祥/29 包雁飞/30 陈磊/38 安鹏 = 纯扫描(VLM 指标, 规则链无产物),
+    # 39 蔡超 = 文本层损坏(生产 force-ocr) → 这 5 份不在本重提取护栏,
+    # 由三件套 DB 快照(baselines JSON + test_h00X_baseline_guard.py)守。
+    "常逢龙(华山)": ("h003", "28", os.path.join(B3, "华山医院", "常逢龙08401X.pdf")),
+    "曹嘉冰(中医院)": ("h003", "31", os.path.join(B3, "中医院", "曹嘉冰037053.pdf")),
+    "陈镜霓": ("h004", "40", os.path.join(B3, "陈镜霓220028.pdf")),
+    "白玮衡": ("h004", "41", os.path.join(B3, "白玮衡31151X.pdf")),
+    "高帅": ("h004", "43", os.path.join(B3, "高帅185516.pdf")),
+}
+
+def _norm_baseline_name(n: str) -> str:
+    return (n or "").replace(" ", "").replace("\u3000", "")
+
+
+@pytest.mark.skipif(not (os.path.isdir(SUMM) or os.path.isdir(B3)),
+                    reason="基线样本目录不存在")
+class TestSummBaselineYellow:
+    """各地汇总 13 份 + 第三批文本 5 份: 当前代码重提取 → 黄红名单 == DB 验收快照名单。"""
+
+    @pytest.mark.parametrize("tag", list(_BASELINE_CASES))
+    def test_yellow_equals_db_baseline(self, tag):
+        db, rid, pdf = _BASELINE_CASES[tag]
+        if not os.path.exists(pdf):
+            pytest.skip(f"{tag} 样本缺失")
+        with open(os.path.join(_BASELINE_DIR, f"{db}_baseline.json"),
+                  encoding="utf-8") as fh:
+            baseline = json.load(fh)
+        expected = {_norm_baseline_name(n) for n, _lv in baseline[rid]["indicators"]}
+        names = {_norm_baseline_name(n) for n in _yellow_names(pdf, db.upper())}
+        extra, missing = names - expected, expected - names
+        assert not extra and not missing, (
+            f"{tag}({baseline[rid]['name']}) 黄红区与 DB 验收快照不一致\n"
+            f"  缺失: {sorted(missing)}\n  多余: {sorted(extra)}")

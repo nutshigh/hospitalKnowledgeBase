@@ -1,9 +1,9 @@
 {
  "1": {
-  "name": "滕寿权(崇左边境管理支队)",
-  "interp_id": 293,
-  "conclusion_len": 2301,
-  "conclusion_hash": "021aef84a437a7c1",
+  "name": "测试5(崇左边境管理支队)",
+  "interp_id": 396,
+  "conclusion_len": 2302,
+  "conclusion_hash": "0a6335bad0331649",
   "indicators": [
    [
     "L-γ-谷氨酰基转移酶",
@@ -82,9 +82,9 @@
   ]
  },
  "2": {
-  "name": "朱品龙()",
-  "interp_id": 301,
-  "conclusion_len": 1660,
+  "name": "测试5()",
+  "interp_id": 423,
+  "conclusion_len": 1665,
   "conclusion_hash": "272f904c46608490",
   "indicators": [
    [
@@ -142,7 +142,7 @@
     "yellow"
    ],
    [
-    "心室早期复极T波改变",
+    "心室早期复极",
     "yellow"
    ],
    [
@@ -158,15 +158,19 @@
     "yellow"
    ],
    [
-    "水平椎管狭窄",
-    "yellow"
-   ],
-   [
     "混合性高脂血症",
     "yellow"
    ],
    [
+    "病理(横结肠)增生性息肉",
+    "yellow"
+   ],
+   [
     "结肠息肉",
+    "yellow"
+   ],
+   [
+    "肠镜结肠息肉",
     "yellow"
    ],
    [
@@ -182,17 +186,13 @@
     "yellow"
    ],
    [
-    "高脂血症",
-    "yellow"
-   ],
-   [
     "高血压",
     "yellow"
    ]
   ]
  },
  "3": {
-  "name": "刘丹(体检类型)",
+  "name": "测试5(体检类型)",
   "interp_id": 281,
   "conclusion_len": 546,
   "conclusion_hash": "85123b3138bc3a66",
@@ -242,10 +242,10 @@
   ]
  },
  "4": {
-  "name": "尹剑鸣()",
-  "interp_id": 303,
-  "conclusion_len": 1683,
-  "conclusion_hash": "be65cd6ac9301b76",
+  "name": "测试5()",
+  "interp_id": 421,
+  "conclusion_len": 1832,
+  "conclusion_hash": "7fdeaffb412b0ca7",
   "indicators": [
    [
     "乙型肝炎病毒表面抗体",
@@ -320,7 +320,7 @@
   ]
  },
  "5": {
-  "name": "胡鹏(mm）)",
+  "name": "测试5(mm）)",
   "interp_id": 285,
   "conclusion_len": 2492,
   "conclusion_hash": "4d4db33111a83c0b",
@@ -418,10 +418,10 @@
   ]
  },
  "6": {
-  "name": "徐伟祥(防城港边境管理支队)",
-  "interp_id": 224,
-  "conclusion_len": 929,
-  "conclusion_hash": "9fa430a105307380",
+  "name": "测试5(防城港边境管理支队)",
+  "interp_id": 397,
+  "conclusion_len": 920,
+  "conclusion_hash": "a13afc4090acf858",
   "indicators": [
    [
     "乙肝核心抗体(HBcAb)",
@@ -468,11 +468,15 @@
    [
     "颈部淋巴结？",
     "yellow"
+   ],
+   [
+    "高尿酸血症",
+    "yellow"
    ]
   ]
  },
  "7": {
-  "name": "陈美杉()",
+  "name": "测试5()",
   "interp_id": 226,
   "conclusion_len": 594,
   "conclusion_hash": "67766d57ab42bac2",
@@ -526,13 +530,17 @@
   ]
  },
  "20": {
-  "name": "毕建国()",
-  "interp_id": 257,
-  "conclusion_len": 801,
-  "conclusion_hash": "d2a97035dce3b3e0",
+  "name": "测试5()",
+  "interp_id": 399,
+  "conclusion_len": 693,
+  "conclusion_hash": "8eb5dfeab06a5690",
   "indicators": [
    [
     "乙肝表面抗体(HBsAb)",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白(LDL)",
     "yellow"
    ],
    [
@@ -576,7 +584,7 @@
   ]
  },
  "22": {
-  "name": "董延广()",
+  "name": "测试5()",
   "interp_id": 267,
   "conclusion_len": 1334,
   "conclusion_hash": "e4f36ab6a88d5abf",
@@ -618,10 +626,10 @@
   ]
  },
  "23": {
-  "name": "陈桂深()",
-  "interp_id": 275,
-  "conclusion_len": 980,
-  "conclusion_hash": "7faef0738af1620a",
+  "name": "测试5()",
+  "interp_id": 409,
+  "conclusion_len": 850,
+  "conclusion_hash": "47123941df21d320",
   "indicators": [
    [
     "低密度脂蛋白胆固醇(LDL)",
@@ -660,10 +668,10 @@
   ]
  },
  "24": {
-  "name": "谭建平(福建省第二人民医院)",
-  "interp_id": 305,
+  "name": "测试5(福建省第二人民医院)",
+  "interp_id": 415,
   "conclusion_len": 778,
-  "conclusion_hash": "d18485ccb1b5c911",
+  "conclusion_hash": "dbf15ff15c918430",
   "indicators": [
    [
     "上皮细胞(高倍视野)",
@@ -732,6 +740,10 @@
   ],
   "conclusions": [
    [
+    "C-",
+    "yellow"
+   ],
+   [
     "三尖瓣反流",
     "yellow"
    ],
@@ -782,10 +794,10 @@
   ]
  },
  "25": {
-  "name": "陈田(边防检查站（民警）)",
-  "interp_id": 289,
-  "conclusion_len": 2253,
-  "conclusion_hash": "7059310cf205d2dd",
+  "name": "测试5(边防检查站（民警）)",
+  "interp_id": 405,
+  "conclusion_len": 2258,
+  "conclusion_hash": "c07559601b5b6ede",
   "indicators": [
    [
     "中性粒细胞百分比",
@@ -842,10 +854,6 @@
     "yellow"
    ],
    [
-    "V1呈Rs型,R/S>1",
-    "yellow"
-   ],
-   [
     "三尖瓣少量反流",
     "yellow"
    ],
@@ -858,7 +866,7 @@
     "yellow"
    ],
    [
-    "甲状腺结节",
+    "甲状腺结节,考虑C-",
     "yellow"
    ],
    [
@@ -884,7 +892,7 @@
   ]
  },
  "26": {
-  "name": "曹敬金(池州边防站（TC)",
+  "name": "测试5(池州边防站（TC)",
   "interp_id": 307,
   "conclusion_len": 1568,
   "conclusion_hash": "818d40b103535433",
@@ -954,6 +962,360 @@
    [
     "鼻中隔弯曲",
     "yellow"
+   ]
+  ]
+ },
+ "27": {
+  "name": "测试5()",
+  "interp_id": 373,
+  "conclusion_len": 1752,
+  "conclusion_hash": "0b353251fcf409d1",
+  "indicators": [
+   [
+    "体重指数",
+    "yellow"
+   ],
+   [
+    "红细胞分布宽度",
+    "yellow"
+   ],
+   [
+    "载脂蛋白B",
+    "yellow"
+   ],
+   [
+    "载脂蛋白E",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "房性早搏",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "肝脏脂肪浸润",
+    "yellow"
+   ],
+   [
+    "肺结节",
+    "yellow"
+   ],
+   [
+    "胆囊壁毛糙",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "28": {
+  "name": "测试5()",
+  "interp_id": 375,
+  "conclusion_len": 2313,
+  "conclusion_hash": "f5fbf18615f35d7b",
+  "indicators": [
+   [
+    "13Ｃ尿素呼气试验(C13)",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "嗜碱性粒细胞%",
+    "yellow"
+   ],
+   [
+    "嗜碱性粒细胞绝对值",
+    "yellow"
+   ],
+   [
+    "糖化血红蛋白",
+    "yellow"
+   ],
+   [
+    "载脂蛋白-A1",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "13碳呼气试验阳性",
+    "yellow"
+   ],
+   [
+    "冠心病",
+    "yellow"
+   ],
+   [
+    "前列腺钙化灶",
+    "yellow"
+   ],
+   [
+    "炎性后遗改变",
+    "yellow"
+   ],
+   [
+    "牙结石",
+    "yellow"
+   ],
+   [
+    "牙色素沉着",
+    "yellow"
+   ],
+   [
+    "甲状腺两叶结节",
+    "yellow"
+   ],
+   [
+    "甲状腺两叶结节，",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "窦性心律不齐",
+    "yellow"
+   ],
+   [
+    "肝脏功能受损",
+    "yellow"
+   ],
+   [
+    "肺结节",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "颈动脉内中膜增厚",
+    "yellow"
+   ],
+   [
+    "颈动脉斑块形成",
+    "yellow"
+   ]
+  ]
+ },
+ "29": {
+  "name": "测试5(中华人民共和国上海出入境边防检查总站)",
+  "interp_id": 379,
+  "conclusion_len": 1183,
+  "conclusion_hash": "cf2ca1e36cc57a1b",
+  "indicators": [
+   [
+    "CKD-EPI(cre估算)",
+    "yellow"
+   ],
+   [
+    "收缩压",
+    "yellow"
+   ],
+   [
+    "淋巴细胞比率",
+    "yellow"
+   ],
+   [
+    "红细胞分布宽度",
+    "yellow"
+   ],
+   [
+    "肌酐（酶法）",
+    "yellow"
+   ],
+   [
+    "肾小球滤过率（MDRD）法",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前列腺钙化灶",
+    "yellow"
+   ],
+   [
+    "升高",
+    "yellow"
+   ],
+   [
+    "右耳耵聍栓",
+    "yellow"
+   ],
+   [
+    "右耳耵聍栓塞",
+    "yellow"
+   ],
+   [
+    "左肾多发囊肿",
+    "yellow"
+   ],
+   [
+    "曾经炎症感染",
+    "yellow"
+   ],
+   [
+    "某些药物",
+    "yellow"
+   ],
+   [
+    "炎症感染",
+    "yellow"
+   ],
+   [
+    "肝左叶中等不均回声",
+    "yellow"
+   ],
+   [
+    "肝左叶中等不均回声29*28mm",
+    "yellow"
+   ],
+   [
+    "肝左叶局部稍低密度灶",
+    "yellow"
+   ],
+   [
+    "胸部CT平扫",
+    "yellow"
+   ],
+   [
+    "诊室血压",
+    "yellow"
+   ],
+   [
+    "较大块耵聍栓",
+    "yellow"
+   ],
+   [
+    "降低",
+    "yellow"
+   ]
+  ]
+ },
+ "30": {
+  "name": "测试5()",
+  "interp_id": 427,
+  "conclusion_len": 1959,
+  "conclusion_hash": "9ae2ee378da868b0",
+  "indicators": [
+   [
+    "低密度脂蛋白",
+    "yellow"
+   ],
+   [
+    "体重指数",
+    "yellow"
+   ],
+   [
+    "粘丝",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "ST段改变",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "胆囊壁毛糙",
+    "yellow"
+   ],
+   [
+    "酒精性脂肪性肝病",
+    "yellow"
+   ],
+   [
+    "高脂血症",
+    "yellow"
+   ]
+  ]
+ },
+ "31": {
+  "name": "测试5()",
+  "interp_id": 383,
+  "conclusion_len": 647,
+  "conclusion_hash": "60805eba23c2374c",
+  "indicators": [
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "小密低密度脂蛋白(sdLDL)测定",
+    "yellow"
+   ],
+   [
+    "甘油三脂",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "冠心病",
+    "yellow"
+   ],
+   [
+    "劳累",
+    "yellow"
+   ],
+   [
+    "熬夜",
+    "yellow"
+   ],
+   [
+    "生理性改变常见于精神紧张",
+    "yellow"
+   ],
+   [
+    "病理性改变常见于高血压",
+    "yellow"
+   ],
+   [
+    "胆囊结石",
+    "yellow"
+   ],
+   [
+    "贫血或药物影响等",
+    "yellow"
+   ],
+   [
+    "过度吸烟等",
+    "yellow"
+   ],
+   [
+    "黄疸",
+    "red"
    ]
   ]
  }

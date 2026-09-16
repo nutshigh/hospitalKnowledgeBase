@@ -46,6 +46,24 @@ def _query_tasks(db: str, user: str) -> list[int]:
         c.close()
 
 
+def _report_file_ok(db: str, report_id: int) -> bool:
+    """预检: 报告原文是否可读 —— 缺失时不得 wipe(2026-09-15 两次"先清后崩"教训)。"""
+    c = _conn(db)
+    try:
+        cur = c.cursor()
+        cur.execute(f"SELECT task_id FROM {db}.report_info WHERE id=%s", (report_id,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        cur.execute(f"SELECT original_file_path FROM {db}.report_task WHERE id=%s", (row[0],))
+        r = cur.fetchone()
+        return bool(r and r[0] and os.path.exists(r[0].lstrip("./")))
+    except Exception:
+        return False
+    finally:
+        c.close()
+
+
 def snapshot(db: str, report_id: int) -> dict:
     c = _conn(db)
     try:
@@ -161,6 +179,17 @@ def main():
 
     print(f"== 端到端重跑: db={args.db} hospital={hospital_id} mode={args.mode}")
     print(f"   reports={report_ids}")
+
+    if args.mode == "reprocess":
+        # 2026-09-15: 预检原文存在再 wipe —— 原文缺失的(历史批次 storage 未同步)
+        # 先清产物会让报告无数据, 且脚本崩溃中止后续。
+        _missing = [rid for rid in report_ids if not _report_file_ok(args.db, rid)]
+        if _missing:
+            print(f"   !! 原文缺失, 跳过(未清产物): {_missing}", flush=True)
+            report_ids = [rid for rid in report_ids if rid not in _missing]
+        if not report_ids:
+            print("   无可重跑报告, 退出", flush=True)
+            return
 
     bases = {rid: snapshot(args.db, rid) for rid in report_ids}
     for rid in report_ids:

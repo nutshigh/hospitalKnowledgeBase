@@ -217,7 +217,7 @@ def _flush(seg: List[Tuple[float, List[VRow]]], regions: List[TableRegion], pno:
 # region(续表/华西上半块)继承"同页前一个表头 spec"(y 向前最近)。
 _ROLE_WORDS = {
     "name": ("项目名称", "检验项目", "检查项目", "检查项目名称", "指标名称",
-             "检查内容", "测定项目", "序号项目名称"),
+             "检查内容", "测定项目", "序号项目名称", "项目"),
     "result": ("检查结果", "结果", "本次结果", "测定值"),
     "prev": ("上次结果", "历史结果"),
     "ref": ("参考值", "参考范围", "正常值", "提示参考范围"),
@@ -247,7 +247,10 @@ class ColSpec:
 
 
 def cell_role(t: str) -> Optional[str]:
-    """单元格文本 → 角色(最长词优先子串匹配; "英文缩写    检查结果" → result)。"""
+    """单元格文本 → 角色(最长词优先子串匹配; "英文缩写    检查结果" → result)。
+    2026-09-16: 词间空白先归一("单 位"/"参 考 值" 陈镜霓白带表, 此前 unit/ref 角色
+    识别为 None → 单位/参考列整列被丢弃, 组装行丢失 /HP 单位)。"""
+    t = "".join((t or "").split())
     for w, role in sorted(_ROLE_FLAT.items(), key=lambda kv: -len(kv[0])):
         if w in t:
             return role

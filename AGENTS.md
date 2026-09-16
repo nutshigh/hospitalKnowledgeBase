@@ -1057,3 +1057,112 @@ client 连接池里的 transport 残留绑定在**已关闭**的循环上, 下�
 跨线程独立, 4 条); `tests/ai/agents/test_interp_graph.py` 增
 `test_generate_report_does_not_use_asyncio_run` 与 `test_run_judge_does_not_use_asyncio_run`。
 复现脚本(修复前 run2 必失败, 修复后 6/6 OK): 连续 `run_async(fresh_model.ainvoke)`。
+
+---
+
+## 结论侧 conclusion_text 重提取护栏(2026-09-15)
+
+**新护栏**: `backend/tests/modules/report/test_conclusion_text_reguard.py` —— H003/H004 基线
+覆盖的 26 份报告, 用当前代码从 PDF **确定性重提取结论段**(与生产 `_extract_conclusion_async`
+锚点分支同构: `_extract_pdf_text(hybrid=False)` → profile `visual_sort` 时改按视觉坐标
+重排 → `_strip_ocr_html` → `_locate_findings_sections`(profile extra_*) →
+`_reflow_conclusion_lines`/`_reflow_table_conclusion`(+`_drop_review_block`) → 去空白
+sha1[:16]), 与 `baselines/h{003,004}_baseline.json` 的 `conclusion_hash` 比对 —— 重跑前
+即可发现结论切段/定位/reflow 代码回归。**终态(2026-09-15 收口)**: MATCH 24 严格 +
+HYBRID 2(福建第二/欧阳庆: 扫描件离线链取不到段, 只锁空产物防漂移; 生产文本由三件套
+DB 快照守)。**不覆盖总检异常条目名单(LLM 生成)** —— 仍由三件套 DB 快照
+(`test_h003/h004_baseline_guard.py`)守。spec:
+`docs/superpowers/specs/2026-09-15-conclusion-text-reguard-design.md`。
+
+**2026-09-15 修复清单(全部带纯函数断言, 见 `test_extraction_units.py`)**:
+- `_locate_findings_sections` 锚点前编号条目并入必须 `i == 0`(仅第一段; 钦州二重复行);
+- 医生签名行(主检/总检/审核/终审)之后的锚点不再收集(潮州 `指标:DOB值`/德宏页脚
+  `建议：` 伪锚点 → 附录整段/签名块漏入结论);
+- `_drop_review_block` 块尾只认 ★ 行 + 块内"最后数据行之后的散文"识别为插入页割断的
+  续行, 归位接回块前截断句(茂名"…运动员及器质性" | 综述页 | "心脏病者…" 重接;
+  综述内容整块剥除);
+- `_split_label_explanation` 保留源冒号字符(半角 `:` 不得改写全角);
+- reflow"纯 ASCII 短行跳过"排除含 `/`、数字、`%` 的行(单位行 `mmol/L`/`U/L` 不再被吞);
+- reflow 未闭合 `【`/`[` 标题续行合并(齐鲁"左侧下肢动脉中/层钙化】"断行);
+- reflow `]`/`】` 结尾行后不并入续行(茂名综述数据行不得吞建议续行);
+- 页眉跳过补裸年龄行(`43岁`)与医院名行(`山东大学齐鲁医院(青岛)`);
+- `_pair_arrow_by_row` 跳过名称左侧单元格(马鞍山序号列 9/21/23 曾被当结果)。
+
+**2026-09-16 第三轮修复(用户核对反馈; 均已重跑落库+基线重生成, 全量 451 passed)**:
+- reflow 编号发现名(多名列表, 常超 28 字)与建议/解释行拆行
+  (`_is_plain_finding_boundary` 编号条目 + `建议|请|注意` 就近判定) —— 潮州"健康建议"
+  异常名未独立成行导致前端无法加粗;
+- `_locate_findings_sections` 锚点前编号条目并入改为**对所有锚点**生效 + 跨段已收集集合
+  去重, 并按编号归位(不再置顶) —— 福建第二"2. 彩超…"(印在"体检结论分析"前)插回 1 与 3
+  之间; 钦州二重复行仍不复发(去重);
+- `_is_findings_anchor` 双语标题回退(蔡超)必须"行首中文段之后**含拉丁字母**" ——
+  否则纯中文正文行("建议：全口洁治…"/页脚"建议：")被误判锚点, 把分科列表/签名块收进
+  结论(福建第二段 778→1374 字垃圾; 该修复同时兜住德宏页脚类);
+- **VLM/扫描路径数值兜底**: 无任何标志且 result/ref 均数值且越界 → `signal_flag=2`
+  (欧阳庆 MPV 7.30↓ 标志列被 OCR 整列丢失; 影响仅纯扫描件, 文本路径口径"仅标志判黄"不变);
+- 结论段错误定位 `_extract_conclusion_async` 偶发返回 None 不更新(福建第二一次重跑;
+  OCR 半崩溃态所致) → 重跑前必须 curl 验一页 OCR; 失败重跑一次。
+
+**重跑扫描件纪律(再次强调)**: 8001 PaddleOCR 长时间运行后 `/ocr` 会 500
+(`int(Tensor) is not supported in static graph mode`), **重启即恢复**。扫描件重跑前先
+`curl` 测一页; 欧阳庆首次重跑即在崩溃态 → 报告被 wipe 后只恢复 5 行(重启+重跑后恢复
+126 行+MPV/BMI 兜底标黄)。
+
+**事故教训(2026-09-15, 同日两次)**: ①文件级 bisect 后"恢复工作区"曾把**未含当日修复的
+旧 `/tmp/wt_*` 快照**拷回, 覆盖 `table_extractor.py` 两处修复, 表现为"测试顺序污染"假象;
+②`e2e_rerun_reports.py` 在原文缺失时仍先 wipe → 报告产物被清空(崇左/茂名两次)。**已加固**:
+脚本 reprocess 模式**预检原文存在**, 缺失则跳过该报告、不 wipe; bisect 快照恢复前核对
+时间或恢复后 grep 修复注释; 快照用完即删。
+
+---
+
+## 第三批反馈修复(2026-09-16, H003-30 陈磊 / H004-40 陈镜霓)
+
+**事实与根因(四修, 全量 468 passed 后重跑两份验收)**:
+
+1. **`_EXAM_DETAIL_START_RE` 误吞发现清单(陈磊)**: `^(?:颈动脉|甲状腺|腹部|心脏|泌尿系|肝胆胰脾)彩超`
+   把"异常检查结果"里的**分号并列清单行** `颈动脉彩超（查冠心病危险因子）；甲状腺彩超；B超（…）；…；脂肪肝`
+   当细节段起点 → 其后 7 行(胆囊壁毛糙/腹腔胀气/膀胱内壁/甲状腺右叶结节/甲状腺左叶切除术后/
+   心电图检查：1、窦性心律)被整段跳过。**修**: 该分支加负向断言 `(?!.*[；;])` —— 独立表头
+   ("颈动脉彩超"/"心脏彩超（体检）")与潮州 ＋号并列清单仍照旧触发(26 份基线护栏零变化)。
+2. **结论条目成对入库(陈磊 22=11×2)**: 并发 backfill 竞态(两 worker/watchdog 重投)+ `autoflush=False`
+   使入口/循环内 COUNT 均看不到未提交行。**修**: `_store_abnormalities` 入口对
+   `report_interpretation` 行 `SELECT … FOR UPDATE`(仅 mysql, sqlite 测试跳过) + 调用内 `_seen_names`
+   同名去重。测试 `tests/modules/report/test_abnormality_store.py`(3 条 sqlite 内存库)。
+3. **坐标路径结果形态(陈镜霓 白带常规)**: "Ⅲ级 ↑"(等级+箭头)/"++"(纯加号)不被认作结果 →
+   整表被**段级形态门**丢弃(`_EXAM_DETAIL_START` 无关); 表头 "单 位"/"参 考 值" **字间空格**
+   使 `cell_role` 返回 None → 单位/参考列整列丢弃(/HP 未接上)。**修**: `_GRADE_VAL_RE/
+   _GRADE_ARROW_VAL_RE/_PLUS_ONLY_VAL_RE` 仅坐标路径启用(行式不启用: 其"值后文本序消费单位"
+   会把下一行单位列错配给等级行); 形态门接受 等级/纯加号/单破折号; `cell_role` 空白归一。
+   验收: `阴道清洁度（QJD）|Ⅲ级|无单位/参考|黄`、`白细胞（WBC1）|++|/HP`。
+4. **建议归属校验补"头颈"**(陈磊重跑 LLM 把甲状腺建议贴给胆囊壁毛糙): `_BODY_ORGANS_RE` 加
+   `头颈部?`; 报告 30 `--mode reinterpret` 后 胆囊壁毛糙 建议已清空。
+
+**纪律提醒(再次)**: 改 worker 链代码(service.py 等)后必须 `bash /tmp/restart_workers2.sh`
+再重跑(本轮 worker 启于改动前, 先重启 18:48 再重跑); 重跑扫描件前 curl 验 8001 OCR。
+第三批两份验收结果: 陈磊 指标 158(仅 $\gamma$→γ 命名清理)、结论条目 5 条(旧 11 条含科普误抽);
+陈镜霓 指标 125→133(非 raw 行口径)(新增视力/妇科查体/粪常规/病理结论行 + 阴道清洁度), 黄 4→5。
+
+### 第三批 10 份纳入基线护栏(2026-09-16, 用户验收态冻结)
+
+**样例**: `体检报告样例/0-第三批/`(东方医院/华山医院/六院金山/仁济医院/中医院 5 份 H003 +
+安鹏/蔡超/陈镜霓/白玮衡/高帅 5 份 H004)。
+**id 对应**: H003 27 鲍文祥(东方)/28 常逢龙(华山)/29 包雁飞(六院金山)/30 陈磊(仁济)/31 曹嘉冰(中医院);
+H004 38 安鹏/39 蔡超/40 陈镜霓/41 白玮衡/43 高帅。
+**基线**: gen 脚本 REPORT_IDS 已扩至 H003 18 份 / H004 18 份, JSON 重生成(旧条目零变化)。
+**三层覆盖**:
+- DB 三件套(test_h003/h004_baseline_guard.py, 按 JSON keys 自动参数化): 全部 10 份 ✓(108 passed)。
+- 结论重提取(test_conclusion_text_reguard.py): MATCH +3(28/31/40, 严格 hash==基线);
+  HYBRID/离线锁 +7(27/29/30/38 纯扫描、39 文本层损坏 force-ocr、41 白玮衡[生产段尾
+  "本次体检结果汇总"块在签名后, 现行签名截断不含]、43 高帅[离线多姓名页眉行, 生产
+  有 skip_lines])。**41/43 若未来重跑导致生产文本变化, 由 DB 快照报警走人工审**。
+- 指标重提取(test_gx_bj_indicator_guard.py::TestSummBaselineYellow): +5(28/31/40/41/43,
+  文本规则链可复现黄名单); 27/29/30/38(纯扫描 VLM)/39(force-ocr) 不在该层。
+
+**同日修复(带纯函数断言)**: `_is_findings_anchor` 的"建议"类【】锚点判定过宽 ——
+`"建议" in s` 会把"【肺结节】建议您胸外科/呼吸科定期复查随诊。"(发现+建议同行, 华山式
+整类报告)判成锚点, 其下一行又是锚点时该段仅一行 → 被"空锚点段"规则整体丢弃(常逢龙
+整条丢失; 重提取 hash DIFF)。**修法**: 只看 `【】` 内标题(`_t.group(1)`)是否含"建议",
+不看整行 —— `【体检建议】`/`【医师建议】`(高帅)仍为锚点。修复后 28 转 MATCH。
+测试: `test_extraction_units.py::test_inline_advice_bracket_not_anchor` +
+`test_inline_advice_bracket_line_collected`。

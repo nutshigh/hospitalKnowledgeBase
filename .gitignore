@@ -61,3 +61,6 @@ batchToDo.md
 
 # 诊断产物(LLM 快照/结论 diff, 不入库)
 backend/artifacts/
+
+# 端到端重跑/diff 证据(2026-09-15)
+log/

@@ -28,6 +28,36 @@ _SEMI_VAL_RE = re.compile(r"^[+]?[1-5]\+?[\d.]*$")
 _COMBO_VAL_RE = re.compile(r"^([\d.]+)\s*[,，]\s*(超重|肥胖|偏高|偏低|升高|降低|阳性|异常)$")
 
 
+# 2026-09-15: 结果与箭头同行("17.6 ↓"/"7.17↑"/"阳性 ↑") —— 报告无提示列, 标志
+# 在结果右侧(嘉兴市中医医院陈镜霓)。返回 (值, 是否带箭头)。
+_TRAILING_ARROW_VAL_RE = re.compile(r"^([<>≤≥]?\s*[\d.]+|阴性|阳性|弱阳性)\s*[↑↓]$")
+
+
+def _value_with_arrow(s: str) -> tuple:
+    m = _TRAILING_ARROW_VAL_RE.match((s or "").strip())
+    if m:
+        return m.group(1).strip(), True
+    return None, False
+
+
+# 2026-09-16: 等级值(罗马数字/IV+级)与纯加号半定量 —— 坐标路径结果形态
+# (陈镜霓 H004-40 白带常规: "阴道清洁度（QJD） Ⅲ级 ↑" / "白细胞（WBC1） ++")。
+# 仅坐标路径(layout)启用: 行式路径"值后按文本序消费单位"会把下一行单位列的
+# "/HP"错配给等级行(视觉上 /HP 属下一行), 与坐标真值冲突; 且行式值后单位会经
+# service 组装回填进列式行, 污染正确产物。
+_GRADE_VAL_RE = re.compile(r"^(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]|[IV]+)\s*级$")
+_GRADE_ARROW_VAL_RE = re.compile(r"^((?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]|[IV]+)\s*级)\s*[↑↓]$")
+_PLUS_ONLY_VAL_RE = re.compile(r"^\+{2,4}$")
+
+
+def _grade_value_with_arrow(s: str) -> tuple:
+    """等级值+箭头("Ⅲ级 ↑"/"III级↓") → (值, True); 否则 (None, False)。"""
+    m = _GRADE_ARROW_VAL_RE.match((s or "").strip())
+    if m:
+        return m.group(1).strip(), True
+    return None, False
+
+
 def _norm_value_cell(ln: str) -> Optional[str]:
     """若整行是"可作结果的单元格"(符号数字+方括号注释/半定量), 返回规范化 result, 否则 None。"""
     m = _SIGNED_VAL_RE.match(ln)
@@ -49,12 +79,15 @@ _VALUE_RE = re.compile(
     r"^([\d.]+)((?:\s+(?=[\u4e00-\u9fa5])[\u4e00-\u9fa5a-zA-Z%‰/·×^μ]+)|\s*[a-zA-Z%‰/·×^μ]*)$"
 )
 _QUAL_RE = re.compile(rf"^({_QUALITATIVE_WORDS})\s*[+\-]?$")
+# 2026-09-14: 定性值带括号注释("阳性( DOB:10.30)" 华山 C13 呼气试验, "阳性(234.27)")
+# → 视作结果单元格; 仅限 阳性/阴性/弱阳性, 避免吞并其它定性词的说明性括号。
+_QUAL_ANNOT_RE = re.compile(r"^(?:阳性|阴性|弱阳性)\s*[（(][^）)]*[)）]\s*$")
 # 名称须含汉字(排除单位行"cm""ng/ml"); 允许前导标记(▲/▲★/★/＊/*, 滨州/北京/贵港表格,
 # 可带空格);
 # 2026-08-29: 允许希腊字母/字母/数字开头("γ-谷氨酰转移酶""*L-γ-谷氨酰基转移酶""C14尿素呼气试验")
 _NAME_RE = re.compile(
-    r"^[▲△★*＊]{0,2}\s?[A-Za-z0-9α-ωΑ-Ωγ#\-.()（）]*\s?[\u4e00-\u9fa5]"
-    r"[\u4e00-\u9fa5A-Za-z0-9()（）%·#\-/α-ωΑ-Ωγ\[\]\. ]{0,24}$"
+    r"^[▲△★*＊]{0,2}\s?[A-Za-z0-9α-ωΑ-Ωγ#\-.()（）\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A]*\s?[\u4e00-\u9fa5]"
+    r"[\u4e00-\u9fa5A-Za-z0-9()（）%·#\-/α-ωΑ-Ωγ\[\]\. \uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A]{0,24}$"
     r"|^(?i:(?!.*\/(?:mmol|umol|mg|ug|ng|pg|g|ml|dl|l|iu|u|fl)\s*$)"
     r"[A-Za-z][A-Za-z0-9]*(?:/[A-Za-z0-9]+)+$)"
     r"|^(?:pH|PH)$"
@@ -68,8 +101,8 @@ _UNIT_RE = re.compile(
 # 2026-08-31: ↑/↓ 异常前缀(广西人民"↑208～428""↑<3.37", 可叠加符号)
 # 2026-09-05: ≤/≥ 单侧上限/下限(德宏 BA% "≤1"、BA# "≤0.06")
 _RANGE_RE = re.compile(
-    r"^(?:[<>≤≥~～↑↓]\s*){0,2}[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+$"
-    r"|^(?:[<>≤≥~～↑↓]\s*){0,2}[\d.]+$"
+    r"^(?:[<>＜＞≤≥~～↑↓]\s*){0,2}[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+$"
+    r"|^(?:[<>＜＞≤≥~～↑↓]\s*){0,2}[\d.]+$"
 )
 # 箭头行(偏高/偏低标记): "↑" "↓"
 _ARROW_RE = re.compile(r"^[↑↓]$")
@@ -121,7 +154,7 @@ def _clean_name_tail(name: str) -> str:
 
 
 def _is_value_line(s: str) -> bool:
-    return bool(_VALUE_RE.match(s) or _QUAL_RE.match(s))
+    return bool(_VALUE_RE.match(s) or _QUAL_RE.match(s) or _QUAL_ANNOT_RE.match(s))
 
 
 def _next_line_kind(lines: list[str], i: int) -> str:
@@ -228,13 +261,13 @@ def _parse_ref(rest: str) -> tuple[Optional[str], Optional[str]]:
     """从行内剩余文本解析参考范围: "3.1-5.7" / "1.16--1.42" / "<5.2" / ">1.04" / "～5.20" / "(18-24)"。
     2026-08-31: 容忍 ↑/↓ 异常前缀(广西人民"↑208～428" —— ↑ 是报告方异常标记, 非 ref 一部分)。
     """
-    m = re.search(r"\(?([<>≤≥↑↓]?[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+|[<>≤≥~～]\s*[\d.]+)\)?", rest)
+    m = re.search(r"\(?([<>＜＞≤≥↑↓]?[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+|[<>＜＞≤≥~～]\s*[\d.]+)\)?", rest)
     if not m:
         return None, None
     s = m.group(1)
-    if s.startswith("<") or s.startswith("≤"):
+    if s.startswith(("<", "＜", "≤")):
         return None, s[1:].strip()
-    if s.startswith(">") or s.startswith("≥"):
+    if s.startswith((">", "＞", "≥")):
         return s[1:].strip(), None
     if s.startswith("~") or s.startswith("～"):
         return None, s[1:].strip()
@@ -270,8 +303,8 @@ def _range_with_unit(s: str) -> Optional[tuple]:
     if not s:
         return None
     if not re.fullmatch(
-            r"[<>≤≥~～↑↓]?\s*[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+"
-            r"|[<>≤≥~～↑↓]?\s*[\d.]+", s):
+            r"[<>＜＞≤≥~～↑↓]?\s*[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+"
+            r"|[<>＜＞≤≥~～↑↓]?\s*[\d.]+", s):
         return None
     lo, hi = _parse_ref(s)
     if lo or hi:
@@ -351,8 +384,11 @@ def _text_has_reversed_ref(lines: list[str]) -> bool:
     return False
 
 
-def extract_indicator_rows(text: str) -> list[dict]:
-    """按行扫描, 提取(名称, 结果, 单位, 参考范围)对。支持行内/分行/定性值/序号制/名称折行。"""
+def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dict]:
+    """按行扫描, 提取(名称, 结果, 单位, 参考范围)对。支持行内/分行/定性值/序号制/名称折行。
+
+    keep_bare_arrow=True(扫描件): 裸箭头仍作本行标志; False(文本件): 交信号通道同排配对。
+    """
     text = _strip_history_compare_table(text)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     lines = _merge_unclosed_paren_lines(lines)
@@ -425,8 +461,10 @@ def extract_indicator_rows(text: str) -> list[dict]:
             i += 1
             continue
         # 分行模式: 当前行是值行(含符号值">1000[..]"/半定量"+1" 形态)
+        # 2026-09-15: 结果与箭头同行("17.6 ↓")也是值行(嘉兴市中医院陈镜霓)
+        _va, _vaf = _value_with_arrow(ln)
         _norm_v = None if i == 0 else _norm_value_cell(ln)
-        if (_is_value_line(ln) or _norm_v) and i > 0:
+        if (_is_value_line(ln) or _norm_v or _vaf) and i > 0:
             prev = lines[i - 1]
             prev_is_name = (
                 _NAME_RE.match(prev) and not _skip_name(prev)
@@ -470,7 +508,7 @@ def extract_indicator_rows(text: str) -> list[dict]:
             # "历史结果"单数列: "13.70|13.50|↓|15.5--18.1|fL" —— 单数行跳过,
             # 继续向后找真 ref/unit)
             ref_low = ref_high = None
-            row_flag = 0
+            row_flag = 2 if _vaf else 0  # 值自带箭头 = 报告方异常标志
             # 2026-09-07: 反列序表(茂名 "[ref]\n名称\n[↑]\n值\n单位"): 名称前一行
             # RANGE = 本指标参考 → 优先于向后消化(值后 range 属下一指标, 曾错配假黄)
             prev_ref_idx = i - name_offset - 1
@@ -489,7 +527,9 @@ def extract_indicator_rows(text: str) -> list[dict]:
                     break  # 2026-09-07: 值后消化遇下一指标名称即断(莆田 pH 行曾
                     # 被当单位/"6.0"被当历史列, 4.5-8.0 被误配给 维生素C)
                 if _ARROW_RE.match(lj):
-                    row_flag = max(row_flag, 2)
+                    # 2026-09-15: 文本件裸箭头交坐标信号通道(高帅); 扫描件仍作本行标志
+                    if keep_bare_arrow:
+                        row_flag = max(row_flag, 2)
                     j += 1
                     continue
                 if _FLAG_TEXT_RE.match(lj):
@@ -545,7 +585,7 @@ def extract_indicator_rows(text: str) -> list[dict]:
                     ref_low, ref_high = plo, phi
                     _consumed_ref_lines.add(prev_ref_idx)
 
-            result_v = m2.group(1) if m2 else (_norm_result or ln)
+            result_v = m2.group(1) if m2 else (_norm_result or (_va if _vaf else ln))
             _nm = _strip_refcell_prefix((prev + paren_part).lstrip("★*＊▲△"))
             row = {"item_name": _nm, "result": result_v, "unit": unit,
                    "ref_low": ref_low, "ref_high": ref_high}
@@ -619,16 +659,24 @@ _SIGN_LINE_RE = re.compile(
 )
 
 
-def _assemble_column_row(name: str, block: list[str]) -> Optional[dict]:
+def _assemble_column_row(name: str, block: list[str],
+                         keep_bare_arrow: bool = False) -> Optional[dict]:
     """五元组聚合: 名称 + [值|单位|ref|提示]。弃检不入库; 异常标志 → signal_flag=3。
 
     2026-08-29: 数字类行(含 > 前缀值 ">1000")统一按"首个=result, 其后=ref"分流。
+    keep_bare_arrow=True(扫描件: 信号通道无文本层可用)时裸 ↑/↓ 仍作本行标志;
+    文本件由信号通道按同排坐标定夺, 此处跳过裸箭头防错配(高帅)。
     """
     row = {"item_name": name, "result": "", "unit": "", "ref_low": None, "ref_high": None,
            "signal_flag": 0}
     for b in block:
         if _FLAG_SKIP_RE.match(b):
             return None  # 弃检/未检: 不入库
+        # 2026-09-15: 文本件裸 ↑/↓ 由信号通道按同排(y)坐标配对定夺 —— 文本序下"箭头
+        # 在下一行名称前"的版面会把箭头错配给上一行(高帅 血小板压积/甘油三酯 假黄);
+        # 扫描件无文本层(信号通道为空), 仍按列式文本序作本行标志(钦州二 钾(K))
+        if not keep_bare_arrow and _ARROW_RE.match(b):
+            continue
         if _FLAG_ABNORMAL_RE.match(b):
             row["signal_flag"] = 3
             continue
@@ -668,7 +716,7 @@ def _assemble_column_row(name: str, block: list[str]) -> Optional[dict]:
     return row
 
 
-def extract_column_table_rows(text: str) -> list[dict]:
+def extract_column_table_rows(text: str, keep_bare_arrow: bool = False) -> list[dict]:
     """列式表格解析: 表头序列识别 → 块聚合。返回含 signal_flag 的行。
 
     2026-09-07: 支持两类"单元格 dump 顺序与视觉列序相悖"的新模板, 由表头词汇分派:
@@ -765,7 +813,7 @@ def extract_column_table_rows(text: str) -> list[dict]:
                             m2 += 1
                         else:
                             break
-                    row = _assemble_column_row(name, block)
+                    row = _assemble_column_row(name, block, keep_bare_arrow=keep_bare_arrow)
                     if row:
                         out.append(row)
                     k = m2
@@ -1054,7 +1102,8 @@ _HEADER_WORD_RE = re.compile(
 def extract_personal_info(text: str) -> dict:
     import re as _re
     out: dict = {}
-    m = _re.search(r"姓\s*名[:：]\s*([\u4e00-\u9fa5·]{2,6})", text)
+    # 2026-09-14: 双语标签("姓名(Name)：___ 陈磊")—— 允许键后括号英文与下划线占位
+    m = _re.search(r"姓\s*名(?:\([^)]*\))?[:：\s_]*([\u4e00-\u9fa5·]{2,6})", text)
     if m and not _HEADER_WORD_RE.match(m.group(1)):
         out["name"] = m.group(1).strip()
     # 兜底1: 单位后紧跟性别字 → 姓名(柳州"单位: 石坤 男 41岁")
@@ -1064,14 +1113,14 @@ def extract_personal_info(text: str) -> dict:
             out["name"] = m.group(1).strip()
     # 兜底2: 姓名: 后 80 字窗口内第一个非表头词(梧州"姓名: 性别: 男 团体: ... 谢国宾")
     if not out.get("name"):
-        m = _re.search(r"姓\s*名[:：]", text)
+        m = _re.search(r"姓\s*名(?:\([^)]*\))?[:：]", text)
         if m:
             window = text[m.end():m.end() + 80]
             for cand in _re.findall(r"[\u4e00-\u9fa5·]{2,6}", window):
                 if not _HEADER_WORD_RE.match(cand):
                     out["name"] = cand
                     break
-    m = _re.search(r"性\s*别[:：]\s*(男|女)", text)
+    m = _re.search(r"性\s*别(?:\([^)]*\))?[:：\s_]*(男|女)", text)
     if m:
         out["gender"] = m.group(1)
     if not out.get("gender"):
@@ -1079,10 +1128,10 @@ def extract_personal_info(text: str) -> dict:
         m = _re.search(r"(男|女)[\s\S]{0,6}?\d{1,3}\s*岁", text[:1500])
         if m:
             out["gender"] = m.group(1)
-    m = _re.search(r"年\s*龄[:：]\s*(\d{1,3})\s*岁?", text)
+    m = _re.search(r"年\s*龄(?:\([^)]*\))?[:：\s_]*(\d{1,3})\s*岁?", text)
     if m:
         out["age"] = m.group(1)
-    m = _re.search(r"(体检日期|检查日期|体检时间|登记日期|首检日期)\s*[:：]?\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
+    m = _re.search(r"(体检日期|检查日期|体检时间|登记日期|首检日期)(?:\([^)]*\))?\s*[:：]?\s*[_\s]*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
     if m:
         out["report_date"] = f"{m.group(2)}-{int(m.group(3)):02d}-{int(m.group(4)):02d}"
     m = _re.search(r"单\s*位[:：]\s*([\u4e00-\u9fa5A-Za-z（）()]{2,30})", text)
@@ -1168,10 +1217,17 @@ def _pair_from_lines(lines: list[str], idx: int, signal: str) -> Optional[dict]:
     # 信号行行内解析: 支持编号前缀 + 【】前缀 + 名称紧跟数字(崇左综述"(1)超重25.7 BMI")
     m = None
     for variant in (lines[idx], re.sub(r"【[^】]*】[:：]?", "", lines[idx], count=1)):
+        # 2026-09-14: 先试"名称：值"(冒号分隔)形式 —— 防名称尾部缩写数字("载脂蛋白-A1")
+        # 被当结果("1")(华山常逢龙小结)。冒号形式下名称可含尾部数字/字母, 值须在冒号后。
         m = re.match(
-            r"^(?:[（(]\d+[)）、.。]?)?([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9()（）%·\-/ ]{0,20}?)[\s:：]*([\d.]+)",
+            r"^(?:[（(]\d+[)）、.。]?)?([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9()（）%·\-/ ]{0,24}?)[：:]\s*([\d.]+)",
             variant,
         )
+        if not m:
+            m = re.match(
+                r"^(?:[（(]\d+[)）、.。]?)?([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9()（）%·\-/ ]{0,20}?)[\s:：]*([\d.]+)",
+                variant,
+            )
         if m:
             break
     if m and not _skip_name(m.group(1)):
@@ -1197,18 +1253,23 @@ def _pair_from_lines(lines: list[str], idx: int, signal: str) -> Optional[dict]:
                 nv = _norm_value_cell(v)
                 if nv:
                     return {"item_name": name0, "result": nv, "unit": "", "signal": signal}
-                if _QUAL_RE.match(v):
+                if _QUAL_RE.match(v) or _QUAL_ANNOT_RE.match(v):
                     return {"item_name": name0, "result": v, "unit": "", "signal": signal}
                 if _NAME_RE.match(v):
                     break
             return None
-    # 向上找名称行(≤3 行内, 跳过箭头/单位/范围/序号行; 中间夹英文括号行如
+    # 向上找名称行(跳过箭头/单位/范围/序号行; 中间夹英文括号行如
     # "(A-TPO)" 并入名称 —— 马鞍山表头/红字名称行与值间隔简称行)
+    # 2026-09-14: 仅对**独立箭头行**("↑"/"↓")放宽窗口 3→5 —— 中医院曹嘉冰/防城港中
+    # 表格 dump=名称/值/参考/单位/箭头, 名称在箭头前 4 行(参考/单位占 2 行)。
+    # 非独立箭头行(小结/综述行内嵌 ↑, 如"总胆固醇偏高【6.29 ↑】")维持窗口 3:
+    # 放宽会让小结行向上跨到上一指标(防城港中 HDL/谷草/RDW 假黄回归)。
     if _PAREN_ONLY_RE.match(ln) and re.search(r"[A-Za-z]", ln):
         _self_paren = ln  # 信号行自身是英文简称括号行(红字)
     else:
         _self_paren = ""
-    for k in range(1, 4):
+    _name_win = 6 if _ARROW_RE.match(ln.strip()) else 4
+    for k in range(1, _name_win):
         if idx - k < 0:
             break
         cand = lines[idx - k]
@@ -1228,16 +1289,102 @@ def _pair_from_lines(lines: list[str], idx: int, signal: str) -> Optional[dict]:
             # 向下找值行
             for j in range(idx - k + 1, min(idx + 3, len(lines))):
                 v = lines[j]
+                # 2026-09-15: 值+箭头同行("17.6 ↓") → 值取数字, 标志已由 signal 承担
+                _av, _aflag = _value_with_arrow(v)
+                if _aflag:
+                    return {"item_name": name, "result": _av, "unit": "", "signal": signal}
                 m2 = _VALUE_RE.match(v)
                 if m2:
                     return {"item_name": name, "result": m2.group(1), "unit": m2.group(2).strip(), "signal": signal}
                 nv = _norm_value_cell(v)
                 if nv:
                     return {"item_name": name, "result": nv, "unit": "", "signal": signal}
-                if _QUAL_RE.match(v):
+                if _QUAL_RE.match(v) or _QUAL_ANNOT_RE.match(v):
                     return {"item_name": name, "result": v, "unit": "", "signal": signal}
+                # 2026-09-15: 结果单元格被 fitz 拆成两行(">1000[阳性反应" + "（+）]")——
+                # 单行归一失败, 拼下一行(非纯箭头)再试(日照 乙肝表面抗体标志丢失回归)
+                if j + 1 < len(lines) and not _ARROW_RE.match(lines[j + 1].strip()):
+                    nv2 = _norm_value_cell(v + lines[j + 1])
+                    if nv2:
+                        return {"item_name": name, "result": nv2, "unit": "", "signal": signal}
             return {"item_name": name, "result": "", "unit": "", "signal": signal}
     return None
+
+
+# 2026-09-14: 多对小结行("载脂蛋白-A1：0.80g/L ↓；高密度…：0.93mmol/L ↓；低密度…：3.45 ↑；")
+# 逐对提取 —— 原 _pair_from_lines 只取第一对, 漏同行的后续异常(华山常逢龙)。
+_SUMMARY_SEG_RE = re.compile(
+    r"^[\s（(]*([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9()（）%·\-/ ]{0,29}?)[：:]\s*"
+    r"([<>≤≥]?\s*[\d.]+)\s*([^\d↑↓；;]*?)\s*([↑↓])$")
+
+
+def _pair_summary_line(line: str, signal: str) -> Optional[list[dict]]:
+    """多对小结行逐对提取; 无 ";；" 分隔时返回 None(交 _pair_from_lines 单对处理)。
+    各段须自带箭头才算异常。"""
+    if "；" not in line and ";" not in line:
+        return None
+    rows: list[dict] = []
+    for seg in re.split(r"[；;]", line):
+        seg = seg.strip().rstrip("。")
+        if not seg:
+            continue
+        m = _SUMMARY_SEG_RE.match(seg)
+        if not m:
+            continue
+        nm = _clean_name_tail(m.group(1))
+        if not nm or _skip_name(nm):
+            continue
+        rows.append({"item_name": nm, "result": m.group(2).strip(),
+                     "unit": m.group(3).strip(), "signal": signal})
+    return rows or None
+
+
+def _pair_arrow_by_row(lines: list[str], meta: list[tuple], idx: int) -> list[dict]:
+    """纯箭头行("↑"/"↓")按**同一视觉行(y)**配对名称/结果。
+
+    兼容"提示列箭头在文本流中排在下一行名称之前"的版面(高帅 血常规/血脂: 箭头与
+    名称同排, 但文本序是 …上一行ref/arrow/本行名称/值) —— 按文本顺序向上找名会把
+    箭头错配给上一行(血小板压积/甘油三酯 假黄)。"""
+    page0, y0, ax = meta[idx]
+    same = [(i, meta[i][2], lines[i]) for i in range(len(lines))
+            if i != idx and meta[i][0] == page0 and abs(meta[i][1] - y0) <= 3.0
+            and lines[i]]
+    if not same:
+        return []
+    name = None
+    name_x = None
+    for _i, _x, t in sorted(same, key=lambda z: z[1]):
+        if _NAME_RE.match(t) and not _skip_name(t) and not _is_value_line(t):
+            name = t.lstrip("★*＊▲△").strip()
+            name_x = _x
+            break
+    if not name:
+        return []
+    result, unit = None, ""
+    for _i, x, t in sorted(same, key=lambda z: z[1]):
+        # 2026-09-15: 名称左侧的单元格是"序号"列(马鞍山 9/21/23 被当结果) —— 跳过;
+        # 结果只可能在名称右侧(至箭头 x 之间)。
+        if name_x is not None and x <= name_x:
+            continue
+        if x > ax:
+            break
+        m2 = _VALUE_RE.match(t)
+        if m2:
+            result, unit = m2.group(1), m2.group(2).strip()
+            break
+        nv = _norm_value_cell(t)
+        if nv:
+            result = nv
+            break
+        if _QUAL_RE.match(t) or _QUAL_ANNOT_RE.match(t):
+            result = t
+            break
+    if not result:
+        return []
+    # _coord: 该信号由同排坐标配对得出(可靠) —— 调用方不再套用 _SIGNAL_ONLY_SKIP_RE
+    # 黑名单(腰围等被列式路径依赖的项, 若被黑名单拒收会丢标志)
+    return [{"item_name": name, "result": result, "unit": unit,
+             "signal": "arrow", "_coord": True}]
 
 
 def extract_abnormal_signals(pdf_path: str) -> list[dict]:
@@ -1249,21 +1396,22 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
     import fitz
     doc = fitz.open(pdf_path)
     all_lines: list[str] = []
+    line_meta: list[tuple] = []  # (page_no, y0, x0) —— 同页同排(y)配对箭头用(高帅)
     signal_idx: list[tuple[int, str]] = []
-    for page in doc:
+    for page_no, page in enumerate(doc):
         d = page.get_text("dict")
         block_lines = []
         for block in d.get("blocks", []):
             for line in block.get("lines", []):
                 t = "".join(s.get("text", "") for s in line.get("spans", [])).strip()
                 if t:
-                    block_lines.append((t, line.get("spans", [])))
+                    block_lines.append((t, line.get("spans", []), line.get("bbox")))
         # 2026-09-05: "历次体检结果比对/上次·本次体检结论"表(百色) = 结论对比文本,
         # 非检查项表格 → 标题行起(含)的该页内容不进信号通道。
-        skip_from = next((i for i, (t, _) in enumerate(block_lines)
+        skip_from = next((i for i, (t, _s, _b) in enumerate(block_lines)
                           if "历次体检结果比对" in t or "历次体检对比" in t
                           or "历年对比" in t or "结果对比图" in t), len(block_lines))
-        for line_idx, (text, spans) in enumerate(block_lines):
+        for line_idx, (text, spans, bbox) in enumerate(block_lines):
             if line_idx >= skip_from:
                 continue
             if not text:
@@ -1271,6 +1419,9 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
             if re.search(r"(弃检|未检|放弃|拒检|无法完成)", text):
                 continue
             all_lines.append(text)
+            line_meta.append((page_no,
+                              float(bbox[1]) if bbox else 0.0,
+                              float(bbox[0]) if bbox else 0.0))
             idx = len(all_lines) - 1
             # 2026-09-07(口径确认): 红字样式不单独作为异常标志 —— 异常行均有
             # ↑↓/提示列字母(H/L/A)/提示文字/*等标志, 由下方分支/表格标志列承担。
@@ -1286,20 +1437,35 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
     seen: dict = {}
     out = []
     for idx, sig in signal_idx:
-        row = _pair_from_lines(all_lines, idx, sig)
-        # result 为空 = 弃检/未检/配对失败, 不是异常信号, 剔除
-        if row and row["item_name"] and row["result"]:
+        # 2026-09-15: 纯箭头行优先按同排(y)配对(高帅); 失败再走文本序
+        rows = []
+        if sig == "arrow" and _ARROW_RE.match(all_lines[idx].strip()):
+            rows = _pair_arrow_by_row(all_lines, line_meta, idx)
+        if not rows:
+            multi = _pair_summary_line(all_lines[idx], sig)
+            if multi is not None:
+                rows = multi
+            else:
+                single = _pair_from_lines(all_lines, idx, sig)
+                rows = [single] if single else []
+        for row in rows:
+            # result 为空 = 弃检/未检/配对失败, 不是异常信号, 剔除
+            if not (row and row["item_name"] and row["result"]):
+                continue
             # 2026-09-05: 配对值 = 阴性词("齿 正常"红字/整行标红的正常项)不是异常信号
             if re.fullmatch(r"(正常|未见异常|未见明显异常|无异常|未触及|未肿大|无肿大|未见|无|无明显异常)", row["result"]):
                 continue
-            if _SIGNAL_ONLY_SKIP_RE.match(row["item_name"]):
+            if not row.get("_coord") and _SIGNAL_ONLY_SKIP_RE.match(row["item_name"]):
                 continue
             # 2026-09-07: 检验科小结/建议句式残名("本次体检发现血甘油三酯:2.06↑")
             if row["item_name"].startswith("本次体检发现"):
                 continue
             # 2026-09-07: 综述折行残名(厦门华西"甘油三\n酯:2.06mmol/L↑" → "酯")——
             # 信号通道按 pdf 行扫, 不经过 para 折行合并, 单/短汉字名一律拒收
-            if len(re.findall(r"[\u4e00-\u9fa5]", row["item_name"])) <= 1 \
+            # (2026-09-15: 同排坐标配对的结果可靠, 豁免此过滤 —— "钾(K)" 只有 1 汉字
+            # 但确是合法指标名, 钦州二)
+            if not row.get("_coord") \
+                    and len(re.findall(r"[\u4e00-\u9fa5]", row["item_name"])) <= 1 \
                     and len(row["item_name"]) <= 4:
                 continue
             # 2026-09-07: 名称残留定性括号("(阴性(-)/(+)或…)" 莆田检验科小结) → 拒
@@ -1314,14 +1480,29 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
 
 
 # === Phase 2 接线(2026-09-07): 布局优先, 布局不可用(空/异常/图片型)回退旧列式 ===
+def _pdf_text_layer_ok(pdf_path: str) -> bool:
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        total = sum(len(p.get_text().strip()) for p in doc)
+        doc.close()
+        return total > 200
+    except Exception:
+        return False
+
+
 def col_rows_with_fallback(pdf_path: str, text: str) -> list[dict]:
+    # 2026-09-15: 坐标主路径已修(两联排表按角色最小重复周期分组, 高帅/白玮衡体格表
+    # "身高|179.5cm 收缩压|121mmHg" 不再并成一名) → 重新优先启用; 空/异常回退文本列式。
     try:
         rows = col_rows_via_layout(pdf_path)
         if rows:
             return rows
     except Exception:
         pass
-    return extract_column_table_rows(text)
+    # 扫描件无文本层 → 信号通道为空, 裸箭头仍按列式文本序作标志; 文本件交信号通道同排配对
+    keep = not _pdf_text_layer_ok(pdf_path)
+    return extract_column_table_rows(text, keep_bare_arrow=keep)
 
 
 # === Phase 2(2026-09-07): 列语义组装(col_rows_via_layout) ===
@@ -1362,14 +1543,9 @@ def col_rows_via_layout(pdf_path: str) -> list[dict]:
         elif _last_rx is not None and lines:
             # 跨页/跨 region 续表(德宏毕建国化验大表): 继承最近表头谱(继承段)
             segs.append((_last_rx, 0, len(lines), True))
-        for roles_xs, s0, s1 in segs:
-            if s0 > 0 and segs[0][1] == 0:
-                pass  # 首段含页首块(已在切段时 cur_start=0? 首表头前数据未被包)
         # 处理: 段 s0 的表头行之前若有数据(页首块), 归该段
         if segs:
-            segs[0] = (segs[0][0], 0, segs[0][2])
-        import os as _os
-        _dbg = _os.getenv("LAYOUT_DEBUG")
+            segs[0] = (segs[0][0], 0, segs[0][2], segs[0][3])
         for roles_xs, s0, s1, inherited in segs:
             seg_rows: list[dict] = []
             seg_data = []
@@ -1378,10 +1554,6 @@ def col_rows_via_layout(pdf_path: str) -> list[dict]:
                 if L.header_roles(cells):
                     continue
                 seg_data.append(cells)
-            if _dbg and seg_data and any("肌酐" in c.text for cl in seg_data for c in cl):
-                import sys as _s
-                print("SEG roles:", [(r, round(x)) for r, x in roles_xs],
-                      "cols:", [round(x) for x in col_xs], file=_s.stderr)
             cells_flat = [c for cl in seg_data for c in cl if c.text.strip()]
             if not cells_flat:
                 continue
@@ -1410,86 +1582,137 @@ def col_rows_via_layout(pdf_path: str) -> list[dict]:
                 if best_i is None or best_ratio < 0.6:
                     break
                 col_xs.pop(best_i)
+            # 2026-09-15: 两联排/多联排表(项目名称|检查结果 成对重复, 高帅/白玮衡体格表
+            # "身高|179.5cm  收缩压|121mmHg")—— 角色序列取**最小重复周期**分组, 每组各产
+            # 一行; 常规五列表周期=列数 → 单行, 行为不变。
+            ncol = len(roles_xs)
+            period = ncol if ncol else 1
+            for _p in range(1, ncol):
+                if ncol % _p == 0 and all(roles_xs[i][0] == roles_xs[i % _p][0]
+                                          for i in range(ncol)):
+                    period = _p
+                    break
+
+            def _col_index(c):
+                if not col_xs:
+                    return None
+                col = min(range(len(col_xs)), key=lambda k: abs(c.x0 - col_xs[k]))
+                if len(col_xs) == len(roles_xs) and abs(c.x0 - col_xs[col]) <= 30.0:
+                    return col
+                if roles_xs:
+                    k = min(range(len(roles_xs)),
+                            key=lambda i: abs(c.x0 - roles_xs[i][1]))
+                    if abs(c.x0 - roles_xs[k][1]) <= 90.0:
+                        return k
+                return None
+
             for cells in seg_data:
-                name_parts, result_parts, ref_parts, unit_parts, flag_parts = [], [], [], [], []
-                float_flags: List[str] = []
-                for c in sorted(cells, key=lambda c: c.x0):
-                    col = min(range(len(col_xs)), key=lambda k: abs(c.x0 - col_xs[k]))
-                    role = None
-                    if col_xs and abs(c.x0 - col_xs[col]) <= 30.0:
-                        if len(col_xs) == len(roles_xs):
-                            role = roles_xs[col][0]
-                    if role is None and roles_xs:
-                        k = min(range(len(roles_xs)),
-                                key=lambda i: abs(c.x0 - roles_xs[i][1]))
-                        if abs(c.x0 - roles_xs[k][1]) <= 90.0:
-                            role = roles_xs[k][0]
-                            # 窄标志(↑↓HL)不应落非 flag 角色(体格表值后 ↑ 会被 ref 列吸走)
-                            if c.text.strip() in ("↑", "↓", "H", "L") \
-                                    and role != "flag":
-                                role = None
-                    t = c.text.strip()
-                    if role is None:
-                        if t in ("↑", "↓", "H", "L"):
-                            float_flags.append(t)
+                by_group: dict = {}
+                for c in cells:
+                    col = _col_index(c)
+                    if col is None:
                         continue
-                    if role == "name":
-                        name_parts.append(t)
-                    elif role == "result":
-                        result_parts.append(t)
-                    elif role == "ref":
-                        ref_parts.append(t)
-                    elif role == "unit":
-                        unit_parts.append(t)
-                    elif role == "flag":
-                        flag_parts.append(t)
-                name = "".join(name_parts).strip()
-                result_txt = "".join(result_parts).strip()
-                if not name or not result_txt or _skip_name(name):
-                    continue
-                row = {"item_name": name.lstrip("★*＊▲△"), "result": result_txt,
-                       "unit": "".join(unit_parts).strip(),
-                       "ref_low": None, "ref_high": None, "signal_flag": 0,
-                       "__auth": True}
-                tail_flag = ""
-                m = re.search(r"[（(](↑|↓|\*)[)）]$", result_txt)
-                if m:
-                    tail_flag = m.group(1)
-                    result_txt = result_txt[:m.start()]
-                nv = _norm_value_cell(result_txt)
-                row["result"] = nv if nv is not None else result_txt.strip()
-                for rt in reversed(ref_parts):
-                    ru = _range_with_unit(rt)
-                    if ru:
-                        rlo, rhi, runit = ru
-                        row["ref_low"], row["ref_high"] = rlo, rhi
-                        if not row["unit"] and runit:
-                            row["unit"] = runit
-                        break
-                else:
-                    for rt in ref_parts:
-                        lo, hi = _parse_ref(rt)
-                        if lo or hi:
-                            row["ref_low"], row["ref_high"] = lo, hi
+                    by_group.setdefault(col // period, []).append((col, c))
+                for _gi, cps in by_group.items():
+                    name_parts, result_parts, ref_parts, unit_parts, flag_parts = [], [], [], [], []
+                    float_flags: List[str] = []
+                    for col, c in sorted(cps, key=lambda z: z[1].x0):
+                        role = roles_xs[col][0] if col < len(roles_xs) else None
+                        t = c.text.strip()
+                        if role is None:
+                            continue
+                        # 窄标志(↑↓HL)不应落非 flag 角色(体格表值后 ↑ 会被 ref 列吸走)
+                        if t in ("↑", "↓", "H", "L") and role != "flag":
+                            float_flags.append(t)
+                            continue
+                        if role == "name":
+                            name_parts.append(t)
+                        elif role == "result":
+                            result_parts.append(t)
+                        elif role == "ref":
+                            ref_parts.append(t)
+                        elif role == "unit":
+                            unit_parts.append(t)
+                        elif role == "flag":
+                            flag_parts.append(t)
+                    name = "".join(name_parts).strip()
+                    # 2026-09-15: 名称列混入序号单元格("21"+"血小板分布宽度", 马鞍山) →
+                    # 丢首纯数字部(仅当同组还有含汉字名称部, 防误删"25羟基维生素D"整体名)
+                    if len(name_parts) > 1 and re.fullmatch(r"\d{1,4}", name_parts[0]) \
+                            and any(re.search(r"[\u4e00-\u9fa5]", p) for p in name_parts[1:]):
+                        name_parts = name_parts[1:]
+                        name = "".join(name_parts).strip()
+                    result_txt = "".join(result_parts).strip()
+                    if not name or not result_txt or _skip_name(name):
+                        continue
+                    # 2026-09-15: 弃检/未检行不入库(步新宇 眼压"弃检"曾被坐标路径产出判黄)
+                    if _FLAG_SKIP_RE.match(result_txt):
+                        continue
+                    # 2026-09-15: 坐标层不打 __auth —— __auth 只给文本列式的 rev/dual
+                    # 块表做抑制; 坐标行打上会把信号通道(箭头/提示文字)对该行的标志
+                    # 全部压掉(桂林 干化学酮体 flagtext 曾因此未判黄)。
+                    # 2026-09-15: 剥名称前缀标记后再 strip —— "lstrip(标记)"只去标记字符,
+                    # "* 总胆红素" → " 总胆红素" 会留空格(百色 护栏名对不上)
+                    row = {"item_name": name.lstrip("★*＊▲△").strip(), "result": result_txt,
+                           "unit": "".join(unit_parts).strip(),
+                           "ref_low": None, "ref_high": None, "signal_flag": 0}
+                    tail_flag = ""
+                    m = re.search(r"[（(](↑|↓|\*)[)）]$", result_txt)
+                    if m:
+                        tail_flag = m.group(1)
+                        result_txt = result_txt[:m.start()]
+                    # 2026-09-15: 结果与箭头同格("17.6 ↓"/"阳性 ↑", 4列无提示列, 陈镜霓)
+                    # —— 剥离箭头并置标志; 否则箭头留在 result, 且归一化去重会顶掉
+                    # 信号通道产出的正确行("17.6" flag=2), 导致标志丢失
+                    _av, _aflag = _value_with_arrow(result_txt)
+                    if _aflag:
+                        result_txt = _av
+                    else:
+                        # 2026-09-16: 等级值+箭头(同上, 坐标路径专用)
+                        _gv, _gflag = _grade_value_with_arrow(result_txt)
+                        if _gflag:
+                            result_txt = _gv
+                            _aflag = True
+                    nv = _norm_value_cell(result_txt)
+                    row["result"] = nv if nv is not None else result_txt.strip()
+                    for rt in reversed(ref_parts):
+                        ru = _range_with_unit(rt)
+                        if ru:
+                            rlo, rhi, runit = ru
+                            row["ref_low"], row["ref_high"] = rlo, rhi
+                            if not row["unit"] and runit:
+                                row["unit"] = runit
                             break
-                flag_txt = "".join(flag_parts)
-                if (tail_flag or float_flags
-                        or flag_txt in ("↑", "↓", "H", "L", "*", "异常")
-                        or "*" in flag_txt
-                        or re.search(r"(偏高|升高|增高|降低|偏低|阳性|异常)", flag_txt)):
-                    row["signal_flag"] = 3
-                out.append(row)
-    # 结果形态门(报告级): result 应为 值/定性形态; 若大量 result 是单位/文本(表头-
-    # 数据列倒挂, 如茂名人民陈灿明把 单位列当结果列 → result='μmol/L')→ 布局不可信,
-    # 整体弃用, 交行式(反列序/序号制)兜底。
-    if out:
-        bad = 0
-        for r in out:
-            res = str(r["result"]).strip()
-            if not (re.match(r"^[<>≤≥]?\s*[\d.]+", res)
-                    or re.match(r"^(阴性|阳性|弱阳性|正常|未见|未检出|无|未及|1\+|2\+|[1-5]\+)", res)
-                    or _norm_value_cell(res) is not None):
-                bad += 1
-        if bad / len(out) > 0.2:
-            return []
+                    else:
+                        for rt in ref_parts:
+                            lo, hi = _parse_ref(rt)
+                            if lo or hi:
+                                row["ref_low"], row["ref_high"] = lo, hi
+                                break
+                    flag_txt = "".join(flag_parts)
+                    if (_aflag or tail_flag or float_flags
+                            or flag_txt in ("↑", "↓", "H", "L", "*", "异常")
+                            or "*" in flag_txt
+                            or re.search(r"(偏高|升高|增高|降低|偏低|阳性|异常)", flag_txt)):
+                        row["signal_flag"] = 3
+                    seg_rows.append(row)
+            # 2026-09-15: **段级**结果形态门(取代原报告级整包弃用) —— 表区里常混入
+            # 非化验叙述块(影像"检查所见"/体检须知编号/页眉元信息, 广西人民), 其
+            # result 是长叙述; 只弃这些段, 保留化验/体格式表段(否则好段被连坐丢弃)。
+            if seg_rows:
+                bad = 0
+                for r in seg_rows:
+                    res = str(r["result"]).strip()
+                    if not (re.match(r"^[<>≤≥]?\s*[\d.]+", res)
+                            or re.match(r"^(阴性|阳性|弱阳性|正常|未见|未检出|无|未及|1\+|2\+|[1-5]\+)", res)
+                            or _norm_value_cell(res) is not None
+                            # 2026-09-16: 等级值/纯加号/单破折号("-"=阴性简写, 行式
+                            # _QUAL_RE 同口径)也算合法结果形态 —— 否则白带常规类表
+                            # ("Ⅲ级/++/-"多) 整段被形态门丢弃(陈镜霓 阴道分泌物表)。
+                            or _GRADE_VAL_RE.match(res)
+                            or _PLUS_ONLY_VAL_RE.match(res)
+                            or res in ("-", "–", "—")):
+                        bad += 1
+                if bad / len(seg_rows) <= 0.2:
+                    out.extend(seg_rows)
     return out

@@ -83,7 +83,14 @@ def refresh_interpretation_counts(db: Session, interpretation_id: int) -> None:
 
 
 def get_interpretation(db: Session, report_id: int) -> Optional[ReportInterpretation]:
-    return db.query(ReportInterpretation).filter(ReportInterpretation.report_id == report_id).first()
+    """2026-09-16: 同一报告可能存在多条解读(重跑/重试残留) —— 优先返回**最新已完成**
+    行, 无已完成时回退最新行。原实现 first() 无排序, 多条时会随机返回旧行(前端会
+    看到旧分级: 欧阳庆 MPV 旧解读为绿)。"""
+    q = (db.query(ReportInterpretation)
+         .filter(ReportInterpretation.report_id == report_id))
+    return (q.filter(ReportInterpretation.status == "completed")
+            .order_by(ReportInterpretation.id.desc()).first()
+            or q.order_by(ReportInterpretation.id.desc()).first())
 
 
 def get_judgments(db: Session, interpretation_id: int) -> List[IndicatorJudgment]:
@@ -261,9 +268,21 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
                         row = i
                         break
             it["origin_row"] = row
-            it["origin_line"] = conc_lines[row].strip()[:80] if row is not None else None
+            it["origin_line"] = (_matched_sentence(conc_lines[row], name)[:200]
+                                 if row is not None else None)
 
     return regular_items + kept
+
+
+def _matched_sentence(line: str, name: str) -> str:
+    """取结论原文行中**含该条目名的整句**(按句读切分) —— 前端红区命中句标红定位,
+    比整行更精准(仁济/中医院结论行常含多句)。"""
+    if not line:
+        return ""
+    for sent in re.split(r"(?<=[。！？；;])", line):
+        if name in sent:
+            return sent.strip()
+    return line.strip()
 
 
 def _link_disease_mapping(db, conclusion_name: str, regular_name: str) -> None:

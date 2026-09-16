@@ -17,7 +17,9 @@ export default function HomePage() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
 
-    const fetchOnce = () => api.get('/reports').then(r => {
+    // 2026-09-16: 显式取一页 100 条 —— 默认 page_size=20, 同一账号报告超过 20 份时
+    // 较早的报告(张亚/谢国宾/庞海锋等)被挤到第 2 页, 前端未做翻页 → 视觉上"消失"。
+    const fetchOnce = () => api.get('/reports', { params: { page_size: 100 } }).then(r => {
       if (cancelled) return;
       setReports(r.data.items || []);
       // 只要还有未完成的报告（含 interp），每 10 秒轮询

@@ -1,3 +1,4 @@
+import html
 import logging
 import re
 from typing import Optional
@@ -57,6 +58,41 @@ def _clean_markdown(text: str) -> str:
     return text.strip()
 
 
+# 2026-09-14: VLM 把报告方异常标记渲染成 LaTeX/符号前缀("$ ^{*} $收缩压"/"* 耳（右）",
+# 六院金山) —— 名称前的标记不属于指标名, 统一剥除。
+# 2026-09-15: 补 ☆(尿检异常标记, 蔡超)/★, 并规范化名称里的希腊字母 LaTeX。
+_VLM_NAME_MARKER_RE = re.compile(
+    r"^\s*(?:\$\s*\^\s*\{\s*\*\s*\}\s*\$|\$\s*\*?\s*\$|\^\{?\*\}?|\*|＊|★|☆|✦|▲|△|\s)+")
+_GREEK_MAP = {"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "mu": "μ",
+              "Alpha": "Α", "Beta": "Β", "Gamma": "Γ", "Delta": "Δ", "Mu": "Μ"}
+
+
+def _strip_vlm_name_marker(name: str) -> str:
+    s = _VLM_NAME_MARKER_RE.sub("", name or "").strip()
+    s = _normalize_math_text(s)
+    for en, ch in _GREEK_MAP.items():
+        s = s.replace("\\" + en, ch)
+    return s
+
+
+# 2026-09-15: OCR 把单位渲染成 LaTeX/数学符("$ 10^{9}/L $"/"$ \mu $g/L"/
+# "mL/(min*1.73m^{2})") → 去掉 $ 包裹与 {} , \mu→μ 等(东方安鹏)
+_MATH_WRAP_RE = re.compile(r"\$\s*([^$]*?)\s*\$")
+
+
+def _normalize_math_text(s):
+    if not s:
+        return s
+    s = str(s)
+    s = _MATH_WRAP_RE.sub(r"\1", s)
+    s = s.replace("$", "")
+    s = (s.replace("\\mu", "μ").replace("\\times", "×")
+         .replace("\\cdot", "·").replace("\\uparrow", "").replace("\\downarrow", ""))
+    s = re.sub(r"\^\s*\{\s*([^}]*?)\s*\}", r"^\1", s)
+    s = s.replace("{", "").replace("}", "")
+    return s.strip()
+
+
 def _parse_personal_info(text: str) -> dict:
     """Extract personal info from Markdown/text lines like **Key:** value or Key: value."""
     info = {}
@@ -82,11 +118,13 @@ def _parse_personal_info_cn(text: str) -> dict:
     机构名:XX医院 / XX医院健康管理中心
     """
     info = {}
+    # 2026-09-14: 双语标签("姓名(Name)：___ 陈磊"/"体检日期(Date of Check Up): 2026-07-03")
+    # —— 允许键后括号英文与下划线占位; 姓名只取汉字(避免捕获 "___")
     patterns = {
-        "name": r"姓\s*名[:：\s]+([^\s,，\|]{2,10})",
-        "gender": r"性\s*别[:：\s]+(男|女)",
-        "age": r"年\s*龄[:：\s]*(\d+)",
-        "check_date": r"(?:体检日期|检查日期|日期|日\s*期)[:：\s]+(\d{4}[-/年]\d{1,2}[-/月]\d{1,2})",
+        "name": r"姓\s*名(?:\([^)]*\))?[:：\s_]*([\u4e00-\u9fa5·]{2,10})",
+        "gender": r"性\s*别(?:\([^)]*\))?[:：\s_]*(男|女)",
+        "age": r"年\s*龄(?:\([^)]*\))?[:：\s_]*(\d+)",
+        "check_date": r"(?:体检日期|检查日期|日期|日\s*期)(?:\([^)]*\))?[:：\s_]*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2})",
         # === STRATEGY:v2026-08-04-unitname 提取体检机构名 ===
         # 匹配 "XX医院" / "XX医院健康管理中心" / "XX体检中心"，取医院名部分
         "unit_name": r"([\u4e00-\u9fa5A-Za-z]{2,30}?(?:医院|体检中心|健康管理中心|中心医院))",
@@ -113,7 +151,9 @@ def _html_table_rows(text: str) -> list[list[str]]:
     for tr in re.findall(r"<tr>(.*?)</tr>", text, re.S):
         cells = []
         for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S):
-            cells.append(re.sub(r"<[^>]+>", "", td).strip())
+            # 2026-09-15: 还原 HTML 实体("&gt;1.04"/"&lt;1.70"/"≤"等) —— 否则参考值
+            # 带着 "&gt;" 字符串入库, 前端显示成 ">…"(东方安鹏)
+            cells.append(html.unescape(re.sub(r"<[^>]+>", "", td)).strip())
         rows.append(cells)
     return rows
 
@@ -129,7 +169,7 @@ def _parse_markdown_table(text: str) -> list[dict]:
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("|") and stripped.endswith("|"):
-                cells = [c.strip() for c in stripped[1:-1].split("|")]
+                cells = [html.unescape(c.strip()) for c in stripped[1:-1].split("|")]
                 if all(c.replace("-", "").replace(" ", "") == "" for c in cells):
                     continue  # separator row
                 table_rows.append(cells)
@@ -162,7 +202,8 @@ def _parse_markdown_table(text: str) -> list[dict]:
             col_map = cm
             continue
         indicator = _row_to_indicator(row, col_map)
-        name = indicator.get("item_name", "").strip()
+        name = _strip_vlm_name_marker(indicator.get("item_name", "").strip())
+        indicator["item_name"] = name
         if not name or name in ("(each indicator)", "项目名称", "结果"):
             continue
         # 2026-08-26: 页眉姓名行 / 问诊类行不入指标
@@ -172,6 +213,11 @@ def _parse_markdown_table(text: str) -> list[dict]:
         # 2026-08-26: 无结果无参考的行(报告尾页医师/热线)不入指标
         if not indicator.get("result") and not (indicator.get("ref_low") or indicator.get("ref_high")):
             continue
+        # 2026-09-14: 叙述型"结果"(OCR 把危险分层/说明整段塞入结果列)不是指标值 →
+        # 丢弃(超长或含句读); 否则 result_value(50) 溢出导致落库崩溃(东方鲍文祥)
+        _res = str(indicator.get("result") or "")
+        if len(_res) > 50 or re.search(r"[。；！？]", _res):
+            continue
         # Deduplicate: same name + same value → skip
         key = (name, indicator.get("result", ""))
         if key in seen:
@@ -179,18 +225,25 @@ def _parse_markdown_table(text: str) -> list[dict]:
         seen.add(key)
         # 参考范围解析: 支持 "3.5~9.5" / "~5.17"(仅上限) / "5.17~"(仅下限) / "<5.2"
         # 非数字参考(如"阴性")置 None, 避免脏数据落库
-        for ref_key in ("ref_low", "ref_high"):
-            val = indicator.get(ref_key)
-            if val is None:
-                continue
-            sv = str(val)
-            if not re.search(r"\d", sv):
-                indicator[ref_key] = None
-                continue
-            lo, hi = _parse_ref_range(sv)
-            if lo is not None or hi is not None:
-                indicator["ref_low"] = lo
-                indicator["ref_high"] = hi
+        # 2026-09-14: 参考范围含中文说明("适宜：<1.70，增高：…")是分层对照表, 非单一
+        # 范围 → 整体留空(仁济陈磊血脂4项)。
+        if any(re.search(r"[\u4e00-\u9fa5]", str(indicator.get(k) or ""))
+               for k in ("ref_low", "ref_high")):
+            indicator["ref_low"] = None
+            indicator["ref_high"] = None
+        else:
+            for ref_key in ("ref_low", "ref_high"):
+                val = indicator.get(ref_key)
+                if val is None:
+                    continue
+                sv = str(val)
+                if not re.search(r"\d", sv):
+                    indicator[ref_key] = None
+                    continue
+                lo, hi = _parse_ref_range(sv)
+                if lo is not None or hi is not None:
+                    indicator["ref_low"] = lo
+                    indicator["ref_high"] = hi
         indicators.append(indicator)
 
     return indicators
@@ -217,6 +270,15 @@ def _match_header_columns(headers: list[str]) -> dict:
 
     mapping = {}
     for i, h in enumerate(headers):
+        # 2026-09-14: 值/否定描述单元格("未提示"/"未见异常"/"无")不是表头词 ——
+        # 否则数据行 ["红细胞信息","未提示",…] 被当表头切换列映射, 后续指标漏提
+        # (仁济陈磊尿液分析"粘丝")。
+        if h.startswith(("未", "无", "不", "非")):
+            continue
+        # 2026-09-15: "上次结果/历史结果"列不映射 —— 否则空的上次列会覆盖
+        # "本次结果"值, 导致所有结果丢失(东方安鹏双值表)
+        if "上次" in h or "历史" in h:
+            continue
         best_key, best_score = None, 0.0
         for key, aliases in keywords.items():
             for alias in aliases:
@@ -233,12 +295,20 @@ def _match_header_columns(headers: list[str]) -> dict:
 def _row_to_indicator(row: list[str], col_map: dict) -> dict:
     """Convert a table row to an indicator dict using column mapping."""
     indicator = {}
+    row = list(row)
     # 2026-08-29: 任意列出现报告方异常标志(提示列值/错位列) → signal_flag=3
     # (钦州 YMII 行列错位, "↑"落在参考列; 统一按标志词扫描兜底)
     for cell in row:
         if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\\uparrow|\\downarrow)$", cell.strip()):
             indicator["signal_flag"] = 3
             break
+    # 2026-09-14: 箭头附着在结果单元格尾部("14.0 \uparrow"/"0.59\downarrow"/"14.0↑")
+    # → 置 signal_flag=3 并从单元格剥离(扫描件 VLM 常把箭头并入结果/参考列)
+    _arrow_tail = re.compile(r"\s*(?:\\uparrow|\\downarrow|↑|↓)\s*$")
+    for i, cell in enumerate(row):
+        if _arrow_tail.search(cell.strip()):
+            indicator["signal_flag"] = 3
+            row[i] = _arrow_tail.sub("", cell.strip()).strip()
     for i, cell in enumerate(row):
         key = col_map.get(i)
         if key is None:
@@ -261,7 +331,7 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
         elif key == "result":
             indicator["result"] = cell
         elif key == "unit":
-            cell = cell.strip()
+            cell = _normalize_math_text(cell.strip())
             # 2026-08-26: 无单位行(体重指数等)参考范围可能被 VLM 对齐到单位列
             if re.search(r"\d[\d.]*\s*[~\-—～到至]\s*[\d.]+", cell) or re.match(r"[<>＜＞~～]\s*[\d.]+", cell):
                 lo, hi = _parse_ref_range(cell)
@@ -279,20 +349,45 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
         elif key == "ref_high":
             indicator["ref_high"] = cell or None
 
+    # 2026-09-15: 扫描件 OCR 常丢标志列(欧阳庆 "血小板平均体积(MPV) 7.30↓" 标志
+    # 列在 OCR markdown 里为空) —— 无任何标志且结果/参考均为数字时, 按数值越界补
+    # signal_flag=2(箭头等价)。仅 VLM/扫描路径; 文本路径判定口径不变(仅标志判黄)。
+    if not indicator.get("signal_flag") and indicator.get("result") is not None:
+        rv = _as_float(indicator.get("result"))
+        lo = _as_float(indicator.get("ref_low"))
+        hi = _as_float(indicator.get("ref_high"))
+        if rv is not None and ((lo is not None and rv < lo)
+                               or (hi is not None and rv > hi)):
+            indicator["signal_flag"] = 2
+
     # If ref_low/ref_high not set by columns, try parsing combined ref_range cell
     return indicator
+
+
+def _as_float(v):
+    """数值化(容忍 >/</*/单位混排符号); 非数值返回 None。"""
+    if v is None:
+        return None
+    s = str(v).strip().lstrip("<>≤≥＞＜*=＜* ")
+    import re as _re
+    m = _re.match(r"^[\d.]+", s)
+    try:
+        return float(m.group(0)) if m else None
+    except ValueError:
+        return None
 
 
 def _parse_ref_range(text: str) -> tuple:
     """Parse reference range string. "3.5-9.5" → ("3.5", "9.5")."""
     text = text.strip()
-    m = re.match(r"([\d.]+)\s*[-~—到至]\s*([\d.]+)", text)
+    # 2026-09-15: 双横线范围 "40--50"(安鹏) 与单横线一并支持
+    m = re.match(r"([\d.]+)\s*[-~—到至]{1,2}\s*([\d.]+)", text)
     if m:
         return m.group(1), m.group(2)
-    m = re.match(r"[<＜]\s*([\d.]+)", text)
+    m = re.match(r"[<＜≤]\s*([\d.]+)", text)
     if m:
         return None, m.group(1)
-    m = re.match(r"[>＞]\s*([\d.]+)", text)
+    m = re.match(r"[>＞≥]\s*([\d.]+)", text)
     if m:
         return m.group(1), None
     # 2026-08-26: 钦州单限格式 "~5.17"(仅有上限) / "5.17~"(仅有下限)
