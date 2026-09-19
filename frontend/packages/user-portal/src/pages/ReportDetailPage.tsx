@@ -8,6 +8,7 @@ import ColorBadge from '../components/ColorBadge';
 import IndicatorRow from '../components/IndicatorRow';
 import StatusTag from '../components/StatusTag';
 import ChatPanel from '../components/ChatPanel';
+import BodyHealthMap from '../components/BodyHealthMap';
 import { useChatStore } from '../stores/chatStore';
 import { InterpretationReportCard } from '@hospital/shared';
 
@@ -126,6 +127,7 @@ export default function ReportDetailPage() {
   const [chatSessionId, setChatSessionId] = useState<number | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const [openModules, setOpenModules] = useState<string[]>([]);
+  const [bodyMapOpen, setBodyMapOpen] = useState(false);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -215,6 +217,9 @@ export default function ReportDetailPage() {
   const overallLevel = interpretation?.overall_level;
   const rawIndicators = interpretation?.indicators?.length ? interpretation.indicators : (report?.indicators || []);
   const moduleOrder = interpretation?.module_order ?? report?.module_order;
+  const hasAbnormal = rawIndicators.some(
+    (ind: any) => ind.color_level === 'red' || ind.color_level === 'yellow',
+  );
 
   // === STRATEGY:v2026-08-16-original-name-display 展示原始名 ===
   // 结论条目的 item_name 可能被归一化名/疾病名覆盖(如"窦性心律不齐"→"心律失常"),
@@ -237,7 +242,8 @@ export default function ReportDetailPage() {
   else if (conclusionItems.some((it: any) => it.color_level === 'yellow')) levelCounts.yellow += 1;
 
   const conclusionText = report.conclusion_text ? cleanConclusionText(report.conclusion_text) : '';
-  const conclusionBadge = overallLevel === 'red' ? 'red' : 'yellow';
+  const hasConclusion = conclusionText.length > 0;
+  const conclusionBadge = hasConclusion ? (overallLevel === 'red' ? 'red' : 'yellow') : 'gray';
   const redConclusionSentences = (interpretation?.indicators || [])
     .filter((it: any) => it.color_level === 'red' && it.origin_line)
     .map((it: any) => it.origin_line as string);
@@ -287,13 +293,27 @@ export default function ReportDetailPage() {
 
       {interpretation && (
         <div style={{
-          display: 'flex', gap: 8, marginBottom: 16, padding: '12px 16px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)',
+          display: 'flex', gap: 8, marginBottom: 16, padding: '12px 16px', background: 'var(--color-bg)',
+          borderRadius: 'var(--radius-sm)', alignItems: 'center',
         }}>
           <span style={{ color: 'var(--color-red)', fontWeight: 600, fontSize: 13 }}>红区 {levelCounts.red}</span>
           <span style={{ color: 'var(--color-border)' }}>|</span>
           <span style={{ color: 'var(--color-yellow)', fontWeight: 600, fontSize: 13 }}>黄区 {levelCounts.yellow}</span>
           <span style={{ color: 'var(--color-border)' }}>|</span>
           <span style={{ color: 'var(--color-green)', fontWeight: 600, fontSize: 13 }}>绿区 {levelCounts.green}</span>
+          {hasAbnormal && (
+            <button
+              type="button"
+              onClick={() => setBodyMapOpen(true)}
+              style={{
+                marginLeft: 'auto', border: '1px solid var(--color-primary)', background: 'var(--color-surface)',
+                color: 'var(--color-primary)', borderRadius: 16, padding: '4px 12px',
+                fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              人体健康图
+            </button>
+          )}
         </div>
       )}
 
@@ -314,7 +334,7 @@ export default function ReportDetailPage() {
             display: 'flex', alignItems: 'center', gap: 8,
           }}>
             📋 总检建议与结论（包含影像类结果）
-            <ColorBadge level={conclusionBadge} size="sm" />
+            <ColorBadge level={conclusionBadge} size="sm" label={hasConclusion ? undefined : '提取失败'} />
           </span>
           {conclusionText ? (
             conclusionExpanded ? <UpOutlined style={{ fontSize: 12 }} /> : <DownOutlined style={{ fontSize: 12 }} />
@@ -408,6 +428,12 @@ export default function ReportDetailPage() {
           <ChatPanel sessionId={chatSessionId} placeholder="基于本报告提问..." compact />
         </div>
       )}
+
+      <BodyHealthMap
+        open={bodyMapOpen}
+        onClose={() => setBodyMapOpen(false)}
+        indicators={rawIndicators}
+      />
     </Layout>
   );
 }
