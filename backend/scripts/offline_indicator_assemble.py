@@ -36,8 +36,9 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     match_profile, _compile = _load_report_profiles()
     profile = match_profile(text)
     compiled = _compile_profile_re(profile) if profile else {}
-    if profile and profile.get("visual_sort"):
-        text = _extract_pdf_text(pdf_path, visual_sort=True)
+    if profile and (profile.get("visual_sort") or profile.get("visual_lines")):
+        text = _extract_pdf_text(pdf_path, visual_sort=True,
+                                 visual_lines=bool(profile.get("visual_lines")))
     # 挖结论段(与 process_task 一致)
     findings_sec = _locate_findings_sections(
         text,
@@ -115,6 +116,8 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     for s_key in signal_names:
         if s_key[0] in auth_names:
             continue
+        if not (s_key[1] or "").strip():
+            continue  # 2026-09-23: 空结果信号行不入库(与 service 同构)
         if s_key not in seen_sig and s_key not in col_keys:
             indicators.append({
                 "item_name": s_key[0], "result": s_key[1],
@@ -126,6 +129,12 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
             continue
         if "定性" in (_ind.get("item_name") or "") and str(_ind.get("result", "")).startswith("阳性"):
             _ind["signal_flag"] = 1
+    # 2026-09-23: 姓名同名行清理(与 service.process_task 同构; 曹嘉冰封面"曹嘉冰/44")
+    from app.modules.report.table_extractor import extract_personal_info as _epi
+    _pname = (_epi(text).get("name") or "").strip()
+    if _pname:
+        indicators = [i for i in indicators
+                      if (i.get("item_name") or "").strip() != _pname]
     return normalize_indicators(indicators)
 
 

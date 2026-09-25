@@ -72,6 +72,8 @@ def _strip_vlm_name_marker(name: str) -> str:
     s = _normalize_math_text(s)
     for en, ch in _GREEK_MAP.items():
         s = s.replace("\\" + en, ch)
+    # 2026-09-24 用户口径修正: "微白蛋白"与"尿微量白蛋白"是**两项不同指标**
+    # (微白蛋白是尿检中的项目), 不做名称合并 —— 上一版别名已回滚。
     return s
 
 
@@ -91,6 +93,16 @@ def _normalize_math_text(s):
     s = re.sub(r"\^\s*\{\s*([^}]*?)\s*\}", r"^\1", s)
     s = s.replace("{", "").replace("}", "")
     return s.strip()
+
+
+def _norm_flag_cell(cell) -> str:
+    """标志/提示单元格归一(2026-09-23): 剥 $ 包裹/空格, LaTeX 箭头 → unicode。
+
+    OCR 扫描件标志列常输出 "$ \\uparrow $" / "\\uparrow"; 旧判定要求整格恰为
+    "\\uparrow" 而失配(鲍海宽胆红素三项标志丢失)。
+    """
+    s = str(cell or "").strip().replace("$", "")
+    return (s.replace("\\uparrow", "↑").replace("\\downarrow", "↓").strip())
 
 
 def _parse_personal_info(text: str) -> dict:
@@ -159,21 +171,58 @@ def _html_table_rows(text: str) -> list[list[str]]:
 
 
 def _parse_markdown_table(text: str) -> list[dict]:
-    """Parse a Markdown table into a list of indicator dicts."""
-    lines = text.split("\n")
-    table_rows = []
+    """Parse a Markdown/HTML table into a list of indicator dicts.
 
+    2026-09-23: 按 **<table> 块逐表**解析 —— 同页多表(双栏并排/连续多表)此前被
+    拉平成一个表, 表头与列映射跨表串用 → 标志/结果错配(陈海波双栏表整页错乱、
+    薄楠"阴道加德纳菌/抗甲状腺球蛋白抗体"假黄)。markdown 表按连续 | 行分块。
+    """
+    out: list[dict] = []
     if "<tr>" in text:
-        table_rows = _html_table_rows(text)
-    else:
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("|") and stripped.endswith("|"):
-                cells = [html.unescape(c.strip()) for c in stripped[1:-1].split("|")]
-                if all(c.replace("-", "").replace(" ", "") == "" for c in cells):
-                    continue  # separator row
-                table_rows.append(cells)
+        blocks = re.findall(r"<table[^>]*>(.*?)</table>", text, re.S)
+        for b in (blocks or [text]):
+            rows = _html_table_rows(b)
+            if _is_history_table(rows):
+                continue  # 历年对比表整表跳过(历史值不是本次指标)
+            out.extend(_rows_to_indicators(rows))
+        return out
+    cur: list[list[str]] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = [html.unescape(c.strip()) for c in stripped[1:-1].split("|")]
+            if all(c.replace("-", "").replace(" ", "") == "" for c in cells):
+                continue  # separator row
+            cur.append(cells)
+        else:
+            if cur:
+                out.extend(_rows_to_indicators(cur))
+                cur = []
+    if cur:
+        out.extend(_rows_to_indicators(cur))
+    return out
 
+
+def _is_history_table(table_rows: list) -> bool:
+    """2026-09-24: 历年对比表判定 —— 表头(前两行)含 ≥2 个日期列。
+
+    陈海波 p22 历年对比表("项目|2026-05-29|2024-04-19|2023-04-20")的"微白蛋白：>150
+    (0-100mg/L)"被当指标且值错误; 文本路径已有 _strip_history_compare_table, VLM 路径补同款。
+    """
+    if not table_rows:
+        return False
+    head = " ".join(str(c) for c in table_rows[0])
+    if len(re.findall(r"20\d{2}\s*[-/.年]\s*\d{1,2}", head)) >= 2:
+        return True
+    if len(table_rows) > 1:
+        head2 = " ".join(str(c) for c in table_rows[1])
+        if len(re.findall(r"20\d{2}\s*[-/.年]\s*\d{1,2}", head2)) >= 2:
+            return True
+    return False
+
+
+def _rows_to_indicators(table_rows: list) -> list[dict]:
+    """单表行集 → 指标列表(表头检测 + 列映射 + 小结行兜底)。"""
     if len(table_rows) < 2:
         return []
 
@@ -191,42 +240,41 @@ def _parse_markdown_table(text: str) -> list[dict]:
     header = table_rows[header_idx]
     col_map = _match_header_columns(header)
 
+    def _period_of(_hdr: list, _cmap: dict) -> int:
+        """表头角色序列的最小重复周期(单表双栏/多栏, 陈海波"分析项目|结果|参考值|单位"×2)。"""
+        roles = [_cmap.get(i) for i in range(len(_hdr))]
+        for _p in range(1, len(_hdr)):
+            if len(_hdr) % _p == 0 and all(roles[i] == roles[i % _p] for i in range(len(_hdr))):
+                return _p
+        return len(_hdr)
+
+    period = _period_of(header, col_map)
+
     indicators = []
     seen = set()
-    for row in table_rows[header_idx + 1:]:
-        if any(("人员" in c) or ("检查时间" in c) or ("审核时间" in c) or ("时间:" in c) for c in row):
-            continue
-        # 2026-08-26: 多表格报告(钦州)后续模块自带表头 → 切换列映射
-        cm = _match_header_columns(row)
-        if cm:
-            col_map = cm
-            continue
-        indicator = _row_to_indicator(row, col_map)
+
+    def _process(_row: list, _cmap: dict, _period: int) -> None:
+        indicator = _row_to_indicator(_row, _cmap)
         name = _strip_vlm_name_marker(indicator.get("item_name", "").strip())
         indicator["item_name"] = name
         if not name or name in ("(each indicator)", "项目名称", "结果"):
-            continue
-        # 2026-08-26: 页眉姓名行 / 问诊类行不入指标
+            return
         if re.search(r"(姓名[:：]|性别[:：]|门诊号|体检编号|既往病史|家族病史|月经史|"
                      r"遗传病史|过敏史|婚育史|手术史|输血史|神经及精神疾病)", name):
-            continue
-        # 2026-08-26: 无结果无参考的行(报告尾页医师/热线)不入指标
+            return
         if not indicator.get("result") and not (indicator.get("ref_low") or indicator.get("ref_high")):
-            continue
-        # 2026-09-14: 叙述型"结果"(OCR 把危险分层/说明整段塞入结果列)不是指标值 →
-        # 丢弃(超长或含句读); 否则 result_value(50) 溢出导致落库崩溃(东方鲍文祥)
+            return
         _res = str(indicator.get("result") or "")
         if len(_res) > 50 or re.search(r"[。；！？]", _res):
-            continue
-        # Deduplicate: same name + same value → skip
+            return
+        # 2026-09-24: 叙述式结果单元格("微白蛋白：>150（0-100mg/L）", 历年对比/汇总表)
+        # → 不入指标(陈海波 p22 历年对比表残留; 头部日期列偶被 OCR 读乱时兜底)
+        if ("：" in _res or ":" in _res) and name and name in _res:
+            return
         key = (name, indicator.get("result", ""))
         if key in seen:
-            continue
+            return
         seen.add(key)
-        # 参考范围解析: 支持 "3.5~9.5" / "~5.17"(仅上限) / "5.17~"(仅下限) / "<5.2"
-        # 非数字参考(如"阴性")置 None, 避免脏数据落库
-        # 2026-09-14: 参考范围含中文说明("适宜：<1.70，增高：…")是分层对照表, 非单一
-        # 范围 → 整体留空(仁济陈磊血脂4项)。
         if any(re.search(r"[\u4e00-\u9fa5]", str(indicator.get(k) or ""))
                for k in ("ref_low", "ref_high")):
             indicator["ref_low"] = None
@@ -244,9 +292,62 @@ def _parse_markdown_table(text: str) -> list[dict]:
                 if lo is not None or hi is not None:
                     indicator["ref_low"] = lo
                     indicator["ref_high"] = hi
+        _apply_numeric_fallback(indicator)
         indicators.append(indicator)
 
+    for row in table_rows[header_idx + 1:]:
+        if any(("人员" in c) or ("检查时间" in c) or ("审核时间" in c) or ("时间:" in c) for c in row):
+            continue
+        # 2026-08-26: 多表格报告(钦州)后续模块自带表头 → 切换列映射
+        cm = _match_header_columns(row)
+        if cm:
+            col_map = cm
+            period = _period_of(row, cm)
+            continue
+        # 2026-09-23: 双栏/多栏行按周期拆成多个子行分别解析(否则两组数据互相错配)
+        if period and period < len(row):
+            for _i in range(0, len(row), period):
+                _sub = row[_i:_i + period]
+                if len(_sub) < 2:
+                    continue
+                _process(_sub, {k: col_map.get(k) for k in range(period)}, period)
+        else:
+            _process(row, col_map, period)
+
+    _apply_summary_row_flags(indicators, table_rows)
     return indicators
+
+
+def _apply_summary_row_flags(indicators: list, table_rows: list) -> None:
+    """2026-09-23: 表尾"本次小结/小结"行补标志。
+
+    扫描件 OCR 偶丢提示列(薄楠尿常规表 P/Q 列整列缺失) → 从表尾小结行
+    "尿胆红素（BIL）阳性[1+ …]；尿胆原（URO）弱阳性[…]" 给对应指标补
+    signal_flag=3, 避免异常项判绿。
+    """
+    if not indicators or not table_rows:
+        return
+    for row in table_rows:
+        if not row:
+            continue
+        head = str(row[0] or "").strip()
+        if not re.search(r"(本次小结|小结|检查结论|结论)", head):
+            continue
+        text = "".join(str(c or "") for c in row[1:])
+        for seg in re.split(r"[；;]", text):
+            m = re.match(
+                r"^\s*([\u4e00-\u9fa5A-Za-z0-9()（）/·\-]+?)\s*"
+                r"(阳性|弱阳性|异常|偏高|偏低|升高|降低|↑|↓)", seg)
+            if not m:
+                continue
+            probe = re.sub(r"[\s（）()]", "", m.group(1))
+            if len(probe) < 2:
+                continue
+            for ind in indicators:
+                n = re.sub(r"[\s（）()]", "", str(ind.get("item_name") or ""))
+                if n and (n == probe or probe in n or n in probe):
+                    ind["signal_flag"] = ind.get("signal_flag") or 3
+                    break
 
 
 def _match_header_columns(headers: list[str]) -> dict:
@@ -298,17 +399,25 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
     row = list(row)
     # 2026-08-29: 任意列出现报告方异常标志(提示列值/错位列) → signal_flag=3
     # (钦州 YMII 行列错位, "↑"落在参考列; 统一按标志词扫描兜底)
-    for cell in row:
-        if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\\uparrow|\\downarrow)$", cell.strip()):
+    for _ci, cell in enumerate(row):
+        # 2026-09-23: 先归一 OCR 数学包裹("$ \\uparrow $" → "↑")再判 —— 鲍海宽"标志"列;
+        # 仅扫**已映射列**(未映射列多为历史结果列, 薄楠加德纳菌 2024 列"阳性"曾被当标志
+        # 假黄); 名称列不扫。钦州 YMII 错位场景的箭头落在参考列(已映射)仍可兜住。
+        if _ci not in col_map or col_map.get(_ci) == "item_name":
+            continue
+        _c = _norm_flag_cell(cell)
+        if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常)$", _c):
             indicator["signal_flag"] = 3
             break
     # 2026-09-14: 箭头附着在结果单元格尾部("14.0 \uparrow"/"0.59\downarrow"/"14.0↑")
     # → 置 signal_flag=3 并从单元格剥离(扫描件 VLM 常把箭头并入结果/参考列)
     _arrow_tail = re.compile(r"\s*(?:\\uparrow|\\downarrow|↑|↓)\s*$")
     for i, cell in enumerate(row):
-        if _arrow_tail.search(cell.strip()):
+        # 2026-09-23: 先剥 $ 包裹再判尾箭头(陈海波结果列 "$ 14.0 \\uparrow $" 曾漏配)
+        _c = cell.strip().replace("$", "").strip()
+        if _arrow_tail.search(_c):
             indicator["signal_flag"] = 3
-            row[i] = _arrow_tail.sub("", cell.strip()).strip()
+            row[i] = _arrow_tail.sub("", _c).strip()
     for i, cell in enumerate(row):
         key = col_map.get(i)
         if key is None:
@@ -329,6 +438,9 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
         elif key == "item_code":
             indicator["item_code"] = cell
         elif key == "result":
+            # 2026-09-24: 结果里的 LaTeX 符号归一(曾社健"弱阳性（ \\pm ）" → "弱阳性（±）")
+            cell = (cell.replace("\\pm", "±").replace("\\mu", "μ")
+                    .replace("\\times", "×").replace("\\cdot", "·"))
             indicator["result"] = cell
         elif key == "unit":
             cell = _normalize_math_text(cell.strip())
@@ -341,27 +453,46 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
                 indicator["unit"] = cell
         elif key == "flag":
             # 2026-08-29: 提示/标志列 → 报告方异常标志(↑/↓/偏高/H/L/阳性/LaTeX \uparrow) → signal_flag=3
-            cell = cell.strip()
-            if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\\uparrow|\\downarrow)$", cell):
+            # 2026-09-23: 先归一数学包裹("$ \uparrow $" → "↑")
+            cell = _norm_flag_cell(cell)
+            if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常)$", cell):
                 indicator["signal_flag"] = 3
         elif key == "ref_low":
             indicator["ref_low"] = cell or None
         elif key == "ref_high":
             indicator["ref_high"] = cell or None
 
-    # 2026-09-15: 扫描件 OCR 常丢标志列(欧阳庆 "血小板平均体积(MPV) 7.30↓" 标志
-    # 列在 OCR markdown 里为空) —— 无任何标志且结果/参考均为数字时, 按数值越界补
-    # signal_flag=2(箭头等价)。仅 VLM/扫描路径; 文本路径判定口径不变(仅标志判黄)。
-    if not indicator.get("signal_flag") and indicator.get("result") is not None:
-        rv = _as_float(indicator.get("result"))
-        lo = _as_float(indicator.get("ref_low"))
-        hi = _as_float(indicator.get("ref_high"))
-        if rv is not None and ((lo is not None and rv < lo)
-                               or (hi is not None and rv > hi)):
-            indicator["signal_flag"] = 2
+    # 2026-09-24: 分级定性参考("阴性:<0.9 可疑:0.9--1.1 阳性:≥1.1")且数值落在**阴性带**
+    # → 清掉标志(OCR 提示列列错位误读; 薄楠 EB病毒早期抗原IgM抗体 0.05 被读成 ↑)。
+    # 用户口径(2026-09-24): 保留该行, 只清误读标志。
+    if indicator.get("signal_flag"):
+        _rv0 = _as_float(indicator.get("result"))
+        if _rv0 is not None:
+            _refs0 = " ".join(str(c or "") for c in row)
+            _m0 = re.search(
+                r"阴性\s*[:：]?\s*(?:[<≤]\s*)?([\d.]+)(?:\s*[-~—到至]\s*([\d.]+))?", _refs0)
+            if _m0:
+                _hi0 = float(_m0.group(2) or _m0.group(1))
+                if _rv0 < _hi0:
+                    indicator["signal_flag"] = 0
 
-    # If ref_low/ref_high not set by columns, try parsing combined ref_range cell
+    # 2026-09-15: 数值越界兜底(箭头等价)统一在 _rows_to_indicators 的 ref 拆分后执行。
+    # 2026-09-23: 此处曾先跑一次 —— 单侧上限参考("<2.7")被 _as_float 当**下限** 2.7,
+    # 导致正常值误判越界(陈海波 甘胆酸/总胆固醇/甘油三酯/LDL/总胆汁酸/肌酸激酶 假黄)
+    # → 移除, 只保留拆分后的调用。
     return indicator
+
+
+def _apply_numeric_fallback(indicator: dict) -> None:
+    """无标志且结果/参考均为数值且越界 → signal_flag=2(箭头等价, 扫描件专用)。"""
+    if indicator.get("signal_flag") or indicator.get("result") is None:
+        return
+    rv = _as_float(indicator.get("result"))
+    lo = _as_float(indicator.get("ref_low"))
+    hi = _as_float(indicator.get("ref_high"))
+    if rv is not None and ((lo is not None and rv < lo)
+                           or (hi is not None and rv > hi)):
+        indicator["signal_flag"] = 2
 
 
 def _as_float(v):

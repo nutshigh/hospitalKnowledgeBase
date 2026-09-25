@@ -58,7 +58,47 @@ PROFILES = [
     # 其余医院用 ◆ 作科室分组(华山"◆ 血常规") —— 故仅按院声明 ◆ 为结论锚点, 避免
     # 把通用锚点表扩大误伤已适配报告。
     dict(keywords=["嘉兴市中医医院"], extra_anchor=[r"^◆"]),
-    dict(keywords=["日照"],
+    # === 2026-09-22: 第四批(新地区) ===
+    # 台州市中心医院: 结论标题"科室医生结论汇总:"不在通用词表 → 起点被后文锚点挤掉,
+    # 结论从半截【建议】开始; 且该页文本流乱序(标题/条目交错) → 视觉坐标重排
+    dict(keywords=["台州市中心医院"], visual_sort=True,
+         extra_anchor=[r"^科室医生结论汇总"]),
+    # 南通市第一人民医院: 结论标题"本次体检总结"不在通用词表; 2026-09-22 用户验收:
+    # 只取"健康指导建议"段(体检总结为过程罗列, 不入结论) → anchor_only
+    dict(keywords=["南通市第一人民医院"], anchor_only=True,
+         extra_anchor=[r"^健康指导建议"]),
+    # 郑州市第一人民医院: 健康建议段中夹"放射影像查询+感谢信"通知块(跨页, 后半段
+    # 起于句中无法逐行跳过) → 通知块起点**段尾断点**, 其后"健康建议"(第二处)是锚点
+    # 自动重启收集(二、血脂异常…)。skip 保留兜底。
+    dict(keywords=["郑州市第一人民医院"],
+         extra_break=[r"^放射影像查询", r"^尊敬的受检者"],
+         extra_skip=[r"^首先感谢您", r"^查询放射影像资料", r"^提示进行操作",
+                     r"^体检人ID", r"^第\d+次体检"]),
+    # 河南中医药大学第一附属医院(鲍海宽): 结论段只取"【本次体检建议】"(其后的
+    # 【各分科检查结果】是分科明细, 用户 2026-09-23 验收口径)
+    dict(keywords=["河南中医药大学第一附属医院"], anchor_only=True,
+         extra_anchor=[r"^【本次体检建议】"],
+         extra_break=[r"^【各分科检查结果】"]),
+    # 镇江市第一人民医院(陈海波): 结论段只取"健康建议"(其前"体检汇总"为罗列,
+    # 用户 2026-09-23 验收口径)
+    dict(keywords=["镇江市第一人民医院"], anchor_only=True,
+         extra_anchor=[r"^健康建议"],
+         # 健康建议段后接分科彩超表(首页标题"彩超（前列腺、膀胱）"), 需段尾断点,
+         # 否则分科表格行被收进结论(陈海波 2026-09-23 复验)
+         extra_break=[r"^彩超（前列腺、膀胱）"]),
+    # 大连大学附属中山医院(薄楠): 结论为编号清单(1-21), 第 21 点"乙肝免疫学检查全阴性"
+    # 属清单一项, 声明 keep_normal_numbered 使编号正常行不被当噪声跳过
+    dict(keywords=["大连大学附属中山医院"], keep_normal_numbered=True),
+    # 福州大学附属省立医院: 结论页"主检结论及建议"(签名)在前、"体检结论汇总"(真内容,
+    # 图片页 OCR)在后 → 声明 keep_post_sig 保留签名后的强标题段(默认关闭, 不影响他院)
+    dict(keywords=["福州大学附属省立医院"], keep_post_sig=True),
+    # 温州医科大学附属第一医院: 结论页"发现(左栏)|建议(右栏)"同行两栏, 块级文本流
+    # 把右栏建议排到左栏发现之前 → 声明 visual_lines(行级 y,x 重排)
+    # (2026-09-23: 曾加 merge_wrapped 合并折行片段, 用户复验效果不好 → 已回滚)
+    dict(keywords=["温州医科大学附属第一医院"], visual_lines=True),
+    # 2026-09-23: keyword 由裸"日照"改具体医院名 —— 薄楠报告结论含"增加日照"
+# (骨质疏松建议)误命中本档案(anchor_only+医学建议)导致结论整段丢失
+    dict(keywords=["日照市人民医院"],
          anchor_only=True, extra_anchor=["医学建议"]),  # 24 日照人民
     # 贵港东晖(用户 2026-09-12 口径): 结论段只取"异常指标"+"健康建议"两段,
     # "检查汇总"是体检项目明细(项目名非结果)不提取
@@ -125,6 +165,14 @@ def match_profile(text: str) -> dict:
             merged["review_block"] = True
         if prof.get("multi_findings"):
             merged["multi_findings"] = True
+        # 2026-09-22: 新档案开关必须在此白名单登记 —— 否则 match_profile 不拷贝,
+        # 档案声明形同虚设(温州 visual_lines / 福州 keep_post_sig 曾因此未生效)
+        if prof.get("visual_lines"):
+            merged["visual_lines"] = True
+        if prof.get("keep_post_sig"):
+            merged["keep_post_sig"] = True
+        if prof.get("keep_normal_numbered"):
+            merged["keep_normal_numbered"] = True
         for f in ("extra_break", "extra_skip", "extra_anchor"):
             if prof.get(f):
                 merged.setdefault(f, []).extend(list(prof[f]))

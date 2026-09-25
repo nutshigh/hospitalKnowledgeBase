@@ -30,7 +30,11 @@ FULL_SAMPLES = [s for s in TEXT_SAMPLES if not s.get("smoke")]
 
 
 def _extract_sample_text(sample: dict) -> str:
-    """生产同款文本: 每页 --- Page N --- 标记; visual 模板按坐标排序。"""
+    """生产同款文本: 每页 --- Page N --- 标记; visual 模板按坐标排序;
+    visual_lines 模板(温州程永春两栏结论)按行级(y,x)排序(与档案同构)。"""
+    if sample.get("visual_lines"):
+        from app.modules.report.layout import extract_visual_rows, visual_text
+        return visual_text(extract_visual_rows(str(SAMPLES_ROOT / sample["rel"])))
     doc = fitz.open(str(SAMPLES_ROOT / sample["rel"]))
     parts = []
     for p in range(doc.page_count):

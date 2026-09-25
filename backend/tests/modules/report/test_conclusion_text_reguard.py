@@ -54,6 +54,8 @@ SUMM = os.path.join(SAMPLES, "各地汇总")
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))))
 B3 = os.path.join(REPO, "体检报告样例", "0-第三批")
+# 2026-09-23: 第四批目录(与第三批分开; 此前误用 B3 导致 45-49 静默跳过)
+B4 = os.path.join(REPO, "体检报告样例", "0-第四批")
 BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 CASES = {
@@ -93,6 +95,18 @@ CASES = {
     ("h004", "40"): os.path.join(B3, "陈镜霓220028.pdf"),
     ("h004", "41"): os.path.join(B3, "白玮衡31151X.pdf"),
     ("h004", "43"): os.path.join(B3, "高帅185516.pdf"),
+    # 第四批扫描件(2026-09-25 验收)
+    ("h004", "50"): os.path.join(B4, "薄楠010045.pdf"),
+    ("h004", "51"): os.path.join(B4, "鲍海宽062316.pdf"),
+    ("h004", "52"): os.path.join(B4, "曾社健264019.pdf"),
+    ("h004", "55"): os.path.join(B4, "陈淳铭281655.PDF"),
+    ("h004", "56"): os.path.join(B4, "陈海波094518.PDF"),
+    # 第四批(2026-09-23 验收)
+    ("h004", "45"): os.path.join(B4, "方轶涛167517.pdf"),
+    ("h004", "46"): os.path.join(B4, "程永春18001x.pdf"),
+    ("h004", "47"): os.path.join(B4, "陈诚250411.pdf"),
+    ("h004", "48"): os.path.join(B4, "华裕健062315.pdf"),
+    ("h004", "49"): os.path.join(B4, "曹剑鸿238111.pdf"),
 }
 
 # hash == 验收基线(2026-09-15 基线重生成后 24 份; 含原 PENDING 6 份与
@@ -105,6 +119,8 @@ MATCH = {
     ("h004", "1"), ("h004", "2"), ("h004", "3"), ("h004", "5"), ("h004", "6"),
     ("h004", "21"), ("h004", "22"), ("h004", "23"), ("h004", "24"), ("h004", "25"),
     ("h004", "26"), ("h004", "27"), ("h004", "40"),
+    # 第四批: 46 程永春(visual_lines 行级重排)/47 陈诚/48 华裕健(visual_sort)/49 曹剑鸿
+    ("h004", "46"), ("h004", "47"), ("h004", "48"), ("h004", "49"),
 }
 
 # 离线链(hybrid=False)与生产链条不等价: 扫描/图片件(离线取不到段), 或生产链
@@ -123,6 +139,14 @@ HYBRID = {
     ("h004", "39"): "da39a3ee5e6b4b0d",
     ("h004", "41"): "9a8ade6409ddbd31",
     ("h004", "43"): "f9509ddffdc3e70a",
+    # 第四批 45 方轶涛: 结论页为图片页, 离线(hybrid=False)取不到段 → 离线锁(空)
+    ("h004", "45"): "da39a3ee5e6b4b0d",
+    # 第四批扫描件 5 份(纯扫描, 生产走 OCR/VLM): 离线锁(空), 生产文本由 DB 三件套守
+    ("h004", "50"): "da39a3ee5e6b4b0d",
+    ("h004", "51"): "da39a3ee5e6b4b0d",
+    ("h004", "52"): "da39a3ee5e6b4b0d",
+    ("h004", "55"): "da39a3ee5e6b4b0d",
+    ("h004", "56"): "da39a3ee5e6b4b0d",
 }
 
 BASELINE = {
@@ -145,16 +169,20 @@ def _re_extract_text(key):
     match_profile, _ = _PROFILES
     text = _extract_pdf_text(pdf, hybrid=False)
     profile = match_profile(text)
-    if profile.get("visual_sort"):
-        # 与生产 process_task 一致: 多栏混排模板(防城港中/莆田)按视觉坐标重排后再切段
-        text = _extract_pdf_text(pdf, visual_sort=True)
+    if profile.get("visual_sort") or profile.get("visual_lines"):
+        # 与生产 process_task 一致: 多栏混排模板(防城港中/莆田)按视觉坐标重排后再切段;
+        # visual_lines(温州程永春两栏结论)按行级(y,x)重排
+        text = _extract_pdf_text(pdf, visual_sort=True,
+                                 visual_lines=bool(profile.get("visual_lines")))
     compiled = _compile_profile_re(profile) if profile else {}
     section = _locate_findings_sections(
         _strip_ocr_html(text),
         extra_break_re=compiled.get("extra_break_re"),
         extra_skip_re=compiled.get("extra_skip_re"),
         extra_anchor_re=compiled.get("extra_anchor_re"),
-        anchor_only=bool(compiled.get("anchor_only")))
+        anchor_only=bool(compiled.get("anchor_only")),
+        keep_post_sig=bool(compiled.get("keep_post_sig")),
+        keep_normal_numbered=bool(compiled.get("keep_normal_numbered")))
     if not (section and len(section) > 50):
         return None
     if profile and profile.get("table_conclusion"):

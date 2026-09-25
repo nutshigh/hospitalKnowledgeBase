@@ -124,4 +124,59 @@ SAMPLES = [
          must_contain=["检 查 综 述", "★  血压偏低", "载脂蛋白B偏高"],
          forbidden=["咨询电话", "主审日期"],
          expected_titles=["血压偏低", "总胆固醇偏高", "载脂蛋白B偏高"]),
+
+    # === 第三批(2026-09-16 验收): 10 份(H003 27-31 + H004 38-41/43) ===
+    # 文本件 5 份: 冒烟级(能定位/够长/无通用脏行); 精确结论 hash 由
+    # test_conclusion_text_reguard.py 的 MATCH/离线锁组守, DB 产物由三件套快照守。
+    dict(key="changfenglong_h003", rel="0-第三批/华山医院/常逢龙08401X.pdf",
+         smoke=True, min_len=1800),
+    dict(key="caojiabing_h003", rel="0-第三批/中医院/曹嘉冰037053.pdf",
+         smoke=True, min_len=500),
+    dict(key="chenjingni_h004", rel="0-第三批/陈镜霓220028.pdf",
+         smoke=True, min_len=400),
+    dict(key="baiweiheng_h004", rel="0-第三批/白玮衡31151X.pdf",
+         smoke=True, min_len=250),
+    dict(key="gaoshuai_h004", rel="0-第三批/高帅185516.pdf",
+         smoke=True, min_len=750),
+    # 图片型/文本层损坏 5 份: 无文本层(鲍文祥/包雁飞/陈磊/安鹏)或文本层损坏(蔡超,
+    # 生产走 force-ocr) → 需 OCR 服务, 默认跳过(测试内固定 8006, 本 checkout OCR=8001)。
+    dict(key="baowenxiang_h003", rel="0-第三批/东方医院/鲍文祥103151.PDF", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="baoyanfei_h003", rel="0-第三批/六院金山/包雁飞31061X.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="chenlei_h003", rel="0-第三批/仁济医院/陈磊27441X\u00a0.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="anpeng_h004", rel="0-第三批/安鹏063536.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="caichao_h004", rel="0-第三批/蔡超221833.PDF", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+
+    # === 第四批(2026-09-22): 10 份(新地区 浙/豫/苏/闽) ===
+    # 文本件 4 份: 冒烟级; 台州(visual=True 页内乱序需坐标重排, 档案亦 visual_sort);
+    # 温州(标题"体检结论:（★…）"括号注释锚点修复); 南通(标题"本次体检总结"档案锚点 +
+    # 【X】自带正文行保留); 郑州(健康建议段尾"放射影像查询"断点)
+    dict(key="taizhou_huayujian", rel="0-第四批/华裕健062315.pdf",
+         visual=True, smoke=True, min_len=2500),
+    dict(key="wenzhou_chengyongchun", rel="0-第四批/程永春18001x.pdf",
+         visual_lines=True, smoke=True, min_len=600),
+    dict(key="nantong_chencheng", rel="0-第四批/陈诚250411.pdf",
+         smoke=True, min_len=2000),  # 2026-09-22: 结论改取"健康指导建议"段(2326字)
+    dict(key="zhengzhou_caojianhong", rel="0-第四批/曹剑鸿238111.pdf",
+         smoke=True, min_len=700),
+    # 福州: 结论页为图片页(文本层只有页眉), 生产走 hybrid OCR; keep_post_sig 档案
+    # 保留签名后的"体检结论汇总"段 → 需 OCR 服务, 默认跳过
+    dict(key="fuzhou_fangyitao", rel="0-第四批/方轶涛167517.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    # 纯扫描 5 份: 需 OCR 服务, 默认跳过(生产走 hybrid/VLM 链)
+    # (2026-09-25 用户验收; 已纳入 DB 三件套 + 结论重提取离线锁)
+    dict(key="zengshejian_scan", rel="0-第四批/曾社健264019.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="bonan_scan", rel="0-第四批/薄楠010045.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="chenhaibo_scan", rel="0-第四批/陈海波094518.PDF", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="chenchunming_scan", rel="0-第四批/陈淳铭281655.PDF", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="baohaikuan_scan", rel="0-第四批/鲍海宽062316.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 ]

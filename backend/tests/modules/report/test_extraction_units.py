@@ -820,15 +820,32 @@ def test_pair_from_lines_value_with_trailing_arrow():
 
 def test_vlm_row_out_of_range_gets_arrow_flag():
     # 欧阳庆回归: 扫描件 OCR 丢标志列(MPV 7.30↓ 标志列空) → 数值越界补 signal_flag=2
-    from app.core.vlm_client import _row_to_indicator
-    row = ["血小板平均体积(MPV)", "7.30", "", "7.6~13.2", "fL"]
-    ind = _row_to_indicator(row, {0: "item_name", 1: "result", 2: "flag", 4: "unit"})
-    assert ind.get("ref_low") == "7.6" and ind.get("ref_high") == "13.2", ind
-    assert ind.get("signal_flag") == 2, ind
-    # 正常行不得补标(血小板 298 在 125~350 内)
-    row2 = ["血小板(PLT)", "298", "", "125~350", "$ 10^{9}/L $"]
-    ind2 = _row_to_indicator(row2, {0: "item_name", 1: "result", 2: "flag", 4: "unit"})
-    assert not ind2.get("signal_flag"), ind2
+    # 2026-09-23: 越界兜底统一在 ref 拆分后(_rows_to_indicators)执行 —— 拆分前
+    # _as_float("<2.7") 会把单侧上限当下限误判(陈海波假黄), 故此处按真实表流验证
+    from app.core.vlm_client import _rows_to_indicators
+    rows = [
+        ["项目名称", "结果", "参考值", "单位"],
+        ["血小板平均体积(MPV)", "7.30", "7.6~13.2", "fL"],
+        ["血小板(PLT)", "298", "125~350", "$ 10^{9}/L $"],
+    ]
+    inds = {i["item_name"]: i for i in _rows_to_indicators(rows)}
+    assert float(inds["血小板平均体积(MPV)"].get("ref_low")) == 7.6, inds
+    assert inds["血小板平均体积(MPV)"].get("signal_flag") == 2, inds
+    assert not inds["血小板(PLT)"].get("signal_flag"), inds
+
+
+def test_vlm_single_sided_ref_no_false_yellow():
+    # 2026-09-23 陈海波: 单侧上限参考("<2.7")的正常值不得补标
+    from app.core.vlm_client import _rows_to_indicators
+    rows = [
+        ["分析项目", "结果", "参考值", "单位"],
+        ["甘胆酸", "2.1", "<2.7", "$ \\mu $g/mL"],
+        ["总胆固醇", "3.57", "<5.2", "mmol/L"],
+    ]
+    inds = {i["item_name"]: i for i in _rows_to_indicators(rows)}
+    assert float(inds["甘胆酸"].get("ref_high")) == 2.7, inds
+    assert not inds["甘胆酸"].get("signal_flag"), inds
+    assert not inds["总胆固醇"].get("signal_flag"), inds
 
 
 def test_reflow_splits_numbered_finding_from_advice():
@@ -1453,3 +1470,65 @@ def test_inline_advice_bracket_line_collected():
     for ln in ("【肺结节】建议您胸外科/呼吸科定期复查随诊。",
                "【炎性后遗改变】多见于肺炎，肺结核等疾病康复后，建议定期复查，动态观察，专科诊治。"):
         assert ln in sec, f"结论段缺行: {ln}"
+
+
+def test_junk_row_cell_filters():
+    # 2026-09-23 用户反馈三份报告的"其他指标"垃圾行清理规则
+    from app.modules.report.table_extractor import _junk_row_cell, _skip_name
+    # 定性碎片("阳性( DOB")/名称尾随数值("…A1c(NGSP) 5.60")/重复名
+    assert _junk_row_cell("阳性( DOB", ")", "10.30")
+    assert _junk_row_cell("糖化血红蛋白A1c(NGSP) 5.60", "", "5.9")
+    assert _junk_row_cell("胃泌素-17（G-17）(餐前) 2.53", "", "1.74")
+    assert _junk_row_cell("清晰透明清晰透明", "", "15")
+    assert _junk_row_cell("淡黄色淡黄色", "", "18")
+    # 合并多条目行(单位含"，名称: 数值")
+    assert _junk_row_cell("蛋白A", ", 总胆固醇: 5.33", "0.80")
+    # 查体部位 + 正常结果
+    assert _junk_row_cell("头面部", "", "未见明显异常")
+    assert _junk_row_cell("甲状腺", "", "未见明显异常")
+    assert _junk_row_cell("裂隙灯", "", "正常")
+    # 合法行不受影响
+    assert not _junk_row_cell("载脂蛋白A", "g/L", "0.80")
+    assert not _junk_row_cell("糖化血红蛋白A1c(NGSP)", "", "5.60")
+    assert not _junk_row_cell("维生素B12", "pmol/L", "500")
+    assert not _junk_row_cell("甲状腺结节", "", "TI-RADS 3类")
+    # 名称黑名单: 病史/最大最小/院区/总院/重复字
+    assert _skip_name("吸烟史") and _skip_name("饮酒史")
+    assert _skip_name("最大") and _skip_name("最小")
+    assert _skip_name("浦东院区") and _skip_name("宝山院区") and _skip_name("总    院")
+    assert _junk_row_cell("淋巴细胞百分比上上上上上")  # 尾随重复字装饰(合并兜底)
+    assert not _skip_name("淋巴细胞百分比")
+
+
+def test_junk_row_cell_unclosed_paren():
+    # 2026-09-23 曹嘉冰: "右侧甲状腺小结节可能（TI-RADS 3）" 被拆成 名称(截断)/值3/单位"）"
+    from app.modules.report.table_extractor import _junk_row_cell
+    assert _junk_row_cell("右侧甲状腺小结节可能（TI-RADS", "）", "3")
+    assert not _junk_row_cell("钾（K）", "mmol/L", "4.2")
+    assert not _junk_row_cell("抗链球菌溶血素O(ASO)", "IU/mL", "50")
+
+
+def test_vlm_staged_ref_negative_band_clears_flag():
+    # 2026-09-24 薄楠: EB病毒早期抗原IgM抗体 0.05(参考"阴性:<0.9 可疑:0.9--1.1 阳性:≥1.1")
+    # OCR 提示列误读 ↑ → 数值落阴性带 → 清标志(保留行); 真阳性(196.2 ≥ 20)标志保留
+    from app.core.vlm_client import _rows_to_indicators
+    rows = [
+        ["项目名称", "本次结果", "参考范围", "提示"],
+        ["EB病毒早期抗原IgM抗体", "0.05", "阴性:<0.9 可疑:0.9--1.1 阳性:≥1.1", "\\uparrow"],
+        ["EB病毒衣壳抗原IgG抗体", "196.2", "阴性:<20 阳性:≥20", "\\uparrow"],
+    ]
+    inds = {i["item_name"]: i for i in _rows_to_indicators(rows)}
+    assert not inds["EB病毒早期抗原IgM抗体"].get("signal_flag"), inds
+    assert inds["EB病毒衣壳抗原IgG抗体"].get("signal_flag") == 3, inds
+
+
+def test_vlm_narrative_result_cell_skipped():
+    # 2026-09-24 陈海波: 历年对比表残留行("微白蛋白：>150（0-100mg/L）")不入指标
+    from app.core.vlm_client import _rows_to_indicators
+    rows = [
+        ["项目", "2026-05-29", "2024-04-19"],
+        ["微白蛋白", "微白蛋白：>150（0-100mg/L）", "微白蛋白：30（0-30.0mg/L）"],
+        ["肌酐", "84", "79"],
+    ]
+    names = [i["item_name"] for i in _rows_to_indicators(rows)]
+    assert "微白蛋白" not in names, names

@@ -30,9 +30,11 @@ def run(pdf_path: str, hybrid: bool = False):
     text = _extract_pdf_text(pdf_path, hybrid=hybrid)
     match_profile, _ = _load_report_profiles()
     profile = match_profile(text)
-    if profile and profile.get("visual_sort"):
+    if profile and (profile.get("visual_sort") or profile.get("visual_lines")):
         # 2026-09-08: 莆田九十五等逐 cell dump 乱序模板 → 版面(y)排序文本再定位结论
-        text = _extract_pdf_text(pdf_path, visual_sort=True)
+        # 2026-09-22: visual_lines 行级(y,x)重排(温州程永春两栏结论)
+        text = _extract_pdf_text(pdf_path, visual_sort=True,
+                                 visual_lines=bool(profile.get("visual_lines")))
     conclusion = asyncio.run(_extract_conclusion_async(text, profile))
     if not conclusion:
         return None, None

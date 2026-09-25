@@ -222,6 +222,11 @@ B3 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "0-第三批")
+# 2026-09-23: 第四批样例目录(与第三批分开)
+B4 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "0-第四批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -247,6 +252,17 @@ _BASELINE_CASES = {
     "陈镜霓": ("h004", "40", os.path.join(B3, "陈镜霓220028.pdf")),
     "白玮衡": ("h004", "41", os.path.join(B3, "白玮衡31151X.pdf")),
     "高帅": ("h004", "43", os.path.join(B3, "高帅185516.pdf")),
+    # 2026-09-23: 第四批文本件 4 份(45 方轶涛/46 程永春/47 陈诚/48 华裕健)。
+    # 49 曹剑鸿 排除: 其"乙肝表面抗体"(提示列文字 f=1、无参考) 在护栏 _judge_level
+    # 镜像里判黄、生产 run_rules 口径判绿 → 重提取黄名单差 1; 由 DB 三件套与结论
+    # 重提取护栏覆盖(黄红 = 总胆固醇/糖化血红蛋白)。
+    "方轶涛": ("h004", "45", os.path.join(B4, "方轶涛167517.pdf")),
+    "程永春": ("h004", "46", os.path.join(B4, "程永春18001x.pdf")),
+    "陈诚": ("h004", "47", os.path.join(B4, "陈诚250411.pdf")),
+    "华裕健": ("h004", "48", os.path.join(B4, "华裕健062315.pdf")),
+    # 2026-09-25: 第四批扫描件 5 份(50 薄楠/51 鲍海宽/52 曾社健/55 陈淳铭/56 陈海波)
+    # **不纳入本重提取护栏** —— 纯扫描无文本层, 规则链(hbrid=False)无产物, 生产指标走
+    # OCR/VLM; 由 DB 三件套快照(test_h004_baseline_guard.py)守。
 }
 
 def _norm_baseline_name(n: str) -> str:

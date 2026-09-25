@@ -21,7 +21,7 @@ sys.path.insert(0, str(BACKEND))
 import pymysql
 
 DB = "hospital_H004"
-REPORT_IDS = [1, 2, 3, 5, 6, 21, 22, 23, 24, 25, 26, 27, 29, 38, 39, 40, 41, 43]  # 2026-09-16: +第三批 38-41/43
+REPORT_IDS = [1, 2, 3, 5, 6, 21, 22, 23, 24, 25, 26, 27, 29, 38, 39, 40, 41, 43, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56]  # 2026-09-25: +第四批扫描件 50-52,55,56
 OUT = BACKEND / "tests" / "modules" / "report" / "baselines" / "h004_baseline.json"
 
 

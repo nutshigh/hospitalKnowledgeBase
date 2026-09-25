@@ -19,7 +19,7 @@ _QUALITATIVE_WORDS = (
     "活动正常|搏动正常|未见肿大|未见明显异常|未见异常回声|无异常回声|"
     "清晰|对称|居中|光滑|呈正常生理弯曲|屈曲正常|未触及肿大|未扪及|"
     "第[0-9,，、\s]{1,15}项(阳性|阴性)|"
-    "[-–—]|1\+|2\+|3\+|4\+|5\+|\d\+|±"
+    "[-–—]|1\+|2\+|3\+|4\+|5\+|\d\+|±|\+-|-\+"
 )
 # === 2026-09-07: 值单元格规范化 ===
 # ">1000[阳性反应（+）]" → ">1000"(符号+数字, 剥方括号); 半定量 "+1"/"1+2.0" 原样作值
@@ -121,6 +121,8 @@ _SKIP_NAMES = re.compile(
     r"参考值|次/分|"
     r"单位[:：]|单位$|部门[:：]|体检报告|健康体检报告|本体检报告|"
     r"体重超过标准体重|边缘|合适水平|升高|降低|提示|异常|现病史|既往史|家族史|"
+    # 2026-09-23: 第四批反馈清理 —— 生活方式/超声描述碎片
+    r"吸烟史|饮酒史|最大|最小|"
     r"^(?:肾功|肝功|血脂|乙肝|丙肝|甲功|甲胎|心肌酶)\d*项?$|^比$|"
     r"大小约|小约为|直径约|"
     r"常规心电图|彩超|B超|超声|X线|DR|CT|MR|TCD|碳13|幽门螺杆菌(?!I?gG?|抗体|抗原|HP)|门诊|瞬时弹性成像)"
@@ -128,12 +130,18 @@ _SKIP_NAMES = re.compile(
 # 2026-09-05: 名称含词黑名单(单位/页眉嵌名:"福建省第二人民医院健康管理中心·体检报告")
 _SKIP_SUB_RE = re.compile(
     r"(健康管理中心|健康体检中心|医院体检中心|·体检报告|健康管理有限公司|医院有限公司|"
-    r"体检号|体检者|体检号码|历年对比|结果对比图|体检结果对比|对比图)"
+    r"体检号|体检者|体检号码|历年对比|结果对比图|体检结果对比|对比图|"
+    # 2026-09-23: 表头字段合并名(台州 48 "登记日期电话号码"/"健康号" 曾被当指标)
+    r"登记日期|电话号码|健康号|出生日期|打印时间|体检日期|"
+    # 2026-09-23: 医院联系信息行(常逢龙"总 院：021-…/浦东院区：021-…")
+    r"院区|总\s*院)"
 )
 
 
 # 名称续行(折行): 纯汉字短行, 非值/非名称/非跳过; 如"平均红细胞血红蛋白含\n量\n29.60"
 _NAME_CONT_RE = re.compile(r"^[\u4e00-\u9fa5]{1,8}$")
+# 2026-09-23: 封面装饰重复字行("上上上上上…")不得并进名称(曹嘉冰"淋巴细胞百分比上上上…")
+_REPEAT_CHAR_JUNK_RE = re.compile(r"^(.)(?:\1|[\s()（）]){3,}$")
 # 2026-09-02: 纯括号折行("(定量)")—— 名称与值之间的折行修饰, 不单独成行
 _PAREN_ONLY_RE = re.compile(r"^[（(][^（()）]*[)）]$")
 # 2026-09-07: 拉丁缩写+括号续行("IgG(IgG/VCA)", 日照 EB 衣壳抗原名称续行) → 并入名称
@@ -141,8 +149,15 @@ _LATIN_PAREN_RE = re.compile(r"^[A-Za-z0-9/·.]+[（(][^（()）]*[)）]$")
 
 
 def _skip_name(s: str) -> bool:
-    """名称黑名单统一判定: 前缀黑名单 + 含词黑名单(页眉/单位名嵌名)。"""
-    return bool(_SKIP_NAMES.match(s) or _SKIP_SUB_RE.search(s))
+    """名称黑名单统一判定: 前缀黑名单 + 含词黑名单(页眉/单位名嵌名)。
+    2026-09-23: 同时用**去空白**形态再判 —— 表头单元格常带字间空格("体 检 号"/
+    "姓 名"/"登记日期 电话号码"), 原名判不出被当指标(第四批台州 48 表头垃圾行)。"""
+    if _SKIP_NAMES.match(s) or _SKIP_SUB_RE.search(s):
+        return True
+    if _REPEAT_CHAR_JUNK_RE.match((s or "").strip()):
+        return True  # 重复字装饰行
+    t = re.sub(r"\s+", "", s or "")
+    return bool(t != s and (_SKIP_NAMES.match(t) or _SKIP_SUB_RE.search(t)))
 
 
 def _clean_name_tail(name: str) -> str:
@@ -151,6 +166,32 @@ def _clean_name_tail(name: str) -> str:
     return re.sub(
         r"\s*(增高|升高|偏高|降低|偏低|异常|阳性|弱阳性|增快|过重|减少|超重|肥胖|偏轻|偏重)"
         r"\s*[（(]?$", "", name).strip()
+
+
+# 2026-09-23: 行式垃圾单元格形态(第四批反馈三份报告):
+#   "阳性( DOB"(定性碎片) / "…A1c(NGSP) 5.60"(名称尾随数值) / "清晰透明清晰透明"(重复名)
+_JUNK_NAME_FRAG_RE = re.compile(
+    r"[阳阴]性\s*[（(]|\s\d+(?:\.\d+)?$|^(.{2,4})\1$|(.)\2{3,}$")
+#   合并多条目行(单位里含"，名称: 数值" —— "蛋白A: 0.80 , 总胆固醇: 5.33")
+_JUNK_UNIT_MERGE_RE = re.compile(r"[，,]\s*[\u4e00-\u9fa5]{1,12}[:：]\s*[\d.]")
+#   查体部位行 + 正常结果(用户 2026-09-23 指定清理: 头面部/裂隙灯/甲状腺)
+_EXAM_PART_JUNK_RE = re.compile(r"^(头面部|裂隙灯|甲状腺)$")
+_NORMAL_RESULT_RE = re.compile(r"^(未见明显异常|未见异常|正常|无异常|未见)$")
+
+
+def _junk_row_cell(name: str, unit: str = "", result: str = "") -> bool:
+    """行式/列式行落库前垃圾判定(名称碎片/合并行/查体部位+正常结果)。"""
+    n = (name or "").strip()
+    if _JUNK_NAME_FRAG_RE.search(n):
+        return True
+    # 2026-09-23: 括号未闭合的截断标题("右侧甲状腺小结节可能（TI-RADS" + 值3 + 单位"）")
+    if (n.count("(") + n.count("（")) > (n.count(")") + n.count("）")):
+        return True
+    if unit and _JUNK_UNIT_MERGE_RE.search(unit):
+        return True
+    if _EXAM_PART_JUNK_RE.match(n) and _NORMAL_RESULT_RE.match((result or "").strip()):
+        return True
+    return False
 
 
 def _is_value_line(s: str) -> bool:
@@ -207,6 +248,7 @@ def _merge_wrapped_names(lines: list[str]) -> list[str]:
             and not _is_value_line(ln)
             and _NAME_RE.match(ln) and not _skip_name(ln)
             and _NAME_CONT_RE.match(lines[i + 1])
+            and not _REPEAT_CHAR_JUNK_RE.match(lines[i + 1])  # 2026-09-23: 重复字装饰行不并名
             and not _is_value_line(lines[i + 1])  # 2026-09-05: 续行不得是定性值("正常/阴性"),
             # 否则"发育情况\n正常\n正常"式双列表格被误合并(崇左检体区)
             and lines[i + 1] not in ("男", "女", "年龄")  # 2026-09-07: 莆田头部"蔡芳坤/男/30岁"防误拼
@@ -320,7 +362,10 @@ def _range_with_unit(s: str) -> Optional[tuple]:
 _HIST_CMP_TITLE_RE = re.compile(
     r"(历年对比|历年结果对比|历年体检结果|两年对比|近两年对比|"
     r"与既往我院体检结果对比图|历年体检结果对比图|体检结果对比图|结果对比图|"
-    r"历次体检结果比对|历次体检对比)")
+    r"历次体检结果比对|历次体检对比|"
+    # 2026-09-24: 陈海波 p22 "前次体检结果对比"(历年对比表标题变体; 该表历史值曾被
+    # 当本次指标提取, 微白蛋白 >150 等)
+    r"前次体检结果对比|前次结果对比|前次体检对比|与上次体检结果对比|与上次结果对比)")
 _HIST_CMP_END_RE = re.compile(
     r"^(本次体检结论|体检综述|体检健康建议|健康建议|总检建议|检查所见|科普说明|总检医生|"
     r"主检医师|报告医师|校对员|终审|操作员|--- Page |【)")
@@ -455,7 +500,7 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
             # 单位清洗: 剥括号注释/箭头/多空格("IU/ml(0--34.00 IU/ml) ↑" → "IU/ml")
             unit = re.split(r"[（(]|[↑↓]|\s{2,}", rest)[0].strip()[:12]
             ref_lo, ref_hi = _parse_ref(rest)
-            if name and not _skip_name(name):
+            if name and not _skip_name(name) and not _junk_row_cell(name, unit, m.group(2)):
                 out.append({"item_name": name, "result": m.group(2), "unit": unit,
                             "ref_low": ref_lo, "ref_high": ref_hi})
             i += 1
@@ -495,6 +540,15 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
                     name_offset = 2
                     prev_is_name = True
                     row_flag = 2  # 箭头归属本指标(值行前箭头 = 报告方异常标志)
+            _above_flag = False
+            if prev_is_name and _rev_ref:
+                # 2026-09-22: **反序表**"名称上方一行是提示列文字/箭头"(郑州 糖化血红蛋白:
+                # 参考值 4.0--6.0 / 偏高 / 糖化血红蛋白 / 6.2) → 本行标志=2。
+                # 必须限定反序表(_rev_ref): 正序表名称上方常是上一指标的提示/参考值,
+                # 无条件应用会给整表加假黄(护栏回归 崇左/贵港/防城港等 8 份)。
+                _above = lines[i - name_offset - 1] if i - name_offset - 1 >= 0 else ""
+                if _ARROW_RE.match(_above) or _FLAG_TEXT_RE.match(_above):
+                    _above_flag = True
             if not prev_is_name:
                 # 序号行(北京序号制表格): 上一行不是名称(是表头/范围/上一值)
                 # 而当前是小整数序号 → 跳过
@@ -509,6 +563,8 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
             # 继续向后找真 ref/unit)
             ref_low = ref_high = None
             row_flag = 2 if _vaf else 0  # 值自带箭头 = 报告方异常标志
+            if _above_flag:
+                row_flag = max(row_flag, 2)  # 名称上方提示列文字/箭头归属本行
             # 2026-09-07: 反列序表(茂名 "[ref]\n名称\n[↑]\n值\n单位"): 名称前一行
             # RANGE = 本指标参考 → 优先于向后消化(值后 range 属下一指标, 曾错配假黄)
             prev_ref_idx = i - name_offset - 1
@@ -587,6 +643,9 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
 
             result_v = m2.group(1) if m2 else (_norm_result or (_va if _vaf else ln))
             _nm = _strip_refcell_prefix((prev + paren_part).lstrip("★*＊▲△"))
+            if _junk_row_cell(_nm, unit, result_v):
+                i += 1
+                continue
             row = {"item_name": _nm, "result": result_v, "unit": unit,
                    "ref_low": ref_low, "ref_high": ref_high}
             if row_flag:
@@ -1095,21 +1154,51 @@ def _parse_dual_window(lines: list[str], start: int, end: int, out: list[dict]) 
 #   - 姓名: 后 80 字窗口内第一个非表头词(梧州"姓名: 性别: 男 团体: ... 谢国宾")
 _HEADER_WORD_RE = re.compile(
     r"^(性别|年龄|电话|单位|部门名称|员工编号|体检号码|打印日期|团\s*体|体检类型|"
-    r"证件号码|健康档案|登记日期|首检日期|检查日期|体检日期|体检时间|姓名|性别)$"
+    r"证件号码|健康档案|登记日期|首检日期|检查日期|体检日期|体检时间|姓名|性别|"
+    # 2026-09-22: 第四批(陈诚"南通市第一人"/华裕健"出生日期") —— 表头标签/机构名
+    # 被当姓名; 精确匹配(非子串), 真名不受影响
+    r"出生日期|日期|时间|地址|手机|编号|条码|打印时间|报告日期|审核日期|总检日期|"
+    r"身份证|身份证号|科室|部门|医院|中心|公司|体检|门诊|检验|检查|影像|超声|心电|"
+    r"报告|结果|项目|名称|类型|次数|序号|流水号|档案|人员|客户|受检|单位名称|工作单位|"
+    r"健康管理中心|联系人|联系电话)$"
 )
+
+
+_BAD_NAME_RE = re.compile(
+    r"(市|县|区|医院|中心|公司|日期|出生|体检|单位|健康|管理|学院|大学|银行|支队|"
+    r"检查站|门诊|有限|电话|地址|编号|报告)"
+)
+# 2026-09-22: 地址碎片尾缀(华裕健"东海大道"/"台州市椒江区") —— 真名不以这些词结尾
+_BAD_NAME_TAIL_RE = re.compile(r"(大道|路|街|号|栋|楼|室|层|镇|村|组)$")
+
+
+def _name_ok(cand: str) -> bool:
+    """姓名合理性: 表头标签/机构名/日期词/地址碎片一律不算姓名(第四批 陈诚/华裕健)。"""
+    return (bool(cand) and not _HEADER_WORD_RE.match(cand)
+            and not _BAD_NAME_RE.search(cand) and not _BAD_NAME_TAIL_RE.search(cand))
 
 
 def extract_personal_info(text: str) -> dict:
     import re as _re
     out: dict = {}
     # 2026-09-14: 双语标签("姓名(Name)：___ 陈磊")—— 允许键后括号英文与下划线占位
-    m = _re.search(r"姓\s*名(?:\([^)]*\))?[:：\s_]*([\u4e00-\u9fa5·]{2,6})", text)
-    if m and not _HEADER_WORD_RE.match(m.group(1)):
-        out["name"] = m.group(1).strip()
+    # 2026-09-22: 扫描**所有**"姓名"标签取首个合理候选 —— 表头乱序时首个标签后可能是
+    # 机构名/标签(陈诚"姓名→南通市第一人民医院健康管理中心"、华裕健"姓名→出生日期"),
+    # 后续标签(第2页"姓名: 华裕健")才带真名。
+    for m in _re.finditer(r"姓\s*名(?:\([^)]*\))?[:：\s_]*([\u4e00-\u9fa5·]{2,6})", text):
+        if _name_ok(m.group(1)):
+            out["name"] = m.group(1).strip()
+            break
+    # 兜底0: "尊敬的XXX先生/女士"(陈诚"尊敬的\n陈诚  男士，您好！")
+    if not out.get("name"):
+        m = _re.search(
+            r"尊\s*敬\s*的\s*([\u4e00-\u9fa5·]{2,6})\s*(?:先生|女士|男士|小姐|同志)", text)
+        if m and _name_ok(m.group(1)):
+            out["name"] = m.group(1).strip()
     # 兜底1: 单位后紧跟性别字 → 姓名(柳州"单位: 石坤 男 41岁")
     if not out.get("name"):
         m = _re.search(r"单\s*位[:：]\s*([\u4e00-\u9fa5·]{2,6})(?=\s*[（(]?(男|女))", text)
-        if m and not _HEADER_WORD_RE.match(m.group(1)):
+        if m and _name_ok(m.group(1)):
             out["name"] = m.group(1).strip()
     # 兜底2: 姓名: 后 80 字窗口内第一个非表头词(梧州"姓名: 性别: 男 团体: ... 谢国宾")
     if not out.get("name"):
@@ -1117,7 +1206,7 @@ def extract_personal_info(text: str) -> dict:
         if m:
             window = text[m.end():m.end() + 80]
             for cand in _re.findall(r"[\u4e00-\u9fa5·]{2,6}", window):
-                if not _HEADER_WORD_RE.match(cand):
+                if _name_ok(cand):
                     out["name"] = cand
                     break
     m = _re.search(r"性\s*别(?:\([^)]*\))?[:：\s_]*(男|女)", text)
@@ -1130,12 +1219,19 @@ def extract_personal_info(text: str) -> dict:
             out["gender"] = m.group(1)
     m = _re.search(r"年\s*龄(?:\([^)]*\))?[:：\s_]*(\d{1,3})\s*岁?", text)
     if m:
-        out["age"] = m.group(1)
+        # 2026-09-22: 表头乱序时"年龄"后紧跟的是身份证/手机(华裕健 330/曹剑鸿 139)
+        # → 仅接受 1-120 的合理值, 否则丢弃交 LLM 兜底
+        _a = int(m.group(1))
+        if 1 <= _a <= 120:
+            out["age"] = m.group(1)
     m = _re.search(r"(体检日期|检查日期|体检时间|登记日期|首检日期)(?:\([^)]*\))?\s*[:：]?\s*[_\s]*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
     if m:
         out["report_date"] = f"{m.group(2)}-{int(m.group(3)):02d}-{int(m.group(4)):02d}"
     m = _re.search(r"单\s*位[:：]\s*([\u4e00-\u9fa5A-Za-z（）()]{2,30})", text)
-    if m and not _re.search(r"(部门名称|单位名称|联系单位|检查单位)", m.group(1)):
+    if m and not _re.search(r"(部门名称|单位名称|联系单位|检查单位)", m.group(1)) \
+            and not _re.fullmatch(
+                r"(体检日期|单位部门|部门|姓名|性别|年龄|电话|手机|编号|日期|时间|科室|单位)",
+                m.group(1).strip()):
         out["unit_name"] = m.group(1).strip()
     return out
 
@@ -1220,7 +1316,9 @@ def _pair_from_lines(lines: list[str], idx: int, signal: str) -> Optional[dict]:
         # 2026-09-14: 先试"名称：值"(冒号分隔)形式 —— 防名称尾部缩写数字("载脂蛋白-A1")
         # 被当结果("1")(华山常逢龙小结)。冒号形式下名称可含尾部数字/字母, 值须在冒号后。
         m = re.match(
-            r"^(?:[（(]\d+[)）、.。]?)?([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9()（）%·\-/ ]{0,24}?)[：:]\s*([\d.]+)",
+            # 2026-09-22: 值支持半定量("2+"/"+1") —— 结论文本"(1)维生素C(尿):2+↑(阴性)"
+            # 曾只捕获"2", 与表格行"2+"并存成两行(第四批陈诚)
+            r"^(?:[（(]\d+[)）、.。]?)?([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9()（）%·\-/ ]{0,24}?)[：:]\s*([\d.]+\+?|[+]?[\d.]+)",
             variant,
         )
         if not m:
@@ -1626,6 +1724,8 @@ def col_rows_via_layout(pdf_path: str) -> list[dict]:
                             float_flags.append(t)
                             continue
                         if role == "name":
+                            if _REPEAT_CHAR_JUNK_RE.match(t):
+                                continue  # 2026-09-23: 重复字装饰单元格不并名
                             name_parts.append(t)
                         elif role == "result":
                             result_parts.append(t)
@@ -1653,8 +1753,12 @@ def col_rows_via_layout(pdf_path: str) -> list[dict]:
                     # 全部压掉(桂林 干化学酮体 flagtext 曾因此未判黄)。
                     # 2026-09-15: 剥名称前缀标记后再 strip —— "lstrip(标记)"只去标记字符,
                     # "* 总胆红素" → " 总胆红素" 会留空格(百色 护栏名对不上)
-                    row = {"item_name": name.lstrip("★*＊▲△").strip(), "result": result_txt,
-                           "unit": "".join(unit_parts).strip(),
+                    _name0 = name.lstrip("★*＊▲△").strip()
+                    _unit0 = "".join(unit_parts).strip()
+                    if _junk_row_cell(_name0, _unit0, result_txt):
+                        continue
+                    row = {"item_name": _name0, "result": result_txt,
+                           "unit": _unit0,
                            "ref_low": None, "ref_high": None, "signal_flag": 0}
                     tail_flag = ""
                     m = re.search(r"[（(](↑|↓|\*)[)）]$", result_txt)
