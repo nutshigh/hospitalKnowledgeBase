@@ -22,6 +22,8 @@ from app.modules.report.service import (  # noqa: E402
     _extract_pdf_text,
     _load_report_profiles,
     _locate_findings_sections,
+    _remove_findings_section,
+    _retarget_signal_name,
 )
 from app.modules.report.table_extractor import (  # noqa: E402
     col_rows_with_fallback,
@@ -84,10 +86,24 @@ def _extract(pdf):
     sec = _locate_findings_sections(
         t, extra_break_re=comp["extra_break_re"],
         extra_skip_re=comp["extra_skip_re"], extra_anchor_re=comp["extra_anchor_re"])
-    t2 = t.replace(sec, "") if sec and len(sec) > 50 else t
+    # 2026-09-28: 与生产 process_task 组装同构 —— 结论段按行序子序列删除;
+    # 信号通道折行名碎片改挂全名(曾繁鲁"[HR]乙型肝炎表面抗体测定(HBsAb)")
+    t2 = _remove_findings_section(t, sec) if sec and len(sec) > 50 else t
     rows = extract_indicator_rows(t2)
     col_rows = col_rows_with_fallback(pdf, t2)
     signals = extract_abnormal_signals(pdf)
+    _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
+    _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
+    _full_by_result: dict = {}
+    for _r in list(col_rows) + list(rows):
+        _full_by_result.setdefault(
+            (_r.get("result") or "").strip(), []).append(_r["item_name"])
+    signals = [
+        dict(_s, item_name=_retarget_signal_name(
+            _s.get("item_name") or "", _s.get("result") or "",
+            _name_pool, _full_by_result))
+        for _s in signals
+    ]
     col_flag_keys = {(r["item_name"], r["result"]) for r in col_rows if r.get("signal_flag") == 3}
     if col_flag_keys:
         signals = [s for s in signals if (s["item_name"], s["result"]) not in col_flag_keys]
@@ -98,7 +114,19 @@ def _extract(pdf):
     col_keys = set()
     row_flag_map = {(r["item_name"], r["result"]): r.get("signal_flag") or 0 for r in rows}
     row_by_key = {(r["item_name"], r["result"]): r for r in rows}
+    # 2026-09-28: 坐标列式折行名截断时用行式全名补全(与生产同构)
+    auth_names = {r["item_name"] for r in col_rows if r.get("__auth")}
+    _row_full_names: dict = {}
+    for _r in rows:
+        _row_full_names.setdefault(
+            (_r.get("result") or "").strip(), []).append(_r["item_name"])
     for r in col_rows:
+        if r["item_name"] not in auth_names:
+            for _full in _row_full_names.get((r.get("result") or "").strip(), []):
+                if len(_full) > len(r["item_name"]) and _full.startswith(r["item_name"]):
+                    r = dict(r)
+                    r["item_name"] = _full
+                    break
         sig_key = (r["item_name"], r["result"])
         col_keys.add(sig_key)
         r = dict(r)
@@ -227,6 +255,11 @@ B4 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "0-第四批")
+# 2026-09-28: 第五批样例目录(H004 57-61)
+B5 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "0-第五批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -263,6 +296,23 @@ _BASELINE_CASES = {
     # 2026-09-25: 第四批扫描件 5 份(50 薄楠/51 鲍海宽/52 曾社健/55 陈淳铭/56 陈海波)
     # **不纳入本重提取护栏** —— 纯扫描无文本层, 规则链(hbrid=False)无产物, 生产指标走
     # OCR/VLM; 由 DB 三件套快照(test_h004_baseline_guard.py)守。
+    # 2026-09-28: 第五批 4 份文本规则链可复现(58 毕惠丽虽有 visual_sort, 黄区来自
+    # 化验表, 线性链同样复现; 60 蔡明详情走 OCR 但黄区在文本层化验表, 亦复现)。
+    # 59 蔡丰泽 排除: "碳14呼气试验 阳性"/"维生素C ±"(f=1 无参考) 在护栏 _judge_level
+    # 镜像里判黄、生产 run_rules 口径判绿 → 重提取黄名单多 2(与 49 曹剑鸿同类);
+    # 由 DB 三件套与结论重提取护栏覆盖。
+    "付立光": ("h004", "57", os.path.join(B5, "53290626_付立光.PDF")),
+    "毕惠丽": ("h004", "58", os.path.join(B5, "毕惠丽052048.pdf")),
+    "蔡明": ("h004", "60", os.path.join(B5, "蔡明075453.pdf")),
+    "曾繁鲁": ("h004", "61", os.path.join(B5, "曾繁鲁030435.pdf")),
+    # 2026-10-03: 第五批 62-65 文本规则链可复现(62 详情页走 OCR 但黄区在文本层化验表;
+    # 65 有 visual_sort, 线性链黄区同结果)。
+    # 66 生明月 排除: "维生素C ±"(f=1 无参考) 护栏镜像判黄、生产 run_rules 判绿(与 49/59
+    # 同类); 由 DB 三件套与结论护栏覆盖。
+    "陈春光": ("h004", "62", os.path.join(B5, "陈春光261514.pdf")),
+    "单吉飞": ("h004", "63", os.path.join(B5, "单吉飞174056.PDF")),
+    "董涛": ("h004", "64", os.path.join(B5, "董涛249011.pdf")),
+    "厚柏刚": ("h004", "65", os.path.join(B5, "厚柏刚04361X.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

@@ -179,4 +179,30 @@ SAMPLES = [
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
     dict(key="baohaikuan_scan", rel="0-第四批/鲍海宽062316.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+
+    # === 第五批(2026-09-28): 10 份(H004 57-66, 新地区) ===
+    # 文本件 9 份: 冒烟级(能定位/够长/无通用脏行); 精确结论 hash 由
+    # test_conclusion_text_reguard.py 的 MATCH/离线锁组守, DB 产物由三件套快照守。
+    dict(key="fuliguang_h004", rel="0-第五批/53290626_付立光.PDF",
+         smoke=True, min_len=550),   # 福建附一/华山福建: 结论="体检结论分析"(疾病解析/综合健康指导已断)
+    dict(key="danjifei_h004", rel="0-第五批/单吉飞174056.PDF",
+         smoke=True, min_len=400),    # 河南科大二附院: 结论="【指导与建议】"
+    dict(key="houbaigang_h004", rel="0-第五批/厚柏刚04361X.pdf",
+         visual=True, smoke=True, min_len=1000),  # 盛京医院: 问候语锚点 + visual_sort(页内重排)
+    dict(key="zengfanlu_h004", rel="0-第五批/曾繁鲁030435.pdf",
+         smoke=True, min_len=1100),   # 三亚市人民医院: "专家建议及健康指导"
+    dict(key="bihuili_h004", rel="0-第五批/毕惠丽052048.pdf",
+         visual=True, smoke=True, min_len=900),   # 盛京医院: 问候语锚点 + visual_sort(第3页 9-13 点)
+    dict(key="shengmingyue_h004", rel="0-第五批/生明月180484.pdf",
+         smoke=True, min_len=1400),   # 丹东市中心医院: "本次健康建议"
+    dict(key="dongtao_h004", rel="0-第五批/董涛249011.pdf",
+         smoke=True, min_len=1200),   # 宜昌市中心人民医院: "【总检结论及健康建议】"
+    dict(key="caifengze_h004", rel="0-第五批/蔡丰泽241017.pdf",
+         smoke=True, min_len=800),    # 丹东市中心医院: "本次体检结论"+健康指导建议
+    dict(key="caiming_h004", rel="0-第五批/蔡明075453.pdf",
+         smoke=True, min_len=150),    # 江西中医药大学附属医院: "体检结论分析"(14 条无建议)
+    # 福州大学附属省立医院(陈春光): 结论页为图片页(文本层只有页眉/标题), 生产走
+    # hybrid OCR(同方轶涛); keep_post_sig 档案已命中 → 需 OCR 服务, 默认跳过
+    dict(key="chenchunguang_h004", rel="0-第五批/陈春光261514.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 ]

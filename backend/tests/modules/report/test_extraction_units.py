@@ -500,6 +500,26 @@ def test_multi_findings_profile_flags():
     assert match_profile("某不存在的医院").get("multi_findings") is False
 
 
+# === 2026-09-28: 第五批档案锚点(盛京问候语 / 三亚专家建议) ===
+
+def test_batch5_profile_anchors():
+    from app.modules.report.report_profiles import match_profile, compile_profile
+    sj = compile_profile(match_profile("中国医科大学附属盛京医院"))
+    assert sj["extra_anchor_re"].search("尊敬的厚柏刚先生您好,您本次体检的建议信息如下:")
+    assert sj["extra_anchor_re"].search("尊敬的毕惠丽女士您好,您本次体检的建议信息如下:")
+    # 不得多产: 免责声明/问候语之外的"建议"行不命中锚点
+    assert not sj["extra_anchor_re"].search("为了您的健康，我们建议您至少每年进行一次系统的检查")
+    assert sj["extra_break_re"].search("其余已做检查未见异常")
+    assert sj["extra_break_re"].search("您本次体检选择的检查项目并未涵盖所有脏器")
+    sy = compile_profile(match_profile("三亚市人民医院"))
+    assert sy["extra_anchor_re"].search("专家建议及健康指导：")
+    # 不得多产: 分科明细标题不是锚点(否则吞掉分科汇总)
+    assert not sy["extra_anchor_re"].search("科室医生结论汇总：")
+    # 2026-09-28 用户反馈(毕惠丽): 第3页文本流乱序(正文 9-13 点排在免责声明/签名块后)
+    # → 盛京档案声明 visual_sort(页内视觉坐标重排), 否则线性收集在签名处截断漏 9-13 点
+    assert sj["visual_sort"] is True
+
+
 # === 2026-09-10: LLM 名契约 —— 幻觉名(源文不可定位)必须被滤 ===
 
 def test_llm_hallucinated_name_filtered():
@@ -1532,3 +1552,437 @@ def test_vlm_narrative_result_cell_skipped():
     ]
     names = [i["item_name"] for i in _rows_to_indicators(rows)]
     assert "微白蛋白" not in names, names
+
+
+# === 2026-09-28: 第五批反馈修复(付立光/毕惠丽/蔡丰泽/蔡明/曾繁鲁) ===
+
+def test_latin_paren_continuation_requires_letter():
+    # 付立光: "0.00(-)" 被当"名称括注续行"把上上行名错配给下一行值("<0.05"),
+    # 产生重复行; 拉丁括号续行前缀必须含字母(IgG(IgG/VCA) 仍命中)
+    from app.modules.report.table_extractor import (
+        _LATIN_PAREN_RE, extract_indicator_rows,
+    )
+    assert _LATIN_PAREN_RE.match("IgG(IgG/VCA)")
+    assert not _LATIN_PAREN_RE.match("0.00(-)")
+    rows = extract_indicator_rows("\n".join(["甲", "0.00(-)", "<0.05", "IU/ml"]))
+    assert [(r["item_name"], r["result"]) for r in rows] == [("甲", "0.00")], rows
+
+
+def test_split_label_explanation_subitem_and_numeric_rest():
+    # 曾繁鲁: "(1)体检发现您的血尿酸增高:尿酸(UA):432…" 被拆成 3 行
+    # (子项编号标签 + 数值起始 rest 均不拆; "超重：根据…" 正常拆)
+    from app.modules.report.service import _split_label_explanation
+    got = _split_label_explanation("(1)体检发现您的血尿酸增高:尿酸(UA):432 μmol/L ↑【208-428】。")
+    assert got == ["(1)体检发现您的血尿酸增高:尿酸(UA):432 μmol/L ↑【208-428】。"], got
+    got = _split_label_explanation("超重：根据中国成人BMI标准，24≤BMI<28为超重，需控制饮食")
+    assert got == ["超重：", "根据中国成人BMI标准，24≤BMI<28为超重，需控制饮食"], got
+
+
+def test_reflow_numspace_continuation():
+    # 曾繁鲁: "…连续观察" / "3 年无改变，可一年一次。" 被 item_head 当新编号条目断开
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = "2、[甲状腺结节]\n说明文字需每3～6 个月复查一次。连续观察\n3 年无改变，可一年一次。\n3、[肺气肿]\n正文。"
+    out = _reflow_conclusion_lines(txt)
+    assert "连续观察3 年无改变，可一年一次。" in out.replace("\n", ""), out
+    assert "\n3、[肺气肿]" in out, out  # 真编号条目(带分隔符)仍独立
+
+
+def test_reflow_unbalanced_bracket_continuation():
+    # 付立光: 【】多项列表折行中段(已有部分闭合)曾被判新段头拆开
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = "【脉搏：59次/分】【心电图：窦缓】【胸部CT：主\n动脉硬化】【心脏彩超：未见明显异常】\n建议复查。"
+    out = _reflow_conclusion_lines(txt)
+    assert "主动脉硬化】【心脏彩超：未见明显异常】" in out, out
+
+
+def test_locate_findings_bracket_continuation_normal_word_kept():
+    # 付立光: 括号清单折行续行"动脉硬化】【心脏彩超…未见明显异常"被"未见异常"跳行误杀
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("体检结论分析\n"
+           "一、主要健康问题：\n"
+           "【胸部低剂量CT平扫：主\n"
+           "动脉硬化】【心脏彩超：房室大小正常；左室壁运动分析未见明显异常】\n"
+           "建议复查。\n"
+           "二、次要问题：\n")
+    sec = _locate_findings_sections(txt)
+    assert "动脉硬化】【心脏彩超：房室大小正常；左室壁运动分析未见明显异常】" in sec, sec
+    # 独立"X：未见异常"清单行仍跳过
+    txt2 = "体检结论分析\n内科：未见异常\n外科：未见异常\n建议复查。"
+    sec2 = _locate_findings_sections(txt2)
+    assert sec2 is None or "未见异常" not in sec2, sec2
+
+
+def test_indicator_name_continuation_bracket_prefix():
+    # 曾繁鲁: "[HR]乙型肝炎表面抗原" + "测定(HBsAg)" 折行名未并; 纯拉丁括号续行并入
+    from app.modules.report.table_extractor import (
+        _NAME_RE, _NAME_CONT_MIXED_RE, extract_indicator_rows,
+    )
+    assert _NAME_RE.match("[HR]乙型肝炎表面抗原")
+    assert _NAME_CONT_MIXED_RE.match("测定(HBsAg)")
+    assert _NAME_CONT_MIXED_RE.match("移酶(AST)")
+    assert not _NAME_CONT_MIXED_RE.match("(定量)")  # 纯中文括号保持跳板
+    rows = extract_indicator_rows("\n".join(
+        ["[HR]乙型肝炎表面抗原", "测定(HBsAg)", "阴性(-)",
+         "[HR] 中性粒细胞比率", "(NEUT%)", "56.80"]))
+    names = [r["item_name"] for r in rows]
+    assert "[HR]乙型肝炎表面抗原测定(HBsAg)" in names, names
+    assert "[HR] 中性粒细胞比率(NEUT%)" in names, names
+
+
+def test_remove_findings_section_subsequence():
+    # 结论段收集跳过页眉行时, 原 text.replace 静默失败 → 子序列删除
+    from app.modules.report.service import _remove_findings_section
+    text = "封面\n体检结论分析\n【异常A】\n体检号: 123\n【异常B】\n建议复查。\n指标表\n血红蛋白: 140"
+    section = "体检结论分析\n【异常A】\n【异常B】\n建议复查。"
+    out = _remove_findings_section(text, section)
+    assert "异常A" not in out and "异常B" not in out and "建议复查" not in out, out
+    assert "血红蛋白: 140" in out and "封面" in out, out
+
+
+def test_group_indicators_urine_disambiguation():
+    # 毕惠丽: 白细胞酯酶/隐血/红细胞(尿, /μl) 误入血常规/大便常规
+    from app.core.indicator_groups import group_indicators
+    rows = [
+        {"item_name": "隐血", "unit": ""},
+        {"item_name": "白细胞酯酶", "unit": ""},
+        {"item_name": "红细胞", "unit": "/μl"},
+        {"item_name": "红细胞计数", "unit": "10^12/L"},
+        {"item_name": "白细胞计数", "unit": "10^9/L"},
+    ]
+    out, _ = group_indicators(rows)
+    g = {r["item_name"]: r["group"] for r in out}
+    assert g["隐血"] == "尿常规" and g["白细胞酯酶"] == "尿常规"
+    assert g["红细胞"] == "尿常规"
+    assert g["红细胞计数"] == "血常规" and g["白细胞计数"] == "血常规"
+
+
+def test_signal_fragment_retarget():
+    # 曾繁鲁: 信号通道把折行名碎片"测定(HBsAb)"/"酯(TG)"当独立异常 →
+    # 组装层改挂全名(标志保留, 碎片不入库)
+    from app.modules.report.service import _retarget_signal_name
+    pool = {("[HR]乙型肝炎表面抗体测定(HBsAb)", "阳性(+)"),
+            ("[HR]甘油三酯(TG)", "2.85")}
+    by_result = {}
+    for n, v in pool:
+        by_result.setdefault(v, []).append(n)
+    assert _retarget_signal_name("测定(HBsAb)", "阳性(+)", pool, by_result) \
+        == "[HR]乙型肝炎表面抗体测定(HBsAb)"
+    assert _retarget_signal_name("酯(TG)", "2.85", pool, by_result) == "[HR]甘油三酯(TG)"
+    # 自身是完整名 / 无更长后缀名 → 不改挂
+    assert _retarget_signal_name("[HR]甘油三酯(TG)", "2.85", pool, by_result) \
+        == "[HR]甘油三酯(TG)"
+    assert _retarget_signal_name("谷草/ 谷丙比值(AST/ALT)", "0.48", pool, by_result) \
+        == "谷草/ 谷丙比值(AST/ALT)"
+
+
+# === 2026-09-28(第二批): 蔡明图片详情/日期/乙肝定性后缀/机构抬头 ===
+
+def test_split_qual_tail_numeric_chinese():
+    # 蔡明: "130 阳性" 整串曾被当结果(与行式"130"重复; 行式把"阳性"当单位)
+    from app.modules.report.table_extractor import _split_qual_tail, extract_indicator_rows
+    assert _split_qual_tail("130 阳性") == ("130", "阳性")
+    assert _split_qual_tail("0.00732 阳性") == ("0.00732", "阳性")
+    assert _split_qual_tail("130") == ("130", None)
+    assert _split_qual_tail("阳性") == ("阳性", None)
+    rows = extract_indicator_rows("\n".join(
+        ["乙肝表面抗体(抗-HBs)", "130 阳性", "*", "0--10", "mIU/mL"]))
+    assert [(r["item_name"], r["result"], r["unit"]) for r in rows] == [
+        ("乙肝表面抗体(抗-HBs)", "130", "mIU/mL")], rows
+
+
+def test_layout_hospital_header_not_merged_into_name():
+    # 蔡明: 页眉"江西中医药大学附属医院"与数据行同列近 y 被并进名称
+    from app.modules.report.table_extractor import _HOSPITAL_HEADER_RE
+    assert _HOSPITAL_HEADER_RE.match("江西中医药大学附属医院")
+    assert _HOSPITAL_HEADER_RE.match("某某市人民医院（东院区）")
+    assert not _HOSPITAL_HEADER_RE.match("肌钙蛋白I")
+
+
+def test_reflow_num_title_short_label_boundary():
+    # 蔡明: 长编号标题("7. 胆囊息肉，大小约 3 × 3 mm")后接"疾病解释"曾黏连
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = "7. 胆囊息肉，大小约 3 × 3 mm\n疾病解释\n为胆囊壁突向腔内的隆起物，多发。\n主检建议\n建议定期复查。"
+    out = _reflow_conclusion_lines(txt)
+    assert "mm疾病解释" not in out, out
+    assert "\n疾病解释\n" in out, out
+    assert "\n主检建议\n" in out, out
+
+
+def test_reflow_history_date_merged():
+    # 蔡明: 历年对比日期标签"2025-05-21 检查"单独成行会被前端加粗 → 并入下一行
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("10. 乙肝两对半\n本次检查 检验科示：乙肝表面抗体:130 阳性;\n"
+           "2025-05-21 检查\n检验科示：乙肝表面抗体:阳性;\n"
+           "2025 -05-21 检查\n疾病解释\n提示已产生抗体。")
+    out = _reflow_conclusion_lines(txt)
+    assert "2025-05-21 检查 检验科示：乙肝表面抗体:阳性;" in out, out
+    assert "2025 -05-21 检查\n" not in out, out  # 孤立日期(下一行是分区标签)已丢弃
+    assert "2025-05-21 检查 疾病解释" not in out, out
+
+
+def test_ocr_content_pages_profile_flag():
+    # 蔡明: 档案声明 ocr_content_pages → _extract_pdf_text(hybrid) 走宽条图页 OCR
+    from app.modules.report.report_profiles import match_profile
+    assert match_profile("江西中医药大学附属医院 体检报告").get("ocr_content_pages") is True
+    assert not match_profile("某不存在的医院").get("ocr_content_pages")
+
+
+def test_skip_names_unit_prefix_and_summary_label():
+    # 2026-09-28 端到端回归: 尿沉渣单位行"个/ml"被当名称续行首段(付立光
+    # "个/ml细菌(FORHPF)"重复行); "小结"被当指标名(蔡明"小结|未见明显异常")
+    from app.modules.report.table_extractor import _skip_name, _merge_wrapped_names
+    for u in ("个/ml", "个/HP", "个/μl", "个/LPF", "个/视野"):
+        assert _skip_name(u), u
+    assert _skip_name("小结")
+    assert not _skip_name("红细胞")
+    assert _merge_wrapped_names(["个/ml", "细菌(FORHPF)", "0.68"]) == [
+        "个/ml", "细菌(FORHPF)", "0.68"]
+
+
+def test_inline_ref_range_fragment_rejected():
+    # 毕惠丽 visual 文本: 性激素参考范围折行"期:4.54-22.51，黄体" 曾被行内模式
+    # 当"名称:结果"(产出"期|4.54"/"无判断期|4.54"垃圾)
+    from app.modules.report.table_extractor import extract_indicator_rows
+    rows = extract_indicator_rows("\n".join([
+        "促卵泡生成素", "87.0", "无判断", "期:4.54-22.51，黄体",
+        "成年男性:1.75-7.81，成年", "女性:<0.75。"]))
+    names = [r["item_name"] for r in rows]
+    assert names == ["促卵泡生成素"], rows
+
+
+def test_skip_name_serial_and_phone():
+    # 毕惠丽 visual 文本: "体检流水号：…" / "联系电话" 曾被当指标名
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("体检流水号")
+    assert _skip_name("联系电话")
+    assert not _skip_name("血小板计数")
+
+
+def test_skip_name_ocr_report_fields():
+    # 2026-09-28 蔡丰泽 image 页 OCR: 分检报告头字段被当指标
+    from app.modules.report.table_extractor import _skip_name
+    for s in ("审核时间", "报告时间", "检测结果", "病案号", "检查号",
+              "病人信息病案号", "申请科室", "申请医生", "体检"):
+        assert _skip_name(s), s
+    assert not _skip_name("促卵泡生成素")
+
+
+def test_pair_arrow_by_row_with_result_hint():
+    # 董涛体格表文本流乱序("舒张压/18.5-23.99/26.16 ↑/体重指数"): 值+箭头同格行
+    # 按同排(y)取名, 不再把值错配给上一行
+    from app.modules.report.table_extractor import _pair_arrow_by_row
+    lines = ["舒张压", "18.5-23.99", "26.16 ↑", "体重指数"]
+    meta = [(0, 200.0, 77.0), (0, 201.0, 416.0), (0, 201.5, 195.0), (0, 200.5, 75.0)]
+    out = _pair_arrow_by_row(lines, meta, 2, result_hint="26.16")
+    assert out and out[0]["item_name"] == "体重指数" and out[0]["result"] == "26.16", out
+
+
+def test_trailing_arrow_semi_quantitative_value():
+    # 董涛 尿常规: 半定量值+箭头同格("+-  ↑") 需被识别(此前只认数值/定性词)
+    from app.modules.report.table_extractor import _value_with_arrow
+    assert _value_with_arrow("+-  ↑") == ("+-", True)
+    assert _value_with_arrow("++ ↑") == ("++", True)
+    assert _value_with_arrow("± ↓") == ("±", True)
+    assert _value_with_arrow("26.16 ↑") == ("26.16", True)
+    assert _value_with_arrow("26.16") == (None, False)
+
+
+# === 2026-09-28(第三批反馈): 62-66 五份 ===
+
+def test_range_with_unit_trailing_space():
+    # 生明月 血常规/单吉飞 检验表: 参考"20.00～50.00 %" 带空格, 单位 % 曾丢
+    from app.modules.report.table_extractor import _range_with_unit
+    assert _range_with_unit("20.00～50.00 %") == ("20.00", "50.00", "%")
+    assert _range_with_unit("50-70 %") == ("50", "70", "%")
+    assert _range_with_unit("0.29-1.70mmol/L") == ("0.29", "1.70", "mmol/L")
+
+
+def test_unit_after_ref_not_next_name():
+    # 单吉飞 VALUE/REF/UNIT 顺序: ref 后紧跟单位行应补单位;
+    # 崇左 比重 ref 后 "*pH"(下一指标名, 其后跟值) 仍断
+    from app.modules.report.table_extractor import extract_indicator_rows
+    rows = extract_indicator_rows("\n".join([
+        "中性粒细胞百分比（NEU%）", "39.3 ↓", "40 -- 70", "%", "◆",
+        "淋巴细胞百分比（LYM%）", "52.7 ↑", "20 -- 50", "%"]))
+    got = {(r["item_name"], r["result"]): r.get("unit") for r in rows}
+    assert got.get(("中性粒细胞百分比（NEU%）", "39.3")) == "%", rows
+    assert got.get(("淋巴细胞百分比（LYM%）", "52.7")) == "%", rows
+    rows2 = extract_indicator_rows("\n".join(["*比重", "1.030", "1.010--1.030", "*pH", "5.00", "4.5--8"]))
+    got2 = {(r["item_name"], r["result"]): r.get("unit") for r in rows2}
+    assert got2.get(("比重", "1.030")) == "", rows2  # "*pH" 是下一指标名, 不作单位
+
+
+def test_name_re_mlmin_not_name():
+    # "ml/min"(单吉飞 肾小球过滤率单位) 曾被当 ASCII 斜杠名称 → 单位丢
+    from app.modules.report.table_extractor import _NAME_RE
+    assert not _NAME_RE.match("ml/min")
+    assert _NAME_RE.match("CD4/CD8")
+
+
+def test_reflow_numbered_prose_wrap_not_split():
+    # 厚柏刚: "5、EB病毒…疾病等有"/"相关性，请结合临床…" 长正文折行曾被编号拆分规则拆开
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = ("5、EB病毒VCA-IgG抗体为阳性：EB病毒与鼻咽癌、伯基特淋巴瘤、淋巴组织增生性疾病等有\n"
+           "相关性，请结合临床，必要时相关科室就诊。\n"
+           "7、无创周围血管检测提示右侧锁骨下动脉狭窄可能，远端动脉血液灌注欠充足，建议做头颈动\n"
+           "脉CTA检查：建议神经外科就诊，必要时进一步检查。")
+    out = _reflow_conclusion_lines(txt)
+    assert "疾病等有相关性，请结合临床" in out.replace("\n", ""), out
+    assert "建议做头颈动脉CTA检查" in out.replace("\n", ""), out
+    # 多名列表标题(无句读/短) 仍拆
+    txt2 = ("4.阻塞性睡眠呼吸暂停低通气综合征、夜间中度低氧饱和度血症\n"
+            "此次检查示阻塞性睡眠呼吸暂停低通气综合征，导致夜间低氧饱和度血症。")
+    out2 = _reflow_conclusion_lines(txt2)
+    assert out2.split("\n")[0].startswith("4.阻塞性"), out2
+
+
+def test_locate_dedup_keeps_short_continuation():
+    # 厚柏刚: 两条编号条目均以"…就诊。"结尾, 第二条"诊。"曾被段内去重吞掉
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("体检结论分析\n"
+           "2、肝功能提示…建议复查肝功能，升高明显请到消化科就\n诊。\n"
+           "13、胆囊息肉：…肝胆外科就\n诊。\n"
+           "14、双肾强回声点：…")
+    sec = _locate_findings_sections(txt)
+    assert sec.count("诊。") >= 2, sec
+
+
+def test_locate_name_header_skip():
+    # 单吉飞/董涛: 跨页续段尾混入"姓名页眉"(患者名+姓名:)
+    from app.modules.report.service import _locate_findings_sections
+    txt = ("体检结论分析\n1、异常\n建议复查。\n单吉飞\n姓名:\n检查号: 123\n检查项目\n血压")
+    sec = _locate_findings_sections(txt)
+    assert "单吉飞" not in sec, sec
+    assert "检查项目" not in sec, sec
+
+
+def test_reflow_table_conclusion_not_broken_by_num_prose():
+    # 蔡明: "7. 胆囊息肉，大小约 3 × 3 mm"(短标题)后接"疾病解释"仍须拆行
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = "7. 胆囊息肉，大小约 3 × 3 mm\n疾病解释\n为胆囊壁突向腔内的隆起物。"
+    out = _reflow_conclusion_lines(txt)
+    assert "mm疾病解释" not in out, out
+    assert "\n疾病解释\n" in out, out
+
+
+def test_classify_batch5_units():
+    # 62-66 分类口径(用户反馈)
+    from app.core.indicator_groups import classify
+    assert classify("中性分叶核计数") == "血常规"
+    assert classify("肾小球过滤率") == "肾功能"
+    assert classify("估算肾小球过滤率-肌酐") == "肾功能"
+    assert classify("门冬氨酸氨基转移酶") == "心肌酶谱"
+    assert classify("天门冬氨酸氨基转移酶") == "肝功能"   # 不受"门冬氨酸"规则影响
+    assert classify("补体C1q") == "肾功能"
+
+
+def test_junk_exam_part_and_result_label():
+    # 62-66 端到端暴露: 分科页查体叙述混入绿区
+    from app.modules.report.table_extractor import _junk_row_cell
+    # 查体部位 + 正常结果(生明月 耳鼻喉/妇科页)
+    assert _junk_row_cell("听力(左)", "", "正常")
+    assert _junk_row_cell("扁桃体", "", "无肿大")
+    assert _junk_row_cell("心脏听诊", "", "未闻及异常")
+    assert _junk_row_cell("年06 月22 日听力(右)", "", "正常")
+    # 结果为字段标签残片(单吉飞"■内科常规检查|检查者凌延昭")
+    assert _junk_row_cell("■内科常规检查", "", "检查者凌延昭")
+    assert _junk_row_cell("心脏彩超", "", "检查者")
+    # 异常结果不受影响 / 正常指标不受影响
+    assert not _junk_row_cell("宫颈", "", "糜烂样改变")
+    assert not _junk_row_cell("体重指数", "", "26.16")
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("咽喉结果提示")
+
+
+def test_layout_result_marker_prefix_stripped():
+    # 单吉飞: "◆" 分隔符 cell 被并入结果列("◆19.3 ↓") → 剥标记后与行式行去重
+    from app.modules.report.table_extractor import _strip_result_marker
+    assert _strip_result_marker("◆19.3 ↓") == "19.3 ↓"
+    assert _strip_result_marker("19.3") == "19.3"
+    assert _strip_result_marker("◇") == ""
+
+
+def test_extra_skip_precedence_over_break():
+    # 单吉飞: 签名行(终审医师/初审医师)在结论条目中间, 档案 extra_skip 须优先于通用断点
+    from app.modules.report.service import _locate_findings_sections
+    from app.modules.report.report_profiles import compile_profile, match_profile
+    prof = compile_profile(match_profile("河南科技大学第二附属医院"))
+    txt = ("体检结论分析\n【指导与建议】\n●异常一：\n建议复查。\n"
+           "终审医师\n总检评估意见：\n审核（盖章）\n初审医师\n"
+           "●异常二：\n建议随访。\n检查项目\n血压")
+    sec = _locate_findings_sections(
+        txt, extra_skip_re=prof["extra_skip_re"], extra_anchor_re=prof["extra_anchor_re"])
+    assert "异常二" in sec, sec          # 签名块之后的续页条目仍在
+    assert "检查项目" not in sec, sec    # 通用 BREAK_RE2 仍收口
+
+
+def test_vlm_form_gate_long_narrative_only():
+    # 董涛: 血脂4行与尿常规同段, 短定性(未提示/normal/清亮/+-)曾使整段被形态门丢弃
+    # (纯函数不可直接测布局门, 这里用行式等价断言守住"低密/高密"提取)
+    from app.modules.report.table_extractor import col_rows_via_layout
+    import os
+    pdf = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))),
+        "体检报告样例", "0-第五批", "董涛249011.pdf")
+    if not os.path.exists(pdf):
+        import pytest
+        pytest.skip("董涛样本缺失")
+    names = {r["item_name"] for r in col_rows_via_layout(pdf)}
+    assert "低密度脂蛋白胆固醇" in names, names
+    assert "高密度脂蛋白胆固醇" in names, names
+
+
+def test_skip_billing_done_status_and_ast_alt():
+    # 陈春光: "收费项目汇总"表(项目名+已做/未做)被当指标; AST:ALT 未归类
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("常规检查已做")
+    assert _skip_name("乙型肝炎e抗体测定(定性)已做")
+    assert _skip_name("已做")
+    assert _skip_name("收费项目汇总项目状态")
+    assert not _skip_name("乙型肝炎e抗体测定")
+    from app.core.indicator_groups import classify
+    assert classify("AST:ALT") == "肝功能"
+    assert classify("AST/ALT") == "肝功能"
+
+
+def test_layout_qualified_risk_ref_dropped():
+    # 董涛: 低密度脂蛋白胆固醇参考是风险分层注释("中、高危人群:<2.6；") → 不落 ref
+    from app.modules.report.table_extractor import col_rows_via_layout
+    import os
+    pdf = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))),
+        "体检报告样例", "0-第五批", "董涛249011.pdf")
+    if not os.path.exists(pdf):
+        import pytest
+        pytest.skip("董涛样本缺失")
+    row = next(r for r in col_rows_via_layout(pdf) if r["item_name"] == "低密度脂蛋白胆固醇")
+    assert not row.get("ref_low") and not row.get("ref_high"), row
+
+
+def test_arrow_with_paren_and_combined_exam_parts():
+    # 弘爱(22)重跑暴露: 本次结果"7.9(↓)"信号行自身值取不到 → 错配上次结果 9.2 假黄
+    from app.modules.report.table_extractor import _value_with_arrow, _junk_row_cell
+    assert _value_with_arrow("7.9(↓)") == ("7.9", True)
+    assert _value_with_arrow("17.6 ↓") == ("17.6", True)
+    # 组合查体部位名("皮肤、浅表淋巴结"/"胸廓、肺部") + 正常结果
+    assert _junk_row_cell("皮肤、浅表淋巴结", "", "未见明显异常")
+    assert _junk_row_cell("胸廓、肺部", "", "未见明显异常")
+    # 结果为字段标签
+    assert _junk_row_cell("内科", "", "检查结果")
+
+
+def test_signal_skips_rev_dual_block_values():
+    # 弘爱双值表: "5.73(↑)"(上次) 与 "5.80(↑)"(本次) 都带箭头 → 信号通道曾双发
+    # (5.73 假黄); 块表区信号应整体跳过(由列式整块接管)
+    from app.modules.report.table_extractor import extract_abnormal_signals
+    import os
+    pdf = "/home/wjyy2/hospitalKnowledgeBase/体检报告样例/各地汇总/厦门弘爱_H004_11.pdf"
+    if not os.path.exists(pdf):
+        import pytest
+        pytest.skip("弘爱样本缺失")
+    sigs = extract_abnormal_signals(pdf)
+    results = {(s["item_name"], s["result"]) for s in sigs}
+    assert ("总胆固醇(CHOL)", "5.73") not in results, results  # 上次结果不作信号
+    assert ("阴离子间隙(AG)", "9.2") not in results, results
+    # 综述行"(2)总胆固醇(CHOL): 5.80↑" 仍作信号(块表区外的正文)
+    assert ("总胆固醇(CHOL)", "5.80") in results, results

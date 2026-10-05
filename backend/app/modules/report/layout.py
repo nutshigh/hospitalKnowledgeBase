@@ -154,7 +154,7 @@ def detect_table_regions(pdf_path: str) -> List[TableRegion]:
 
             _FIELD_CELL = _re.compile(
                 r"^(体检号|体检编号|体检号|姓名|性别|年龄|证件号|登记号|档案号|条码|"
-                r"手机|电话|打印日期|科室|医生|检查时间)[:：]")
+                r"手机|电话|打印日期|审核日期|科室|医生|检查时间)[:：]")
             _JUNK_CELL = _re.compile(r"^(第|页/共\d+页|共\d+页|\d{1,3}|[-—]|页)$")
 
             def _table_row(cells: List[VRow]) -> bool:

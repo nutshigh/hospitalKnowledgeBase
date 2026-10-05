@@ -389,9 +389,9 @@
  },
  "22": {
   "name": "测试6()",
-  "interp_id": 287,
-  "conclusion_len": 552,
-  "conclusion_hash": "fa36c001187bb542",
+  "interp_id": 733,
+  "conclusion_len": 554,
+  "conclusion_hash": "b6e49beb70eaaeb6",
   "indicators": [
    [
     "乙肝两对半结论",
@@ -2142,6 +2142,794 @@
    ],
    [
     "高血压",
+    "yellow"
+   ]
+  ]
+ },
+ "57": {
+  "name": "测试6(付立光)",
+  "interp_id": 649,
+  "conclusion_len": 675,
+  "conclusion_hash": "46cc2c86692e33c4",
+  "indicators": [
+   [
+    "乙肝e抗体(定量)",
+    "yellow"
+   ],
+   [
+    "乙肝两对半结论（定量）",
+    "yellow"
+   ],
+   [
+    "乙肝核心抗体(定量)",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体(定量)",
+    "yellow"
+   ],
+   [
+    "尿酸(UA)",
+    "yellow"
+   ],
+   [
+    "平均红细胞血红蛋白浓度",
+    "yellow"
+   ],
+   [
+    "直接(结合)胆红素",
+    "yellow"
+   ],
+   [
+    "肾小管上皮细胞",
+    "yellow"
+   ],
+   [
+    "阴离子间隙",
+    "yellow"
+   ],
+   [
+    "非鳞状上皮细胞",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "双肺多发小结节",
+    "yellow"
+   ],
+   [
+    "脉搏：59次/分心电图：窦性心动过缓(55次/分）胸部低剂量CT平扫：主动脉硬化心脏彩超：房室大小及LVEF值正常范围",
+    "yellow"
+   ]
+  ]
+ },
+ "58": {
+  "name": "测试6()",
+  "interp_id": 659,
+  "conclusion_len": 970,
+  "conclusion_hash": "954497f7fb079207",
+  "indicators": [
+   [
+    "乙肝e抗体",
+    "yellow"
+   ],
+   [
+    "乙肝核心抗体",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体",
+    "yellow"
+   ],
+   [
+    "白细胞酯酶",
+    "yellow"
+   ],
+   [
+    "红细胞",
+    "yellow"
+   ],
+   [
+    "红细胞(高倍视野)",
+    "yellow"
+   ],
+   [
+    "酮体",
+    "yellow"
+   ],
+   [
+    "隐血",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "余双肺多发实性小结节",
+    "yellow"
+   ],
+   [
+    "双侧颈动脉内中膜增厚",
+    "yellow"
+   ],
+   [
+    "右侧第2肋骨腋段骨皮质不规整",
+    "yellow"
+   ],
+   [
+    "增殖",
+    "yellow"
+   ],
+   [
+    "子宫内膜回声不均伴宫腔内中等回声团",
+    "yellow"
+   ],
+   [
+    "子宫肌瘤",
+    "yellow"
+   ],
+   [
+    "左乳腺结节",
+    "yellow"
+   ],
+   [
+    "左肺下叶背段多发纤维",
+    "yellow"
+   ],
+   [
+    "甲状腺右叶结节",
+    "yellow"
+   ],
+   [
+    "肝囊肿",
+    "yellow"
+   ],
+   [
+    "胸部CT提示双肺上叶",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "钙化病变大致同前",
+    "yellow"
+   ],
+   [
+    "阴道分泌物提示IV",
+    "yellow"
+   ]
+  ]
+ },
+ "59": {
+  "name": "测试6()",
+  "interp_id": 663,
+  "conclusion_len": 999,
+  "conclusion_hash": "96dace2417fe0e66",
+  "indicators": [
+   [
+    "r-谷氨酰转肽酶",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白(LDL)",
+    "yellow"
+   ],
+   [
+    "单核细胞(MO#)",
+    "yellow"
+   ],
+   [
+    "单核细胞(MO%)",
+    "yellow"
+   ],
+   [
+    "尿酸(UA)",
+    "yellow"
+   ],
+   [
+    "总胆固醇(CHOL)",
+    "yellow"
+   ],
+   [
+    "甘油三脂(TG)",
+    "yellow"
+   ],
+   [
+    "谷丙转氨酶(GPT)",
+    "yellow"
+   ],
+   [
+    "谷草转氨酶(GOT)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "T波改变",
+    "yellow"
+   ],
+   [
+    "全身骨代谢障碍",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌阳性",
+    "yellow"
+   ],
+   [
+    "肝功能异常",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "骨折",
+    "yellow"
+   ],
+   [
+    "骨质疏松",
+    "yellow"
+   ],
+   [
+    "高尿酸血症",
+    "yellow"
+   ],
+   [
+    "高脂血症",
+    "yellow"
+   ],
+   [
+    "高血压",
+    "yellow"
+   ]
+  ]
+ },
+ "60": {
+  "name": "测试6(江西中医药大学附属医院)",
+  "interp_id": 671,
+  "conclusion_len": 2513,
+  "conclusion_hash": "75991399abd8ada1",
+  "indicators": [
+   [
+    "乙肝核心抗体(抗-HBc)",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体(抗-HBs)",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "血小板分布宽度",
+    "yellow"
+   ],
+   [
+    "血浆纤维蛋白原测定（克劳斯法）",
+    "yellow"
+   ],
+   [
+    "钠",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣少量反流",
+    "yellow"
+   ],
+   [
+    "右侧腘窝多个混杂信号结节",
+    "yellow"
+   ],
+   [
+    "右侧膝关节腔及髌上囊少量积液",
+    "yellow"
+   ],
+   [
+    "右肺中叶少许条索影",
+    "yellow"
+   ],
+   [
+    "右膝关节骨质轻度硬化",
+    "yellow"
+   ],
+   [
+    "回肠末端炎",
+    "yellow"
+   ],
+   [
+    "左肾钙盐结晶",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌",
+    "yellow"
+   ],
+   [
+    "慢性炎性病变",
+    "yellow"
+   ],
+   [
+    "直肠炎",
+    "yellow"
+   ],
+   [
+    "胆囊息肉",
+    "yellow"
+   ],
+   [
+    "腓骨头小囊性灶",
+    "yellow"
+   ],
+   [
+    "颈椎轻度退变",
+    "yellow"
+   ],
+   [
+    "髌下滑膜皱襞轻度水肿",
+    "yellow"
+   ]
+  ]
+ },
+ "61": {
+  "name": "测试6()",
+  "interp_id": 667,
+  "conclusion_len": 1564,
+  "conclusion_hash": "dd42ef7f3f03b994",
+  "indicators": [
+   [
+    "[HR]丙氨酸氨基转移酶(ALT)",
+    "yellow"
+   ],
+   [
+    "[HR]乙型肝炎e抗体测定(HBeAb)",
+    "yellow"
+   ],
+   [
+    "[HR]乙型肝炎表面抗体测定(HBsAb)",
+    "yellow"
+   ],
+   [
+    "[HR]尿酸(UA)",
+    "yellow"
+   ],
+   [
+    "[HR]总胆固醇(CHOL)",
+    "yellow"
+   ],
+   [
+    "[HR]甘油三酯(TG)",
+    "yellow"
+   ],
+   [
+    "谷草/谷丙比值(AST/ALT)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "体检发现您的血尿酸增高",
+    "yellow"
+   ],
+   [
+    "双肺上叶局限性肺气肿",
+    "yellow"
+   ],
+   [
+    "甲状腺恶性结节",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "甲状腺结节a类",
+    "yellow"
+   ],
+   [
+    "肝功能异常",
+    "yellow"
+   ],
+   [
+    "肾结石",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "超重的危害性",
+    "yellow"
+   ],
+   [
+    "高尿酸血症",
+    "yellow"
+   ],
+   [
+    "高胆固醇血症",
+    "yellow"
+   ]
+  ]
+ },
+ "62": {
+  "name": "测试6(中华人民共和国福清出入境)",
+  "interp_id": 737,
+  "conclusion_len": 605,
+  "conclusion_hash": "6737f3e7eee3f152",
+  "indicators": [
+   [
+    "CO2结合力",
+    "yellow"
+   ],
+   [
+    "γ-谷氨酰转移酶",
+    "yellow"
+   ],
+   [
+    "中性分叶核计数",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体",
+    "yellow"
+   ],
+   [
+    "尿素",
+    "yellow"
+   ],
+   [
+    "白细胞计数",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "3.必要时请在心血管或内分泌科专科医师指导下服用降脂药物",
+    "yellow"
+   ],
+   [
+    "控制每日总热量摄入",
+    "yellow"
+   ]
+  ]
+ },
+ "63": {
+  "name": "测试6()",
+  "interp_id": 741,
+  "conclusion_len": 1108,
+  "conclusion_hash": "d1962a61e72d8bc7",
+  "indicators": [
+   [
+    "中性粒细胞百分比（NEU%）",
+    "yellow"
+   ],
+   [
+    "中性粒细胞绝对值(NEU#)",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌IgA抗体（HP-IgA）",
+    "yellow"
+   ],
+   [
+    "总胆红素（T-BIL）",
+    "yellow"
+   ],
+   [
+    "淋巴细胞百分比（LYM%）",
+    "yellow"
+   ],
+   [
+    "球蛋白（GLOB）",
+    "yellow"
+   ],
+   [
+    "白细胞数（WBC）",
+    "yellow"
+   ],
+   [
+    "肌红蛋白（MYO）",
+    "yellow"
+   ],
+   [
+    "肾小球过滤率",
+    "yellow"
+   ],
+   [
+    "间接胆红素（IBIL）",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇(HDL-C)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "幽门螺旋杆菌抗体阳性",
+    "yellow"
+   ],
+   [
+    "无痛胃镜-慢性非萎缩性胃炎",
+    "yellow"
+   ],
+   [
+    "甲状腺内同时存在囊性与实性二种结节样变称混合性结节",
+    "yellow"
+   ],
+   [
+    "甲状腺右侧叶囊性结节",
+    "yellow"
+   ],
+   [
+    "腰臀围比值偏低",
+    "yellow"
+   ]
+  ]
+ },
+ "64": {
+  "name": "测试6(体检编号)",
+  "interp_id": 743,
+  "conclusion_len": 1745,
+  "conclusion_hash": "68c26f1583b4a5c9",
+  "indicators": [
+   [
+    "EB病毒核抗原IgG抗体",
+    "yellow"
+   ],
+   [
+    "EB病毒衣壳抗原IgG抗体",
+    "yellow"
+   ],
+   [
+    "中性粒细胞计数",
+    "yellow"
+   ],
+   [
+    "体重指数",
+    "yellow"
+   ],
+   [
+    "单核细胞计数",
+    "yellow"
+   ],
+   [
+    "尿潜血",
+    "yellow"
+   ],
+   [
+    "尿蛋白",
+    "yellow"
+   ],
+   [
+    "甘油三酯",
+    "yellow"
+   ],
+   [
+    "白细胞计数",
+    "yellow"
+   ],
+   [
+    "非鳞状上皮细胞",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前列腺稍大",
+    "yellow"
+   ],
+   [
+    "右肾局限性积液",
+    "yellow"
+   ],
+   [
+    "尿液分析异常",
+    "yellow"
+   ],
+   [
+    "无创动脉硬化检查异常",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "肝囊肿",
+    "yellow"
+   ],
+   [
+    "肝回声细密",
+    "yellow"
+   ],
+   [
+    "肺增殖灶",
+    "yellow"
+   ],
+   [
+    "血常规异常",
+    "yellow"
+   ],
+   [
+    "频发室性早搏",
+    "yellow"
+   ]
+  ]
+ },
+ "65": {
+  "name": "测试6(辽宁出入境边防检查总站警务)",
+  "interp_id": 749,
+  "conclusion_len": 1246,
+  "conclusion_hash": "3224c4267d754103",
+  "indicators": [
+   [
+    "EB病毒VCA-IgG抗体",
+    "yellow"
+   ],
+   [
+    "乙型肝炎病毒表面抗体",
+    "yellow"
+   ],
+   [
+    "嗜碱性粒细胞百分比",
+    "yellow"
+   ],
+   [
+    "平均红细胞体积",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "总胆红素",
+    "yellow"
+   ],
+   [
+    "红细胞压积",
+    "yellow"
+   ],
+   [
+    "结合胆红素",
+    "yellow"
+   ],
+   [
+    "补体C1q",
+    "yellow"
+   ],
+   [
+    "铁",
+    "yellow"
+   ],
+   [
+    "门冬氨酸氨基转移酶",
+    "yellow"
+   ],
+   [
+    "非结合胆红素",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前列腺增大伴钙化",
+    "yellow"
+   ],
+   [
+    "双侧外周动脉僵硬度增高",
+    "yellow"
+   ],
+   [
+    "双侧颈动脉超声提示右侧颈动脉内中膜增厚",
+    "yellow"
+   ],
+   [
+    "双肺下叶局灶炎症较前稍减少",
+    "yellow"
+   ],
+   [
+    "双肾强回声点",
+    "yellow"
+   ],
+   [
+    "室性早搏",
+    "yellow"
+   ],
+   [
+    "心脏超声提示主动脉瓣退行性病变伴轻度反流",
+    "yellow"
+   ],
+   [
+    "无创周围血管检测提示右侧锁骨下动脉狭窄可能",
+    "yellow"
+   ],
+   [
+    "甲状腺弥漫性病变",
+    "yellow"
+   ],
+   [
+    "耳鼻喉检查提示鼻甲增大",
+    "yellow"
+   ],
+   [
+    "肝囊肿",
+    "yellow"
+   ],
+   [
+    "胆囊息肉",
+    "yellow"
+   ],
+   [
+    "胸部CT提示双肺散在小结节基本同前",
+    "yellow"
+   ]
+  ]
+ },
+ "66": {
+  "name": "测试6(中华人民共和国丹东港出入境边防检查站)",
+  "interp_id": 747,
+  "conclusion_len": 1461,
+  "conclusion_hash": "da5098f09146e8c5",
+  "indicators": [
+   [
+    "上皮细胞",
+    "yellow"
+   ],
+   [
+    "嗜酸性粒细胞(EO#)",
+    "yellow"
+   ],
+   [
+    "淋巴细胞(LY%)",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白(HDL)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "ST-T改变",
+    "yellow"
+   ],
+   [
+    "双乳结节",
+    "yellow"
+   ],
+   [
+    "宫颈糜烂样改变",
+    "yellow"
+   ],
+   [
+    "宫颈腺体潴留",
+    "yellow"
+   ],
+   [
+    "清洁度IV度",
+    "yellow"
+   ],
+   [
+    "胆囊息肉",
     "yellow"
    ]
   ]

@@ -22,7 +22,7 @@ import pymysql
 
 from app.modules.report.service import (
     _compile_profile_re, _extract_pdf_text, _load_report_profiles,
-    _locate_findings_sections,
+    _locate_findings_sections, _remove_findings_section, _retarget_signal_name,
 )
 from app.modules.report.table_extractor import (
     col_rows_with_fallback, extract_abnormal_signals, extract_indicator_rows,
@@ -39,6 +39,12 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     if profile and (profile.get("visual_sort") or profile.get("visual_lines")):
         text = _extract_pdf_text(pdf_path, visual_sort=True,
                                  visual_lines=bool(profile.get("visual_lines")))
+    # 2026-09-28: 档案声明 ocr_content_pages(蔡明) —— hybrid 模式对宽条内容图页补 OCR
+    if hybrid and profile.get("ocr_content_pages"):
+        _ocr_text = _extract_pdf_text(pdf_path, hybrid=True, ocr_content=True)
+        if len(_ocr_text or "") > len(text):
+            text = _ocr_text
+            profile = match_profile(text)
     # 挖结论段(与 process_task 一致)
     findings_sec = _locate_findings_sections(
         text,
@@ -46,11 +52,24 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         extra_skip_re=compiled.get("extra_skip_re"),
         extra_anchor_re=compiled.get("extra_anchor_re"))
     if findings_sec and len(findings_sec) > 50:
-        text = text.replace(findings_sec, "")
+        text = _remove_findings_section(text, findings_sec)
 
     rows = extract_indicator_rows(text)
     col_rows = col_rows_with_fallback(pdf_path, text)
     signals = extract_abnormal_signals(pdf_path)
+    # 2026-09-28: 信号通道误配折行名碎片(与 service.process_task 同构)
+    _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
+    _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
+    _full_by_result: dict = {}
+    for _r in list(col_rows) + list(rows):
+        _full_by_result.setdefault(
+            (_r.get("result") or "").strip(), []).append(_r["item_name"])
+    signals = [
+        dict(_s, item_name=_retarget_signal_name(
+            _s.get("item_name") or "", _s.get("result") or "",
+            _name_pool, _full_by_result))
+        for _s in signals
+    ]
 
     col_flag_keys = {
         (r["item_name"], r["result"]) for r in col_rows if r.get("signal_flag") == 3
@@ -70,7 +89,19 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         (r["item_name"], r["result"]): r.get("signal_flag") or 0 for r in rows
     }
     row_by_key = {(r["item_name"], r["result"]): r for r in rows}
+    # 2026-09-28: 名称折行续行补全(与 service.process_task 同构) —— 列式截断名是行式
+    # 全名前缀且结果相同时采用全名(曾繁鲁反馈黄区名被拆两条)
+    _row_full_names: dict = {}
+    for _r in rows:
+        _row_full_names.setdefault(
+            (_r.get("result") or "").strip(), []).append(_r["item_name"])
     for r in col_rows:
+        if r["item_name"] not in auth_names:
+            for _full in _row_full_names.get((r.get("result") or "").strip(), []):
+                if len(_full) > len(r["item_name"]) and _full.startswith(r["item_name"]):
+                    r = dict(r)
+                    r["item_name"] = _full
+                    break
         sig_key = (r["item_name"], r["result"])
         col_keys.add(sig_key)
         r = dict(r)
