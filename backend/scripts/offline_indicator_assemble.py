@@ -56,7 +56,7 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
 
     rows = extract_indicator_rows(text)
     col_rows = col_rows_with_fallback(pdf_path, text)
-    signals = extract_abnormal_signals(pdf_path)
+    signals = extract_abnormal_signals(pdf_path, skip_text=findings_sec or "")
     # 2026-09-28: 信号通道误配折行名碎片(与 service.process_task 同构)
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
@@ -144,8 +144,14 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
             "ref_high": r.get("ref_high"),
             "signal_flag": sig,
         })
+    # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(与 service 同构)
+    _csrc_only = (
+        {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
+        - {(s["item_name"], s["result"]) for s in signals if not s.get("_conclusion_src")})
     for s_key in signal_names:
         if s_key[0] in auth_names:
+            continue
+        if s_key in _csrc_only:
             continue
         if not (s_key[1] or "").strip():
             continue  # 2026-09-23: 空结果信号行不入库(与 service 同构)

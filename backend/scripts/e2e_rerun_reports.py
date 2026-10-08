@@ -202,11 +202,16 @@ def main():
                 t0 = time.time()
                 process_task(s, rid, hospital_id)
                 s.commit()
-                print(f"  [{rid}] process ok ({time.time()-t0:.0f}s)", flush=True)
+                # 2026-10-07: process_task 末尾已 publish interpretation(生产同路径),
+                # 此处不再补投 —— 否则每报告两条消息 → 两 worker 并发跑两版解读
+                # (旧版被删成孤儿判定, H004 曾积累 4031 条; 已一次性清理)
+                print(f"  [{rid}] process ok ({time.time()-t0:.0f}s) "
+                      f"(interp published by process_task)", flush=True)
             finally:
                 s.close()
-        publish(hospital_id, rid)
-        print(f"  [{rid}] published", flush=True)
+        else:
+            publish(hospital_id, rid)
+            print(f"  [{rid}] published", flush=True)
 
     status = wait_all(args.db, report_ids, args.timeout)
     results = {}

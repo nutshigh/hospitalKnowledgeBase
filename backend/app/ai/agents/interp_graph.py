@@ -326,7 +326,10 @@ def build_interp_graph(hospital_id: str, db: Session):
                     if over_hi or under_lo:
                         deviation = "high" if over_hi else "low"
                         color_level = "yellow"
-                    elif ref_high is None and ref_low is None:
+                    elif not ind.get("ref_range_high") and not ind.get("ref_range_low"):
+                        # 2026-10-07: 用**原始 ref** 判空 —— `_to_num(None)` 返回 0.0,
+                        # 旧写法 `ref_high is None` 恒 False, 该分支从未生效(49/59/66
+                        # "维生素C ±" f=1 无参考 生产判绿 vs 护栏镜像判黄 的口径差根因)
                         color_level = "yellow"
                         if deviation == "normal":
                             deviation = "abnormal"

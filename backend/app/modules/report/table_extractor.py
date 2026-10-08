@@ -67,6 +67,12 @@ def _grade_value_with_arrow(s: str) -> tuple:
 
 def _norm_value_cell(ln: str) -> Optional[str]:
     """若整行是"可作结果的单元格"(符号数字+方括号注释/半定量), 返回规范化 result, 否则 None。"""
+    # 2026-10-07: 数值+双符号括号("10(+-) 个/uL" 白炜尿隐血)整串作结果 —— 旧式
+    # 只认单符号"(+)"(取值丢括号), "10(+-)"不被识别 → 箭头配对滑到参考"阴性"产物
+    # 假黄(尿隐血(BLD)|阴性); 双符号是 ± 半定量标记, 打印结果含它。
+    m = re.match(r"^[<>≤≥]?\s*[\d.]+\s*[（(][+\-±]{2}[)）]$", ln.strip())
+    if m:
+        return ln.strip()
     m = _QUAL_SUFFIX_VAL_RE.match(ln.strip())
     if m:
         return m.group(1).strip()
@@ -126,8 +132,9 @@ _UNIT_RE = re.compile(
 # 2026-08-31: ↑/↓ 异常前缀(广西人民"↑208～428""↑<3.37", 可叠加符号)
 # 2026-09-05: ≤/≥ 单侧上限/下限(德宏 BA% "≤1"、BA# "≤0.06")
 _RANGE_RE = re.compile(
-    r"^(?:[<>＜＞≤≥~～↑↓]\s*){0,2}[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+$"
-    r"|^(?:[<>＜＞≤≥~～↑↓]\s*){0,2}[\d.]+$"
+    # 2026-10-07: 支持方括号包裹的参考范围(中科体检陈霓"总胆固醇…[<5.2]/[3.5--9.5]")
+    r"^\[?\s*(?:[<>＜＞≤≥~～↑↓]\s*){0,2}[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+\s*\]?$"
+    r"|^\[?\s*(?:[<>＜＞≤≥~～↑↓]\s*){0,2}[\d.]+\s*\]?$"
 )
 # 箭头行(偏高/偏低标记): "↑" "↓"
 _ARROW_RE = re.compile(r"^[↑↓]$")
@@ -148,7 +155,7 @@ _SKIP_NAMES = re.compile(
     r"体重超过标准体重|边缘|合适水平|升高|降低|提示|异常|现病史|既往史|家族史|"
     # 2026-09-23: 第四批反馈清理 —— 生活方式/超声描述碎片
     r"吸烟史|饮酒史|最大|最小|"
-    r"^(?:肾功|肝功|血脂|血常规|尿常规|尿沉渣|常规生化|乙肝|丙肝|甲功|甲胎|心肌酶)\d*项?$|^比$|"
+    r"^(?:肾功|肝功|血脂|血常规|尿常规|尿沉渣|常规生化|乙肝|丙肝|甲功|甲胎|心肌酶)[一二三四五六七八九十\d]*项?$|^比$|"
     r"大小约|小约为|直径约|"
     r"常规心电图|彩超|B超|超声|X线|DR|CT|MR|TCD|碳13|幽门螺杆菌(?!I?gG?|抗体|抗原|HP)|门诊|瞬时弹性成像)"
 )
@@ -163,6 +170,11 @@ _SKIP_SUB_RE = re.compile(
     r"结果提示|已做|未做|收费项目|"
     # 2026-09-28: OCR 分检报告头字段(蔡丰泽 image 页: 检查号/病案号/申请科室…)
     r"审核时间|报告时间|检测结果|病案号|检查号|病人信息|申请科室|申请医生|"
+    # 2026-10-07: 检验科来源行(陈霓"数据来源：南昌中科医学检验实验室" 曾被当指标)
+    r"数据来源|审核者|检验者[:：]?$|"
+    # 2026-10-07: 个人信息表头合并名(陈东海视觉重排后"单位/体检编号"与相邻行并名:
+    # "单位体检编号"/"中华人民共和国八所出入境边防检查站身高" 曾被当指标)
+    r"体检编号|证件号码|婚育史|运动习惯|体检类型|中华人民共和国|编\s*码[:：]?|"
     # 2026-09-23: 表头字段合并名(台州 48 "登记日期电话号码"/"健康号" 曾被当指标)
     r"登记日期|电话号码|健康号|出生日期|打印时间|体检日期|"
     # 2026-09-23: 医院联系信息行(常逢龙"总 院：021-…/浦东院区：021-…")
@@ -468,6 +480,46 @@ def _strip_history_compare_table(text: str) -> str:
 # 茂名人民: 表头 dump = 项目名称/参考值/提示/检查结果/单位 —— "参考值"列在"检查结果"前,
 # 视觉上每指标 ref 在名称/值之前 → 行式值行后 range 属下一指标, 不得向后消费。
 # 检测: 表头窗口内 参考类词 index < 结果类词 index。
+def _data_order_clearly_normal(lines: list[str]) -> bool:
+    """数据行序**明确正序**判定: 数值型指标行的参考范围出现在值**之后**(≥20 票且
+    超过反序票 2 倍)。
+
+    2026-10-07: 白炜"项目名称/参考值/单位/提示/检查结果"表 —— 文本层表头 dump 顺序
+    被排版打乱(参考值出现在检查结果前), `_text_has_reversed_ref` 误报反序 → 行式
+    "值后 range 不消费 + `_above_flag` 取名称上方箭头"把**上一行尾部的箭头**(该表
+    箭头紧随本行参考值)记到下一个指标, 成片假黄(用户反馈 HBeAg/红细胞平均血红蛋白
+    浓度/PDW/尿胆红素/尿隐血 假黄)。数据行序(值后带参考范围)比表头文本序可靠。
+    仅在文本判定为反序时用作**降级**(正序→反序方向不由本判定升级: 茂名 16/7、
+    齐鲁/弘爱 block 表等不受影响)。
+    """
+    rev = normal = 0
+    n = len(lines)
+    for i in range(1, n):
+        cand = lines[i]
+        if not _NAME_RE.match(cand) or _skip_name(cand) or _is_value_line(cand):
+            continue
+        _prev = lines[i - 1].strip()
+        prev_rng = bool(_RANGE_RE.match(_prev)) and bool(
+            re.search(r"[-~～–—]|^[<>≤≥]", _prev))
+        nxt_rng = False
+        has_val = False
+        for j in range(i + 1, min(n, i + 5)):
+            lj = lines[j]
+            if _NAME_RE.match(lj) and not _is_value_line(lj):
+                break
+            t = lj.strip()
+            if _RANGE_RE.match(t) and re.search(r"[-~～–—]|^[<>≤≥]", t):
+                nxt_rng = True
+                break
+            if _VALUE_RE.match(lj) and re.search(r"\d", lj):
+                has_val = True
+        if prev_rng and has_val and not nxt_rng:
+            rev += 1
+        elif nxt_rng and not prev_rng:
+            normal += 1
+    return normal >= 20 and normal > rev * 2
+
+
 def _text_has_reversed_ref(lines: list[str]) -> bool:
     """反列序检测: 表头单元格**连续收集**(与列式表头收集同口径), 参考类词
     出现在结果类词**之前**(茂名: 项目名称/参考值/提示/检查结果/单位)。
@@ -494,6 +546,27 @@ def _text_has_reversed_ref(lines: list[str]) -> bool:
     return False
 
 
+# === 2026-10-06: 非指标表页整体跳过(中科体检 陈霓) ===
+# 该院报告含"结论词/分级(A-G 级别)"表、"强烈建议下次体检项目(检查意义/建议详情)"表、
+# "微量元素检验解读(临床意义/生理功能)"表、"个人历次体检档案记录"表 —— 行式与信号通道
+# 会从中采出"人体成分分析|18"(序号当结果, 'A' 级别码当标志)、"密切关注|3"、
+# "状腺癌等疾病密切关注|2" 等 ~60 条垃圾; 坐标列式通道本就不产这些。
+# 按页签名(两个表头词同行页)或页级表名单整页跳过两个文本通道。
+_NON_IND_PAGE_SIGS = (("分类项目", "结论词"), ("检查意义", "建议详情"),
+                      ("临床意义", "生理功能"))
+_NON_IND_PAGE_LINE_RE = re.compile(
+    r"^\s*(?:个人历次体检档案记录|体检分级提示|分级标准|强烈建议下次体检项目|"
+    r"微量元素检验解读)\s*$")
+
+
+def _is_non_indicator_table_page(page_lines: list) -> bool:
+    txts = [str(t).strip() for t in page_lines if str(t).strip()]
+    for a, b in _NON_IND_PAGE_SIGS:
+        if any(a in t for t in txts) and any(b in t for t in txts):
+            return True
+    return any(_NON_IND_PAGE_LINE_RE.match(t) for t in txts)
+
+
 def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dict]:
     """按行扫描, 提取(名称, 结果, 单位, 参考范围)对。支持行内/分行/定性值/序号制/名称折行。
 
@@ -505,6 +578,20 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
     lines = _merge_unclosed_square(lines)
     lines = _merge_para_wrap(lines)
     lines = _merge_wrapped_names(lines)
+    # 2026-10-06: 非指标表页整体剔除(陈霓结论词表/建议项目表/解读表/档案表)
+    if lines:
+        _kept: list[str] = []
+        _page: list[str] = []
+        for _ln in lines:
+            if _ln.startswith("--- "):
+                if _page and not _is_non_indicator_table_page(_page):
+                    _kept.extend(_page)
+                _page = [_ln]
+            else:
+                _page.append(_ln)
+        if _page and not _is_non_indicator_table_page(_page):
+            _kept.extend(_page)
+        lines = _kept
     # 2026-09-07: rev/dual 块表区由 extract_column_table_rows 整块接管, 行式不参与
     # (厦门弘爱双值表: 行式会把"参考列/说明行/上次值"当指标; 齐鲁反序表同理)
     if lines:
@@ -519,7 +606,10 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
             lines = kept
     out: list[dict] = []
     _consumed_ref_lines: set[int] = set()  # 已被某值行后向消费的 range 行号(防前置 ref 误配)
-    _rev_ref = _text_has_reversed_ref(lines)  # 2026-09-07: 参考列在结果列前的表(茂名)
+    # 2026-09-07: 参考列在结果列前的表(茂名)。2026-10-07: 文本序误报时用数据行序降级(白炜)
+    _rev_ref = _text_has_reversed_ref(lines)
+    if _rev_ref and _data_order_clearly_normal(lines):
+        _rev_ref = False
     i = 0
     n = len(lines)
     while i < n:
@@ -625,6 +715,16 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
                 i += 1
                 continue
             # 结果行: 上一行是名称行 → 配对(两列表/三列表/序号制的值都在名称后)
+            # 2026-10-07: [名][<参考单限][单位][结果][↑] dump 序(陈刚乙肝两对半表,
+            # 视觉列序正常但文本序把参考甩到结果前) —— 首数值行是参考单限、其后果值才
+            # 是结果; 交换(旧行为把参考当结果, 真结果被当"单数历史列"跳过)。
+            _lim_swap = None
+            _m_lim = re.fullmatch(r"([<>≤≥])\s*([\d.]+)", ln.strip())
+            if _m_lim and i + 2 < n:
+                _u2 = lines[i + 1].strip()
+                _v2 = lines[i + 2].strip()
+                if _UNIT_RE.match(_u2) and re.fullmatch(r"[\d.]+", _v2):
+                    _lim_swap = (_v2, _u2)
             m2 = _VALUE_RE.match(ln)
             _norm_result = _norm_v if (m2 is None and _norm_v) else None
             unit = m2.group(2).strip() if m2 else ""
@@ -655,6 +755,11 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
                 if _is_block_name(lj) and not _is_value_line(lj):
                     break  # 2026-09-07: 值后消化遇下一指标名称即断(莆田 pH 行曾
                     # 被当单位/"6.0"被当历史列, 4.5-8.0 被误配给 维生素C)
+                # 2026-10-07: 表格空占位符("--"/"—")跳过继续消化 —— 陈东海尿常规
+                # [名][值][--][参考][--] 的占位符曾让循环 break, 参考"4.5-8.0"丢失
+                if re.fullmatch(r"[-—–─_·]{1,3}", lj.strip()):
+                    j += 1
+                    continue
                 if _ARROW_RE.match(lj):
                     # 2026-09-15: 文本件裸箭头交坐标信号通道(高帅); 扫描件仍作本行标志
                     if keep_bare_arrow:
@@ -720,6 +825,10 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False) -> list[dic
                     _consumed_ref_lines.add(prev_ref_idx)
 
             result_v = m2.group(1) if m2 else (_norm_result or (_va if _vaf else ln))
+            if _lim_swap:
+                _lo2, _hi2 = _parse_ref(ln.strip())
+                ref_low, ref_high = _lo2, _hi2
+                result_v, unit = _lim_swap[0], _lim_swap[1]
             # 2026-09-28: 数值+中文定性后缀("130 阳性") → 结果只留数值, 定性转弱标志
             _qv, _qual = _split_qual_tail(result_v)
             if _qual:
@@ -1413,9 +1522,15 @@ def _pair_from_lines(lines: list[str], idx: int, signal: str) -> Optional[dict]:
         if m:
             break
     if m and not _skip_name(m.group(1)):
-        name = _clean_name_tail(m.group(1))
-        if name and not _skip_name(name):
-            return {"item_name": name, "result": m.group(2), "unit": "", "signal": signal}
+        # 2026-10-06: 值后紧跟量词 = 标题内数量("(2)多肿瘤标志物12项（男）：血清铁蛋白：
+        # 437.71↑" 小结标签行)—— "12" 不是结果(陈霓 多肿瘤标志物|12 假黄)
+        if signal == "arrow" and variant[m.end(2):m.end(2) + 1] in (
+                "项", "个", "号", "次", "种", "例", "类", "条", "支"):
+            m = None
+        else:
+            name = _clean_name_tail(m.group(1))
+            if name and not _skip_name(name):
+                return {"item_name": name, "result": m.group(2), "unit": "", "signal": signal}
     # 2026-09-07: 信号行本身是"名称行"(红名/行首名, 无数字) → 名=自身, 直接向下找值,
     # 不得向上找名(日照: 红名"天门冬氨酸氨基转移酶"向上 2 行撞到上一指标"谷丙/谷草"
     # 造成错配 0.92 假黄)。仅对 非名称形态 的信号行才向上找名。
@@ -1576,13 +1691,20 @@ def _pair_arrow_by_row(lines: list[str], meta: list[tuple], idx: int,
              "signal": "arrow", "_coord": True}]
 
 
-def extract_abnormal_signals(pdf_path: str) -> list[dict]:
+def extract_abnormal_signals(pdf_path: str, skip_text: str = "") -> list[dict]:
     """异常信号提取: 红字行 + 箭头行 + 异常词行 → (名称, 结果) 候选。
 
     信号行在**全文行**中定位, 以便向上配对黑色名称行/向下找值行。
     噪声过滤: 弃检/未检类提示(红字)剔除。
+    skip_text: 结论段原文 —— 结论段内的行(↑/偏高 等)由解读回填负责, 不得再作为
+    指标信号(陈东海"淋巴细胞绝对值：3.27 10E9/L(1.1-3.2)↑"被配成假指标行;
+    陈刚"本次检验科提示：…272.75(mIU/L)↑"参考值当结果重复提取)。
     """
     import fitz
+    _skip_norm = set()
+    if skip_text:
+        _skip_norm = {re.sub(r"\s+", "", x) for x in skip_text.splitlines()
+                      if len(x.strip()) >= 4}
     doc = fitz.open(pdf_path)
     all_lines: list[str] = []
     line_meta: list[tuple] = []  # (page_no, y0, x0) —— 同页同排(y)配对箭头用(高帅)
@@ -1597,6 +1719,9 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
                     block_lines.append((t, line.get("spans", []), line.get("bbox")))
         # 2026-09-05: "历次体检结果比对/上次·本次体检结论"表(百色) = 结论对比文本,
         # 非检查项表格 → 标题行起(含)的该页内容不进信号通道。
+        # 2026-10-06: 非指标表页(陈霓"结论词/级别"表等)整页不进信号通道
+        if _is_non_indicator_table_page([t for t, _s, _b in block_lines]):
+            continue
         skip_from = next((i for i, (t, _s, _b) in enumerate(block_lines)
                           if "历次体检结果比对" in t or "历次体检对比" in t
                           or "历年对比" in t or "结果对比图" in t), len(block_lines))
@@ -1607,20 +1732,30 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
                 continue
             if re.search(r"(弃检|未检|放弃|拒检|无法完成)", text):
                 continue
+            _in_skip = False
+            if _skip_norm:
+                _tn = re.sub(r"\s+", "", text)
+                if len(_tn) >= 4 and (_tn in _skip_norm
+                                      or any(_tn in _s for _s in _skip_norm
+                                             if len(_tn) >= 6)):
+                    _in_skip = True
             all_lines.append(text)
             line_meta.append((page_no,
                               float(bbox[1]) if bbox else 0.0,
                               float(bbox[0]) if bbox else 0.0))
             idx = len(all_lines) - 1
+            # 2026-10-07: 结论段行**保留为配对上下文**且正常注册信号, 仅以 _csrc 标记;
+            # 消费侧对 _csrc 信号"只标黄既有行、不新建行"(见调用方)。直接整行剔除会让
+            # 其他区域箭头向上越过被删行错配到更远条目(护栏 21 例假黄)
             # 2026-09-07(口径确认): 红字样式不单独作为异常标志 —— 异常行均有
             # ↑↓/提示列字母(H/L/A)/提示文字/*等标志, 由下方分支/表格标志列承担。
             if "▲" in text or "△" in text:
-                signal_idx.append((idx, "mark"))
+                signal_idx.append((idx, "mark", _in_skip))
             elif "↑" in text or "↓" in text:
-                signal_idx.append((idx, "arrow"))
+                signal_idx.append((idx, "arrow", _in_skip))
             elif _FLAG_TEXT_RE.match(text):
                 # 2026-09-05: 表格提示列文字独立行("偏高" 值后, 滨州 FPSA/TPSA 行尾)
-                signal_idx.append((idx, "flagtext"))
+                signal_idx.append((idx, "flagtext", _in_skip))
     doc.close()
 
     # 2026-09-28: rev/dual 块表区内的信号行不参与 —— 块表(齐鲁异常标识列/弘爱本次+
@@ -1628,12 +1763,12 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
     # (弘爱双值表 总胆固醇 5.73/5.80 双双判黄、AG 9.2 错配假黄)
     _block_wins = _block_windows(all_lines)
     if _block_wins:
-        signal_idx = [(i, s) for i, s in signal_idx
+        signal_idx = [(i, s, c) for i, s, c in signal_idx
                       if not any(a <= i < b for a, b, _m in _block_wins)]
 
     seen: dict = {}
     out = []
-    for idx, sig in signal_idx:
+    for idx, sig, _csrc in signal_idx:
         # 2026-09-15: 纯箭头行优先按同排(y)配对(高帅); 失败再走文本序
         rows = []
         if sig == "arrow" and _ARROW_RE.match(all_lines[idx].strip()):
@@ -1655,6 +1790,11 @@ def extract_abnormal_signals(pdf_path: str) -> list[dict]:
             # result 为空 = 弃检/未检/配对失败, 不是异常信号, 剔除
             if not (row and row["item_name"] and row["result"]):
                 continue
+            # 2026-10-07: 结论段来源信号 —— 只允许对既有指标行"标黄"(同 key 合并),
+            # 不新建行(否则结论里的碎片/参考值会变成假指标行; 但陈美杉"体重指数"
+            # 类结论行箭头仍需给表格行上色)
+            if _csrc:
+                row["_conclusion_src"] = True
             # 2026-09-05: 配对值 = 阴性词("齿 正常"红字/整行标红的正常项)不是异常信号
             if re.fullmatch(r"(正常|未见异常|未见明显异常|无异常|未触及|未肿大|无肿大|未见|无|无明显异常)", row["result"]):
                 continue
@@ -1728,6 +1868,11 @@ def col_rows_via_layout(pdf_path: str) -> list[dict]:
     out: list[dict] = []
     _last_rx: Optional[list] = None
     for reg in regions:
+        # 2026-10-06: 非指标表 region 整段跳过(陈霓"结论词/级别"表、微量元素解读表、
+        # 历次档案表、"强烈建议下次体检项目"表 —— 该表头行无 result 角色, 会被当数据行
+        # 采出 "项目|临床意义" 等垃圾)
+        if _is_non_indicator_table_page([r.text for r in reg.rows]):
+            continue
         lines = L.logical_lines(reg.rows)
         # 切段: [(roles_xs, start_idx, end_idx)]; region 首段起点回拨到 0(页首块)
         segs: list = []

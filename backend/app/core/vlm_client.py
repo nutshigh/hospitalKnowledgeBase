@@ -249,21 +249,58 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
         return len(_hdr)
 
     period = _period_of(header, col_map)
+    # 2026-10-07: 双栏且表头不对称(蔡镇宇"项目|结果||项目|结果|参考值|提示|单位" ——
+    # 左半缺列)时 period 判不出 → 行内按**名称列位置**切段独立解析(整行解析时左半
+    # 被右半覆盖丢失: 身高/血压（收缩压）); 未映射列上的提示词按标志处理
+    _name_cols = [i for i in sorted(col_map) if col_map.get(i) == "item_name"]
+    _dual_holder = [len(_name_cols) >= 2]
 
     indicators = []
     seen = set()
 
     def _process(_row: list, _cmap: dict, _period: int) -> None:
-        indicator = _row_to_indicator(_row, _cmap)
+        indicator = _row_to_indicator(_row, _cmap, allow_unmapped_flag=bool(_dual_holder[0]))
         name = _strip_vlm_name_marker(indicator.get("item_name", "").strip())
         indicator["item_name"] = name
         if not name or name in ("(each indicator)", "项目名称", "结果"):
             return
+        # 2026-10-07: 纯单位 token 误当名称(蔡镇宇 OCR 行错位 "mmHg|血压（舒张压）|103"
+        # / "ng/ml|总前列腺特异性抗原|0.77") —— 段首单位 = 整段右旋一格(左半单位
+        # 溢出/OCR 行错位), 角色序列右旋重排后重解; 仍为单位 token 才丢弃
+        _unit_tok = (
+            r"(?i:mmHg|cm|mm|kg|mg|g|L|mL|dL|uL|μL|ng/mL|ng/dl|U/L|IU/mL|mIU/mL|"
+            r"mmol/L|μmol/L|umol/L|nmol/L|pmol/L|g/L|mg/L|mg/dL|10\^?\d+/L|"
+            r"/HP|个/HP|个|%|s|次/分|\d+\^?\d*/L)")
+        if re.fullmatch(_unit_tok, name) and len(_row) >= 3:
+            _roles = [_cmap.get(i) for i in range(len(_row))]
+            _row2 = _row[1:]
+            _cmap2 = {_i: _roles[_i] for _i in range(len(_row2))}
+            indicator = _row_to_indicator(_row2, _cmap2,
+                                          allow_unmapped_flag=bool(_dual_holder[0]))
+            name = _strip_vlm_name_marker(indicator.get("item_name", "").strip())
+            indicator["item_name"] = name
+            if not name or name in ("(each indicator)", "项目名称", "结果") \
+                    or re.fullmatch(_unit_tok, name):
+                return
         if re.search(r"(姓名[:：]|性别[:：]|门诊号|体检编号|既往病史|家族病史|月经史|"
                      r"遗传病史|过敏史|婚育史|手术史|输血史|神经及精神疾病)", name):
             return
         if not indicator.get("result") and not (indicator.get("ref_low") or indicator.get("ref_high")):
             return
+        # 2026-10-07(用户口径): 结果"弱阳性" + **与参考范围不一致** + 本表**无提示/
+        # 标志列** → 置 flag=1(run_rules: flag=1 无数值参考 → 判黄)。
+        #  - 有提示列且未标 → 绿(池州粘液丝等用户拍板案例);
+        #  - 参考列缺失 / 参考本身含"弱/阳性" → 无法认定不一致 → 不判
+        #  (幽门螺杆菌分型抗体表 序号|项目|缩写|结果|单位|参考, 参考"阴性"+结果"弱阳性")
+        if "弱阳性" in str(indicator.get("result") or "") \
+                and "flag" not in set(v for v in _cmap.values() if v):
+            _ref_txt = "".join(
+                str(_row[_i]) for _i in range(len(_row))
+                if _cmap.get(_i) in ("ref_low", "ref_high")).replace(" ", "")
+            if _ref_txt and "阳性" not in _ref_txt \
+                    and ("阴性" in _ref_txt or _ref_txt in ("-", "--")
+                         or "negative" in _ref_txt.lower()):
+                indicator["signal_flag"] = max(indicator.get("signal_flag") or 0, 1)
         _res = str(indicator.get("result") or "")
         if len(_res) > 50 or re.search(r"[。；！？]", _res):
             return
@@ -303,6 +340,20 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
         if cm:
             col_map = cm
             period = _period_of(row, cm)
+            _name_cols = [i for i in sorted(col_map) if col_map.get(i) == "item_name"]
+            _dual_holder[0] = len(_name_cols) >= 2
+            continue
+        # 2026-10-07: 双栏表头不对称(period 撑满整行) → 按名称列切段
+        if (_dual_holder[0] and period >= len(row)
+                and len(_name_cols) >= 2 and len(row) >= len(_name_cols) + 2):
+            _bounds = _name_cols + [len(row)]
+            for _a, _b in zip(_bounds, _bounds[1:]):
+                if _b - _a < 2:
+                    continue
+                _sub = row[_a:_b]
+                _submap = {i - _a: col_map.get(i) for i in range(_a, _b)}
+                _submap[0] = "item_name"
+                _process(_sub, _submap, len(_sub))
             continue
         # 2026-09-23: 双栏/多栏行按周期拆成多个子行分别解析(否则两组数据互相错配)
         if period and period < len(row):
@@ -393,8 +444,13 @@ def _match_header_columns(headers: list[str]) -> dict:
     return mapping
 
 
-def _row_to_indicator(row: list[str], col_map: dict) -> dict:
-    """Convert a table row to an indicator dict using column mapping."""
+def _row_to_indicator(row: list[str], col_map: dict,
+                      allow_unmapped_flag: bool = False) -> dict:
+    """Convert a table row to an indicator dict using column mapping.
+
+    allow_unmapped_flag: 双栏表(表头含 ≥2 个"项目"列)时, 未映射列上的提示词
+    (蔡镇宇双栏表左半缺表头 —— 提示"偏高"列无角色映射, 曾整列丢失)按标志处理;
+    单栏表保持关闭(薄楠历史结果列"阳性"曾被当标志假黄)。"""
     indicator = {}
     row = list(row)
     # 2026-08-29: 任意列出现报告方异常标志(提示列值/错位列) → signal_flag=3
@@ -421,6 +477,11 @@ def _row_to_indicator(row: list[str], col_map: dict) -> dict:
     for i, cell in enumerate(row):
         key = col_map.get(i)
         if key is None:
+            if allow_unmapped_flag and re.match(
+                    r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常)$",
+                    _norm_flag_cell(cell)):
+                indicator["signal_flag"] = 3
+                continue
             # Guess: number → result, contains "-" → ref_range
             if re.match(r"^[\d.]+$", cell) and "result" not in indicator:
                 key = "result"

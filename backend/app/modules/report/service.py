@@ -223,6 +223,8 @@ _FINDINGS_STOP_BREAK_RE2 = re.compile(
     r"^(?:[一二三四五六七八九十]{1,3}\s*[、.．,]?\s*)?(?:检查项目结果|检查项目|检验报告|"
     r"检查报告|实验室检查结果|常规检查|一般情况)$|"
     r"^(?:报告者|审核者|审核人|检查者|录入者|报告医师|报告医生)\s*[:：]|"
+    # 2026-10-07: 结论后的"健康知识/健康科普"栏目(翟泽民 乙肝疫苗科普 Q&A)不属结论
+    r"^健康知识[:：]?\s*$|^健康科普[:：]?\s*$|"
     r"^项目名称$"
 )
 _FINDINGS_STOP_SKIP_RE = re.compile(
@@ -233,14 +235,22 @@ _FINDINGS_STOP_SKIP_RE = re.compile(
     r"向专家咨询|相关检查和监测|没有潜在健康隐患|若出现身体不适|"
     r"---\s*Page|Page\s*\d+\s*/\s*\d+|共\s*\d+\s*页|"
     r"第\s*\d+\s*/\s*\d+\s*页|第\s*\d+\s*页|^\d{1,4}\s*/\s*\d{1,4}$|^\d{1,4}\s*页$|"
-    r"体检编号[:：]|体检号[:：]|流水号[:：]|登记流水号?[:：]|健康档案号[:：]|姓名[:：]|性别[:：]|年龄[:：]|单位[:：]|体检号码[:：]|"
+    r"体检编号[:：]|体检号[:：]|体检号\s+\d|流水号[:：]|登记流水号?[:：]|健康档案号[:：]|姓名[:：]|性别[:：]|年龄[:：]|单位[:：]|体检号码[:：]|"
     r"出生日期[:：]|"
     r"体检日期[:：]|检查日期[:：]|报告日期[:：]|打印日期[:：]|打印时间[:：]|体检次数[:：]|次数[:：]|门诊号[:：]|"
     r"地址[:：]|邮编[:：]|传真[:：]|接收日期[:：]|报告时间[:：]|"
+    # 2026-10-06: 电话字段页眉(白炜"电话号码: 1387…"每页页眉混入结论) ——
+    # 必须行首锚定: 正文行内"…马天如副主任医师，电话：1827…）进一步评估"含"电话："
+    # 被整行误跳(防城港中结论丢句)
+    r"^(?:联系)?电话(?:号码)?[:：]|"
     # 2026-09-10: 无冒号人员页眉(滨州"董延广·男·30   T114205"跨页混入结论段)
     r"^\s*[\u4e00-\u9fa5]{2,8}\s*[·•・]\s*[男女]\s*[·•・]\s*\d{1,3}\s*岁?\s*(?:[A-Za-z]{1,3}\d{3,12}|\d{5,12})?\s*$|"
     # 2026-09-14: 结论封面垃圾(中医院曹嘉冰"健康体检结论"段里 Conclusion/身份证号)
-    r"^\s*(?:Conclusion|Suggestion)\s*$|^\s*身份证号\s*[:：])"
+    r"^\s*(?:Conclusion|Suggestion)\s*$|^\s*身份证号\s*[:：]|"
+    # 2026-10-07: 陈刚双语页眉整行("健康体检报告 MEDICAL EXAMINATION REPORT")
+    r"^\s*健\s*康\s*体\s*检\s*报\s*告|"
+    # 2026-10-07: 竖线个人信息页眉(陈刚"陈刚  |  男  |  40  |  60366000270")
+    r"^\s*[\u4e00-\u9fa5]{2,4}\s*\|\s*[男女]\s*\|\s*\d{1,3}\s*(?:\||$))"
 )
 # 2026-09-14: 重复单字行(封面装饰"上上上上上…", 可带括号"上上(上上)")——
 # 单独编译避免与外层捕获组冲突
@@ -305,7 +315,10 @@ _EXAM_DETAIL_START_RE = re.compile(
     # "异常检查结果"汇总里的 "颈动脉彩超（查冠心病危险因子）；甲状腺彩超；B超（…）；…"
     # 是一行发现清单(非分检报告标题), 曾触发 skip_detail 吞掉其后 7 行发现
     # (胆囊壁毛糙/胰腺显示不清/甲状腺结节/…/心电图检查：1、窦性心律)。
-    r"^(?:颈动脉|甲状腺|腹部|心脏|泌尿系|肝胆胰脾)彩超(?!.*[；;])|超声测值|检查所见[:：]"
+    # 2026-10-07: "部位彩超:发现"式数据行(蔡国炜"心脏彩超:三尖瓣少量反流" + 其
+    # 下建议行)不得当细节段起点(曾整段跳过 → 用户反馈建议漏提); 仅裸表头
+    # ("心脏彩超"/"心脏彩超:")才触发 —— 冒号后必须有内容即视为数据行。
+    r"^(?:颈动脉|甲状腺|腹部|心脏|泌尿系|肝胆胰脾)彩超(?!.*[；;])(?![:：]\S)|超声测值|检查所见[:：]"
 )
 _NUMBERED_LINE_RE = re.compile(r"^\d{1,3}[\u3001,.:.\uff09)]\s*(?:[\u4e00-\u9fa5*＊★【]|[A-Za-z])")
 _NORMAL_ONLY_RE = re.compile(r"未见(明显)?(异常|分流|液性|暗区|肿块|占位|出血|钙化|囊肿|结节|结石)|无异常(发现)?|未见异常回声|阴性")
@@ -597,7 +610,9 @@ def _locate_findings_sections(text: str, extra_break_re=None,
                 _nxt_ln = lines[_li + 1].strip() if _li + 1 < len(lines) else ""
                 _pv_ln = lines[_li - 1].strip() if _li > 0 else ""
                 if re.fullmatch(r"姓名\s*[:：]?", _nxt_ln or "") \
-                        or re.fullmatch(r"姓名\s*[:：]?", _pv_ln or ""):
+                        or re.fullmatch(r"姓名\s*[:：]?", _pv_ln or "") \
+                        or re.fullmatch(r"[男女]", _nxt_ln or ""):
+                    # 2026-10-06: 裸性别行紧随 = 姓名页眉块(白炜"白炜/女/45岁")
                     continue
             # 2026-09-15: "(n)、发现" 后的 2-4 字裸名 = 医生签名(白玮衡 成丽岚/高秋爽)
             if _last_collected and re.match(r"^[（(]\d{1,2}[）)]", _last_collected) \
@@ -609,7 +624,11 @@ def _locate_findings_sections(text: str, extra_break_re=None,
                 # 被段内去重吞掉 → 健康建议只剩正文无标题。页眉/装饰类重复行仍跳过。
                 # 2026-09-28: 短行(≤3字)折行续行不吞 —— 厚柏刚两条"…就诊。"第二条
                 # "诊。" 与第一条重复曾被当页眉去重(编号条目才豁免不够)。
-                if not re.match(r"^\d{1,3}\s*[、.．)）]", s) and len(s) >= 4:
+                # 2026-10-07: **建议/提示句**豁免 —— 各条目建议常逐字重复(安周 13 条
+                # "建议：定期复查。" 与第 11 条相同被吞 → 用户反馈"第13点漏建议")。
+                if not re.match(r"^\d{1,3}\s*[、.．)）]", s) and len(s) >= 4 \
+                        and not re.match(
+                            r"^(?:建议|请|注意|如有|若|定期|随访|必要时|复查)", s):
                     continue
             seen.add(s)
             out.append(s)
@@ -679,7 +698,10 @@ def _is_plain_finding_boundary(buf: list[str], s: str) -> bool:
         return (len(x) <= 28
                 and not re.search(r"[。！？;；：:，,、]$", x)
                 and not x.startswith(("【", "*", "＊", "●", "○", "■", "◆", "◇"))
-                and not re.match(r"^\d{1,3}[\u3001,.:.．\uff09)]", x)
+                # 2026-10-07: 编号前缀要求分隔符后**非数字/短横且还有内容** ——
+                # "0.1--0.6)"是参考区间值、"00)"是值片段(蔡国炜折行), 都不是编号条目;
+                # "1、红细胞…"/"12) 脂肪肝"/"2. 胆囊…"照旧
+                and not re.match(r"^\d{1,3}[\u3001,.:.．\uff09)](?![\d-])\s*\S", x)
                 # "(n)"子项行是条目内的续行, 不作发现标题(陈镜霓"(5)定期复\n查…"防断)
                 and not re.match(r"^[（(]\s*\d{1,2}\s*[）)]", x))
 
@@ -690,16 +712,27 @@ def _is_plain_finding_boundary(buf: list[str], s: str) -> bool:
 
     head, last = buf[0], buf[-1]
     title_like = len(buf) == 1 and len(head) <= 6 and bool(_FINDINGS_STRONG_RE.search(head))
+    # 2026-10-07: 当前行已是建议文本(建议/请/注意…)时, 其后**非句尾**行视为建议折行续行
+    # (蔡国炜"…掌握正确刷牙"+"方法，早晚2次…" 曾被发现边界规则拆开, 用户反馈换行问题)
+    _buf_joined_l = "".join(buf)
+    # 整段(非仅末行)含"建议/请" = 建议性正文 —— 折行跨 3+ 行时"建议"在首行
+    # (蔡克田"建议低脂…戒烟"/"限酒…危险"/"因素，心内科随诊。")
+    _buf_advice = (bool(re.match(r"^[*＊●○■]?\s*(?:建议|请|注意|随访|定期|必要时)",
+                                 (last or "").strip()))
+                   or ("建议" in _buf_joined_l) or ("请" in _buf_joined_l)) \
+        and len(_buf_joined_l) >= 8   # 裸"建议"标题行不算(其后发现名仍需独立成行)
     buf_complete = bool(re.search(r"[。！？;；]$", last))
     # 冒号结尾的段头("1. 估算…增高："/"脂肪肝：")后的正文另起一行
     buf_label = len(buf) == 1 and len(last) <= 40 and bool(re.search(r"[:：]$", last))
+    # 建议性正文段且句未完结 = 折行续接窗口(蔡克田"…服用调脂"+"药物。")
+    _advice_open = _buf_advice and not buf_complete
     pf_buf = _plain(last)
     if not (title_like or pf_buf or buf_complete or buf_label):
         return False
     # 新行是"另一普通发现" / 建议解释起句 / buf 是短发现而新行是长解释 /
     # 新行本身是"名称：说明"式发现(扫描件"视乳头C/D扩大：指…") → 换行
-    return bool(_plain(s) or _ADVICE_START_RE.match(s)
-                or (pf_buf and not _plain(s)) or _label(s))
+    return bool((_plain(s) and not _advice_open) or _ADVICE_START_RE.match(s)
+                or (pf_buf and not _plain(s) and not _advice_open) or _label(s))
 
 
 _INLINE_TITLE_BODY_RE = re.compile(
@@ -768,6 +801,35 @@ def _reflow_conclusion_lines(section: str) -> str:
             flush()
             prev = ""
             continue
+        # 2026-10-07: 折行跨断词续行 —— 上行以 ASCII 字母/数字结尾且本行以小写字母
+        # 开头(无分隔) = 同一个词被行断(蔡国炜"…超过10m"+"m，请及时…" = 10mm;
+        # 曾按发现边界拆开, 用户反馈换行问题)。
+        if buf and re.search(r"[A-Za-z0-9]$", buf[-1]) and re.match(r"^[a-z]", s):
+            buf.append(s)
+            continue
+        # 2026-10-07: 纯值/区间折行片段("0.1--0.6)"/"00)"/"6--354)")并入当前段
+        # (无汉字、纯数字符号、含数字; 上行以句末标点结束时除外)
+        if (buf and re.search(r"\d", s) and not re.search(r"[\u4e00-\u9fa5]", s)
+                and re.fullmatch(r"[\d\s()（）<>&≤≥\-–—+.,/%^*]*", s)
+                and not re.search(r"[。！？;；]$", "".join(buf))):
+            buf.append(s)
+            continue
+        # 2026-10-07: 纯括号续行("(参考区间:1.16-1.42)")并入上行 —— 值行折行把括号
+        # 整体甩到下一行(蔡克田/蔡国炜血脂块); 上行以句末标点结束时除外
+        if (buf and re.match(r"^[（(][^）)]{2,40}[)）]\s*$", s)
+                and not re.search(r"[。！？;；]$", "".join(buf))):
+            buf.append(s)
+            continue
+        # 2026-10-07: 行尾孤立"0"标记(白炜 PDF 每段末尾渲染出"0"字形: "T波改变0"/
+        # "复查。0"/"[阳性 ]0")剥除; 前置字符为汉字/句读/括号才是标记("1.0"不动)。
+        # 整行仅"0" = 独立标记行, 跳过(白炜"    0")。
+        if s == "0":
+            continue
+        # 前置字符**不含续行标点**(，、；：) —— 华裕健"…良恶性的可能性，0"+"类需要…"
+        # 是折行断点("0类"被拆), 0 是正文的一部分不得剥。
+        s = re.sub(r"(?<=[\u4e00-\u9fa5。！？）】\]])0$", "", s).strip()
+        if not s:
+            continue
         # 2026-09-15: 双语标题的英文残行("Results a"/"d Suggestio"/"s of Health
         # Exami…", 蔡超强OCR) —— 纯 ASCII 短行(无汉字)直接跳过
         # 2026-09-15: 含 '/'、数字或 '%' 的短行是单位/数值("mmol/L"/"U/L"/
@@ -806,7 +868,8 @@ def _reflow_conclusion_lines(section: str) -> str:
             continue
         # 2026-09-15: 独立序号行("1."/"2、")与其后的发现名是同一标题(OCR 表格把序号
         # 与名称拆成两行) —— 段头开段, 下行折行拼入并留空格(东方安鹏"1."/"估算…")
-        if re.fullmatch(r"\d{1,3}\s*[、.．)）]", s):
+        # 2026-10-07: 前导 0 的"裸编号"("00)")是值片段(蔡国炜参考区间折行), 不是条目号
+        if re.fullmatch(r"[1-9]\d{0,2}\s*[、.．)）]", s):
             flush()
             buf = [s + " "]
             prev = "number"
@@ -1146,7 +1209,8 @@ _ABNORMALITY_PROMPT = """请从以下体检报告的"总检建议与结论"文�
 - deviation: 偏离方向，取值为"偏高""偏低""偏大""偏小""偏重""偏轻""异常"，解析不到则为null
 - suggestion: 对应建议原文（保留完整措辞；没有则为空字符串）
 - is_urgent: 如果建议/描述中含以下紧急关键词则为true，否则false：
-  "立即就医""立即""即刻干预""即刻""尽快就诊""尽快就医""急诊""马上""紧急""随时就医""危险""危急"
+  "立即就医""立即""即刻干预""即刻""尽快就诊""尽快就医""急诊""马上""紧急""随时就医"
+  "危险（仅指"有生命危险"等紧急情形；"危险因素""危险分层"等普通医学表述**不算**）""危急"
   "务必""不容忽视""必须(就医|就诊|干预|检查)""请尽快""速"
 
 注意事项：
@@ -1159,19 +1223,26 @@ _ABNORMALITY_PROMPT = """请从以下体检报告的"总检建议与结论"文�
 
 
 # 危机字段(确定性兜底, 不依赖 LLM): 命中即判 is_urgent → 红色
+# 2026-10-07: "危险"排除复合词 —— "危险因素/危险分层"等不是急症语义(蔡克田
+# "积极控制相关危险因素"曾被判红区, 用户反馈)
 _URGENT_RE = re.compile(
     r"(立即就医|立即|即刻干预|即刻|尽快就诊|尽快就医|急诊|马上|紧急|随时就医|"
-    r"危险|危急|务必|不容忽视|必须(?:就医|就诊|干预|检查))"
+    r"危险(?!因素|度|分层|性|等级|评估|评分|人群)|危急|务必|不容忽视|"
+    r"必须(?:就医|就诊|干预|检查))"
 )
+# 上述排除的复合词单独出现时(且无其它真急症词) → LLM 误判需清
+_URGENT_FALSE_POS_RE = re.compile(r"危险(?:因素|度|分层|性|等级|评估|评分|人群)")
 
 
 def _mark_urgent(items: list[dict]) -> list[dict]:
     for it in items:
-        if it.get("is_urgent"):
-            continue
         text = f"{it.get('item_name', '')} {it.get('suggestion', '')}"
         if _URGENT_RE.search(text):
             it["is_urgent"] = True
+        elif it.get("is_urgent") and _URGENT_FALSE_POS_RE.search(text):
+            # 2026-10-07: LLM 仅凭"危险因素"类复合词误判 is_urgent → 清(确定性字面
+            # 复核不含真急症关键词; 蔡克田 颈动脉内-中膜增厚 红区回归)
+            it["is_urgent"] = False
     return items
 
 
@@ -2307,7 +2378,25 @@ def _all_occurrences_in_junk_context(text: str, name: str) -> bool:
         if mh and len(mh.group(0).strip()) >= 2 and mh.end() < len(s2) \
                 and s2[mh.end():].strip():
             return False  # 句首为报告方枚举标记(方法+提示…), 句内发现为枚举项
-    return all(_JUNK_CONTEXT_RE.search(s) for s in hits)
+    return all(_JUNK_CONTEXT_RE.search(s) or _negated_occurrence(s, name) for s in hits)
+
+
+def _negated_occurrence(sentence: str, name: str) -> bool:
+    """子句内否定语境判定: "无上皮内病变或恶性病变" 里的任一发现都是**阴性描述**,
+    不是异常条目(白炜 TCT"NILM" 被 LLM 拆成"上皮内病变/恶性病变"两条假条目)。
+    只认紧邻否定("无/未/未见"直接贴名称)或"无A或/及/和B"链; "无痛性血尿"这类
+    复合形容词不误杀(否定词与名称之间隔非句读字符且无或/及/和连接)。"""
+    for m in re.finditer(re.escape(name), sentence):
+        start = m.start()
+        j = start
+        while j > 0 and sentence[j - 1] not in "。！？；;，,、\n":
+            j -= 1
+        clause = sentence[j:start]
+        if re.search(r"(?:无|未|未见)\s*$", clause):
+            return True
+        if re.search(r"(?:无|未见|未)[^，。；;\n]{0,20}[或及和]$", clause):
+            return True
+    return False
 
 
 # 编号标题兜底: 首词为检查方法时跳过该词取次词(异常名)
@@ -2416,7 +2505,12 @@ def _parse_numbered_titles(text: str) -> list:
         # 2026-08-31: 支持 "3:内痔" 半角冒号编号(H003 崇左格式)
         # 2026-09-10: 编号标点前允许空格("1 .肝…" 池州); head 为 CJK 字距
         # 形态(空格密度 ≥0.5)时压缩, 名称取干净整串
-        m = re.match(r'^\d+[\u3001,.:.\uff09)]?\s*(\S.*)$', stripped)
+        # 2026-10-07: 汉字序号("一、不完全性右束支传导阻滞")与阿拉伯数字同权(翟泽民);
+        # 汉字序号必须带分隔符/空白 —— "一般健康问题"/"二氧化碳结合力"不得把"一/二"当编号
+        m = re.match(
+            r'^(?:[一二三四五六七八九十]{1,3}(?:[\u3001,.:.\uff09)]|\s+)|'
+            r'\d+[\u3001,.:.\uff09)]?)\s*(\S.*)$',
+            stripped)
         if m:
             _head0 = m.group(1)
             _hc = len(re.findall(r'[\u4e00-\u9fff]', _head0))
@@ -2471,7 +2565,24 @@ def _parse_numbered_titles(text: str) -> list:
                 if not seg:
                     continue
             else:
-                seg = re.split(r'[\s。；;，,、:：()（）]+', head, maxsplit=1)[0]
+                # 2026-10-07: "N、检查/部位名:发现"形(蔡克田/蔡国炜表格结论"1、胸部CT平扫:
+                # 双肺多发结节" / "6、外耳道:右外耳道耵聍" / "12、牙周:牙结石") ——
+                # 冒号前是检查/部位名(无发现/方向词、且后段非建议句)时取冒号后发现为标题,
+                # 否则取冒号前(旧行为; "龋齿:建议充填"后段是建议句仍取冒号前)
+                _c2 = re.split(r'[:：]', head, maxsplit=1)
+                _pre2 = _c2[0].strip() if len(_c2) == 2 else ""
+                _post2 = _c2[1].strip() if len(_c2) == 2 else ""
+                if (_post2 and len(_pre2) <= 10
+                        and not re.search(r'(偏高|偏低|偏大|偏小|升高|降低|增高|异常|阳性|增多|减少|反流)', _pre2)
+                        and not _FINDING_TITLE_RE.search(_pre2)
+                        and not _post2.startswith(("建议", "请", "注意", "必要时", "如", "若"))
+                        and (_CHECK_PREFIX_RE.match(head) or _EXAM_NAME_RE.match(_pre2)
+                             or _FINDING_TITLE_RE.search(_post2)
+                             or re.search(r'(偏高|偏低|升高|降低|增高|异常|阳性|增多|减少|反流)', _post2)
+                             or len(_post2) > len(_pre2) + 1)):
+                    seg = re.split(r'[\s。；;，,、:：()（）]+', _post2, maxsplit=1)[0]
+                else:
+                    seg = re.split(r'[\s。；;，,、:：()（）]+', head, maxsplit=1)[0]
                 # 2026-09-10: 编号条目条件句/建议句不是发现标题(滨州"2.若出现异常
                 # 症状或原有症状加重，应及时泌尿外科就诊…"曾被当标题豁免 junk 过滤)
                 if seg.startswith(("若", "如", "如果", "必要时", "当", "一旦", "请")):
@@ -2649,7 +2760,9 @@ _SAFETY_NET_JUNK_RE = re.compile(
     r'尿液中|有机物|无机物|结晶体|沉积|'
     r'恶性征象|经病理证实|需每|(?:无|少|忌)饮食|治疗无效|无需治疗|服药|直径大于|'
     r'医院|大学|体检号|第\d+页|页共|联系电话|'
-    r'是|为|建议|治疗|可(?:能(?:是|为|表现|导致|出现|以|分为|进展|发展)|以|分为|出现|导致|进展|发展)'
+    r'是|为|建议|治疗|可(?:能(?:是|为|表现|导致|出现|以|分为|进展|发展)|以|分为|出现|导致|进展|发展)|'
+    # 2026-10-07: 科普栏目名不是异常条目(翟泽民"1、基本知识" 曾入库)
+    r'基本知识|健康知识|医学知识|科普'
 )
 
 
@@ -2736,7 +2849,13 @@ def _keep_body_after_colon(text: str) -> str:
             continue
         # 2026-08-31: 编号支持半角冒号("3:内痔", H003 崇左格式; "1:胃镜..."的
         # 冒号是编号分隔符, rest 内无内容冒号 → 整句保留)
-        m = re.match(r'^(\d+[\u3001,.:.\uff09)]?\s*)(.*)$', stripped)
+        # 2026-10-07: 支持汉字序号编号行("一、不完全性右束支传导阻滞", 翟泽民扫描件)
+        # —— 原实现只认阿拉伯数字, 整段 13 条真实发现被丢弃(1907→170 字只剩科普尾);
+        # 汉字序号必须带分隔符/空白("一般健康问题:"/"二氧化碳结合力"不得把"一/二"当编号)
+        m = re.match(
+            r'^((?:[一二三四五六七八九十]{1,3}(?:[\u3001,.:.\uff09)]|\s+)|'
+            r'\d+[\u3001,.:.\uff09)]?)\s*)(.*)$',
+            stripped)
         if not m:
             # 2026-08-28: 星号/强调标题行("*超重" "*变应性鼻炎")是报告方标记的异常条目,
             # 无编号也保留(桂林/防城港模板), 星号原样保留供 LLM 识别标题结构;
@@ -3410,7 +3529,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 # 2026-08-28: 列式表格(广西"项目名称|检查结果|单位|参考范围|提示")
                 # 标志权威 —— 提示列异常标志 signal_flag=3 强制黄, 弃检不入库
                 col_rows = col_rows_with_fallback(processed_path, text)
-                signals = extract_abnormal_signals(processed_path)
+                signals = extract_abnormal_signals(processed_path, skip_text=findings_sec or "")
                 # 2026-09-28: 信号通道误配折行名碎片(曾繁鲁"测定(HBsAb)"/"定(HBeAb)"/
                 # "酯(TG)") —— 信号名是列式/行式**全名真后缀**、结果相同、自身不是完整
                 # 指标名时改挂全名(标志保留), 碎片不再单独入库。
@@ -3528,9 +3647,15 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                         "ref_high": r.get("ref_high"),
                         "signal_flag": sig,
                     })
+                # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(见 table_extractor)
+                _csrc_only = (
+                    {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
+                    - {(s["item_name"], s["result"]) for s in signals if not s.get("_conclusion_src")})
                 for s_key in signal_names:
                     if s_key[0] in auth_names:
                         continue  # 2026-09-07: 块级表区信号由 col flag 承担
+                    if s_key in _csrc_only:
+                        continue  # 结论来源信号不建行(仅参与既有行标黄)
                     if not (s_key[1] or "").strip():
                         continue  # 2026-09-23: 空结果信号行不入库(陈田"甲状腺抗体异常|NULL")
                     if s_key not in seen_sig and s_key not in col_keys:
@@ -3600,16 +3725,39 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 try:
                     _vlm_imgs = _file_to_base64_list(processed_path, task.file_type)
                     _vlm_res = vlm_client.extract_from_images(_vlm_imgs)
-                    _vlm_inds = normalize_indicators(_vlm_res.get("indicators", []))
+                    _vlm_inds = normalize_indicators(_vlm_res.get("indicators", [])) or []
+                    # 2026-10-07: OCR 文本内嵌 HTML 表格(PaddleOCR-VL)确定性补漏 ——
+                    # VLM 漏提的表格条目(翟泽民 幽门螺杆菌尿素酶B/细胞毒抗体)在 OCR
+                    # HTML 表里; `_parse_markdown_table` 按 <table> 块逐表解析(含列映射)
+                    try:
+                        from app.core.vlm_client import _parse_markdown_table as _pmt_ocr
+                        _ocr_tbl_inds = normalize_indicators(_pmt_ocr(text))
+                    except Exception as _e2:
+                        _log.warning("ocr html table parse failed task=%s: %s", task_id, _e2)
+                        _ocr_tbl_inds = []
+                    # 2026-10-07: 同名合并(原直接跳过) —— 标志取最大、缺失 ref/单位补齐;
+                    # 否则 VLM 先占名会把 OCR-HTML 的箭头标志丢掉(蔡镇宇 尿酸/体重指数/
+                    # 收缩压 在 HTML 表里带 ↑/偏高, VLM 同名行无标志 → 曾整批判绿)
+                    def _merge_inds_by_name(_base: list, _extra: list) -> None:
+                        _by = {re.sub(r"\s+", "", x.get("item_name", "")): x
+                               for x in _base if x.get("item_name")}
+                        for _x in _extra or []:
+                            _k = re.sub(r"\s+", "", _x.get("item_name") or "")
+                            if not _k:
+                                continue
+                            _cur = _by.get(_k)
+                            if _cur is None:
+                                _base.append(_x)
+                                _by[_k] = _x
+                                continue
+                            if (_x.get("signal_flag") or 0) > (_cur.get("signal_flag") or 0):
+                                _cur["signal_flag"] = _x.get("signal_flag")
+                            for _fld in ("ref_low", "ref_high", "unit"):
+                                if not _cur.get(_fld) and _x.get(_fld):
+                                    _cur[_fld] = _x[_fld]
+                    _merge_inds_by_name(_vlm_inds, _ocr_tbl_inds)
+                    _merge_inds_by_name(_vlm_inds, indicators)
                     if _vlm_inds:
-                        # 2026-09-12: VLM 与规则(OCR 文本)指标并集 —— VLM 提干指标,
-                        # 规则补漏(钦州中"血小板平均体积(MPV)"VLM 漏提)
-                        _have = {re.sub(r"\s+", "", x.get("item_name", "")) for x in _vlm_inds}
-                        for _r in indicators:
-                            _k = re.sub(r"\s+", "", _r.get("item_name", ""))
-                            if _k and _k not in _have:
-                                _vlm_inds.append(_r)
-                                _have.add(_k)
                         indicators = _vlm_inds
                     _pi = _vlm_res.get("personal_info") or {}
                     if _pi.get("name") and not (personal_info or {}).get("name"):
@@ -3782,6 +3930,69 @@ def _page_content_strips(page) -> int:
     return strips
 
 
+def _dedup_double_layer_lines(page) -> Optional[list]:
+    """双文本层 PDF 的同 y 重叠重复行去重 —— 去重后行列表[[y,x0,x1,text]]; 无重复 None。
+
+    2026-10-06: 陈东海(八所边检)PDF 每行绘制两层(x 微偏 ~0.5~12pt),
+    `page.get_text()` 每行出两次("1."/"1.双源CT…"/"双源CT…双肺…"), 结论/指标双份。
+    检测: 同 y(±2) 且 x 区间重叠、剥编号后互为前缀/相等的行对 ≥2 → 保留较长行。
+    默认(无重复)返回 None, 调用方沿用原文本, 零误伤。
+    """
+    try:
+        lines: list = []
+        for b in page.get_text("dict").get("blocks", []):
+            for l in b.get("lines", []):
+                t = "".join(s.get("text", "") for s in l.get("spans", [])).strip()
+                if not t:
+                    continue
+                bb = l.get("bbox") or (0, 0, 0, 0)
+                lines.append([bb[1], bb[0], bb[2], t])
+    except Exception:
+        return None
+    if len(lines) < 2:
+        return None
+
+    def _n(s: str) -> str:
+        return re.sub(r"^\d{1,3}\s*[、.．)）]\s*", "", s)
+
+    dup_pairs = 0
+    drop: set = set()
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            y1, a1, b1, t1 = lines[i]
+            y2, a2, b2, t2 = lines[j]
+            if abs(y1 - y2) > 2:
+                continue
+            if min(b1, b2) - max(a1, a2) <= 0:
+                continue
+            n1, n2 = _n(t1), _n(t2)
+            if not n1 or not n2:
+                # 纯编号行("3、")与同排"编号+标题"行("3、抗乙型肝炎…")重复 → 丢纯编号行
+                if (n1 == "") != (n2 == ""):
+                    bare, other = (i, t2) if n1 == "" else (j, t1)
+                    if other.startswith(lines[bare][3]):
+                        dup_pairs += 1
+                        drop.add(bare)
+                continue
+            if n1 == n2 or n1.startswith(n2) or n2.startswith(n1):
+                dup_pairs += 1
+                if len(t1) > len(t2):
+                    drop.add(j)
+                else:
+                    drop.add(i)
+    if dup_pairs < 2:
+        return None
+    return [l for k, l in enumerate(lines) if k not in drop]
+
+
+def _dedup_double_layer(page) -> Optional[str]:
+    """双文本层去重后的页文本(dict 序); 无重复 None。"""
+    _dl = _dedup_double_layer_lines(page)
+    if _dl is None:
+        return None
+    return "\n".join(z[3] for z in _dl)
+
+
 def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = False,
                       force_ocr: bool = False, visual_lines: bool = False,
                       ocr_content: bool = False) -> str:
@@ -3806,11 +4017,22 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
     texts = []
     for i, page in enumerate(doc):
         if visual_sort and not force_ocr:
-            blocks = page.get_text("blocks")
-            blocks.sort(key=lambda b: (round(b[1] / 10), b[0]))
-            t = "\n".join(b[4].strip() for b in blocks if b[4].strip())
+            # 2026-10-07: 双文本层页(陈东海)先去重再按 y 排序 —— block 级排序保留双份
+            # 且顺序仍乱; 行级去重+视觉排序后"一、诊断及建议"下各条目标题先于其内容
+            _dl = _dedup_double_layer_lines(page)
+            if _dl is not None:
+                _dl.sort(key=lambda z: (round(z[0] / 10), z[1]))
+                t = "\n".join(z[3] for z in _dl if z[3].strip())
+            else:
+                blocks = page.get_text("blocks")
+                blocks.sort(key=lambda b: (round(b[1] / 10), b[0]))
+                t = "\n".join(b[4].strip() for b in blocks if b[4].strip())
         else:
             t = page.get_text().strip()
+            # 2026-10-06: 双文本层 PDF(陈东海)同 y 重复行去重(无重复返回 None, 原样)
+            _dd = _dedup_double_layer(page)
+            if _dd is not None:
+                t = _dd
         # 2026-09-12: 纯扫描页(几乎无文本 + 单张大图)此前因"≥2 图"条件被漏
         # (钦州中医整份扫描件 hybrid 提取 0 字, 结论段无法定位) → "多图"或
         # "文本 <10 字的单图页"均触发 OCR
@@ -3831,6 +4053,17 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
                     ocr_t = re.sub(r"\$([^$\n]*)\$", r"\1", ocr_t)
                     # 2026-09-23: LaTeX 箭头 → unicode(扫描件标志列 "$ \uparrow $"/"\uparrow")
                     ocr_t = ocr_t.replace("\\uparrow", "↑").replace("\\downarrow", "↓")
+                    # 2026-10-07: 更多 OCR LaTeX 命令归一(翟泽民/蔡镇宇扫描件:
+                    # "\gamma -谷氨酰转肽酶"/"\mu mol/L"/"\triangle*"/"10^{9}" 噪声
+                    # 使指标名/单位解析失败、γ-谷氨酰转肽酶整条漏提)
+                    ocr_t = re.sub(r"\\text\{([^{}]*)\}", r"\1", ocr_t)
+                    ocr_t = re.sub(r"\\triangle\s*\*?", "△", ocr_t)
+                    ocr_t = (ocr_t.replace("\\gamma", "γ").replace("\\mu", "μ")
+                             .replace("\\alpha", "α").replace("\\beta", "β")
+                             .replace("\\pm", "±").replace("\\odot", "⊙"))
+                    ocr_t = re.sub(r"γ\s*-", "γ-", ocr_t)
+                    ocr_t = re.sub(r"μ\s+mol", "μmol", ocr_t)
+                    ocr_t = re.sub(r"\^\{(\d+)\}", r"^\1", ocr_t)
                     t = ocr_t
             except Exception as e:
                 _log.warning("hybrid OCR page %d failed: %s", i + 1, e)

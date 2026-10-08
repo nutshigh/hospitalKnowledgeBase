@@ -39,9 +39,17 @@ def _extract_sample_text(sample: dict) -> str:
     parts = []
     for p in range(doc.page_count):
         if sample.get("visual"):
-            blocks = doc[p].get_text("blocks")
-            blocks.sort(key=lambda b: (round(b[1] / 10), b[0]))
-            t = "\n".join(b[4].strip() for b in blocks if b[4].strip())
+            # 2026-10-07: 与生产 _extract_pdf_text(visual_sort) 同构 —— 双文本层页
+            # 先去重再按 y 排序(陈东海)
+            from app.modules.report.service import _dedup_double_layer_lines
+            _dl = _dedup_double_layer_lines(doc[p])
+            if _dl is not None:
+                _dl.sort(key=lambda z: (round(z[0] / 10), z[1]))
+                t = "\n".join(z[3] for z in _dl if z[3].strip())
+            else:
+                blocks = doc[p].get_text("blocks")
+                blocks.sort(key=lambda b: (round(b[1] / 10), b[0]))
+                t = "\n".join(b[4].strip() for b in blocks if b[4].strip())
         else:
             t = doc[p].get_text().strip()
         if t:

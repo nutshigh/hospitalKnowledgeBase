@@ -128,81 +128,111 @@ SAMPLES = [
     # === 第三批(2026-09-16 验收): 10 份(H003 27-31 + H004 38-41/43) ===
     # 文本件 5 份: 冒烟级(能定位/够长/无通用脏行); 精确结论 hash 由
     # test_conclusion_text_reguard.py 的 MATCH/离线锁组守, DB 产物由三件套快照守。
-    dict(key="changfenglong_h003", rel="0-第三批/华山医院/常逢龙08401X.pdf",
+    dict(key="changfenglong_h003", rel="0-第3批/华山医院/常逢龙08401X.pdf",
          smoke=True, min_len=1800),
-    dict(key="caojiabing_h003", rel="0-第三批/中医院/曹嘉冰037053.pdf",
+    dict(key="caojiabing_h003", rel="0-第3批/中医院/曹嘉冰037053.pdf",
          smoke=True, min_len=500),
-    dict(key="chenjingni_h004", rel="0-第三批/陈镜霓220028.pdf",
+    dict(key="chenjingni_h004", rel="0-第3批/陈镜霓220028.pdf",
          smoke=True, min_len=400),
-    dict(key="baiweiheng_h004", rel="0-第三批/白玮衡31151X.pdf",
+    dict(key="baiweiheng_h004", rel="0-第3批/白玮衡31151X.pdf",
          smoke=True, min_len=250),
-    dict(key="gaoshuai_h004", rel="0-第三批/高帅185516.pdf",
+    dict(key="gaoshuai_h004", rel="0-第3批/高帅185516.pdf",
          smoke=True, min_len=750),
     # 图片型/文本层损坏 5 份: 无文本层(鲍文祥/包雁飞/陈磊/安鹏)或文本层损坏(蔡超,
     # 生产走 force-ocr) → 需 OCR 服务, 默认跳过(测试内固定 8006, 本 checkout OCR=8001)。
-    dict(key="baowenxiang_h003", rel="0-第三批/东方医院/鲍文祥103151.PDF", ocr=True,
+    dict(key="baowenxiang_h003", rel="0-第3批/东方医院/鲍文祥103151.PDF", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="baoyanfei_h003", rel="0-第三批/六院金山/包雁飞31061X.pdf", ocr=True,
+    dict(key="baoyanfei_h003", rel="0-第3批/六院金山/包雁飞31061X.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="chenlei_h003", rel="0-第三批/仁济医院/陈磊27441X\u00a0.pdf", ocr=True,
+    dict(key="chenlei_h003", rel="0-第3批/仁济医院/陈磊27441X\u00a0.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="anpeng_h004", rel="0-第三批/安鹏063536.pdf", ocr=True,
+    dict(key="anpeng_h004", rel="0-第3批/安鹏063536.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="caichao_h004", rel="0-第三批/蔡超221833.PDF", ocr=True,
+    dict(key="caichao_h004", rel="0-第3批/蔡超221833.PDF", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 
     # === 第四批(2026-09-22): 10 份(新地区 浙/豫/苏/闽) ===
     # 文本件 4 份: 冒烟级; 台州(visual=True 页内乱序需坐标重排, 档案亦 visual_sort);
     # 温州(标题"体检结论:（★…）"括号注释锚点修复); 南通(标题"本次体检总结"档案锚点 +
     # 【X】自带正文行保留); 郑州(健康建议段尾"放射影像查询"断点)
-    dict(key="taizhou_huayujian", rel="0-第四批/华裕健062315.pdf",
+    dict(key="taizhou_huayujian", rel="0-第4批/华裕健062315.pdf",
          visual=True, smoke=True, min_len=2500),
-    dict(key="wenzhou_chengyongchun", rel="0-第四批/程永春18001x.pdf",
+    dict(key="wenzhou_chengyongchun", rel="0-第4批/程永春18001x.pdf",
          visual_lines=True, smoke=True, min_len=600),
-    dict(key="nantong_chencheng", rel="0-第四批/陈诚250411.pdf",
+    dict(key="nantong_chencheng", rel="0-第4批/陈诚250411.pdf",
          smoke=True, min_len=2000),  # 2026-09-22: 结论改取"健康指导建议"段(2326字)
-    dict(key="zhengzhou_caojianhong", rel="0-第四批/曹剑鸿238111.pdf",
+    dict(key="zhengzhou_caojianhong", rel="0-第4批/曹剑鸿238111.pdf",
          smoke=True, min_len=700),
     # 福州: 结论页为图片页(文本层只有页眉), 生产走 hybrid OCR; keep_post_sig 档案
     # 保留签名后的"体检结论汇总"段 → 需 OCR 服务, 默认跳过
-    dict(key="fuzhou_fangyitao", rel="0-第四批/方轶涛167517.pdf", ocr=True,
+    dict(key="fuzhou_fangyitao", rel="0-第4批/方轶涛167517.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
     # 纯扫描 5 份: 需 OCR 服务, 默认跳过(生产走 hybrid/VLM 链)
     # (2026-09-25 用户验收; 已纳入 DB 三件套 + 结论重提取离线锁)
-    dict(key="zengshejian_scan", rel="0-第四批/曾社健264019.pdf", ocr=True,
+    dict(key="zengshejian_scan", rel="0-第4批/曾社健264019.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="bonan_scan", rel="0-第四批/薄楠010045.pdf", ocr=True,
+    dict(key="bonan_scan", rel="0-第4批/薄楠010045.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="chenhaibo_scan", rel="0-第四批/陈海波094518.PDF", ocr=True,
+    dict(key="chenhaibo_scan", rel="0-第4批/陈海波094518.PDF", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="chenchunming_scan", rel="0-第四批/陈淳铭281655.PDF", ocr=True,
+    dict(key="chenchunming_scan", rel="0-第4批/陈淳铭281655.PDF", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
-    dict(key="baohaikuan_scan", rel="0-第四批/鲍海宽062316.pdf", ocr=True,
+    dict(key="baohaikuan_scan", rel="0-第4批/鲍海宽062316.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 
     # === 第五批(2026-09-28): 10 份(H004 57-66, 新地区) ===
     # 文本件 9 份: 冒烟级(能定位/够长/无通用脏行); 精确结论 hash 由
     # test_conclusion_text_reguard.py 的 MATCH/离线锁组守, DB 产物由三件套快照守。
-    dict(key="fuliguang_h004", rel="0-第五批/53290626_付立光.PDF",
+    dict(key="fuliguang_h004", rel="0-第5批/53290626_付立光.PDF",
          smoke=True, min_len=550),   # 福建附一/华山福建: 结论="体检结论分析"(疾病解析/综合健康指导已断)
-    dict(key="danjifei_h004", rel="0-第五批/单吉飞174056.PDF",
+    dict(key="danjifei_h004", rel="0-第5批/单吉飞174056.PDF",
          smoke=True, min_len=400),    # 河南科大二附院: 结论="【指导与建议】"
-    dict(key="houbaigang_h004", rel="0-第五批/厚柏刚04361X.pdf",
+    dict(key="houbaigang_h004", rel="0-第5批/厚柏刚04361X.pdf",
          visual=True, smoke=True, min_len=1000),  # 盛京医院: 问候语锚点 + visual_sort(页内重排)
-    dict(key="zengfanlu_h004", rel="0-第五批/曾繁鲁030435.pdf",
+    dict(key="zengfanlu_h004", rel="0-第5批/曾繁鲁030435.pdf",
          smoke=True, min_len=1100),   # 三亚市人民医院: "专家建议及健康指导"
-    dict(key="bihuili_h004", rel="0-第五批/毕惠丽052048.pdf",
+    dict(key="bihuili_h004", rel="0-第5批/毕惠丽052048.pdf",
          visual=True, smoke=True, min_len=900),   # 盛京医院: 问候语锚点 + visual_sort(第3页 9-13 点)
-    dict(key="shengmingyue_h004", rel="0-第五批/生明月180484.pdf",
+    dict(key="shengmingyue_h004", rel="0-第5批/生明月180484.pdf",
          smoke=True, min_len=1400),   # 丹东市中心医院: "本次健康建议"
-    dict(key="dongtao_h004", rel="0-第五批/董涛249011.pdf",
+    dict(key="dongtao_h004", rel="0-第5批/董涛249011.pdf",
          smoke=True, min_len=1200),   # 宜昌市中心人民医院: "【总检结论及健康建议】"
-    dict(key="caifengze_h004", rel="0-第五批/蔡丰泽241017.pdf",
+    dict(key="caifengze_h004", rel="0-第5批/蔡丰泽241017.pdf",
          smoke=True, min_len=800),    # 丹东市中心医院: "本次体检结论"+健康指导建议
-    dict(key="caiming_h004", rel="0-第五批/蔡明075453.pdf",
+    dict(key="caiming_h004", rel="0-第5批/蔡明075453.pdf",
          smoke=True, min_len=150),    # 江西中医药大学附属医院: "体检结论分析"(14 条无建议)
     # 福州大学附属省立医院(陈春光): 结论页为图片页(文本层只有页眉/标题), 生产走
     # hybrid OCR(同方轶涛); keep_post_sig 档案已命中 → 需 OCR 服务, 默认跳过
-    dict(key="chenchunguang_h004", rel="0-第五批/陈春光261514.pdf", ocr=True,
+    dict(key="chenchunguang_h004", rel="0-第5批/陈春光261514.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+
+    # === 第六批(2026-10-06): 10 份(H004 67-76, 新地区) ===
+    # 文本件 8 份: 冒烟级; 逐份验收后由三层基线守。
+    dict(key="anzhou_h004", rel="0-第6批/安周032011.pdf",
+         smoke=True, min_len=400),   # 吉林大学中日联谊医院: "主检结论和建议"
+    dict(key="baiwei_h004", rel="0-第6批/白炜100044.pdf",
+         smoke=True, min_len=1200),  # 海南海口(椰海大道): "检查综述"
+    # 2026-10-07: 用户反馈后档案改 anchor_only(一般健康问题) + 医学科普断点 →
+    # 结论文本只含"一般健康问题: [发现|建议]"表(排除科普区), min_len 随验收态下调。
+    dict(key="caiketian_h004", rel="0-第6批/蔡克田230012.pdf",
+         smoke=True, min_len=700, forbidden_titles=[],
+         forbidden=["医学科普"]),  # 海南慈铭奥亚健康体检中心: "一般健康问题"
+    dict(key="caiguowei_h004", rel="0-第6批/蔡国炜11005X.pdf",
+         smoke=True, min_len=800, forbidden_titles=[],
+         forbidden=["医学科普"]),  # 儋州美年大健康体检中心: "一般健康问题"
+    dict(key="caidaolong_h004", rel="0-第6批/蔡道龙055752.pdf",
+         smoke=True, min_len=1500),  # 保山市人民医院: "总检结论"
+    # 2026-10-07: 档案声明 visual_sort(双文本层线性序把标题甩到内容后; 视觉序=
+    # 标题在前)+anchor"一、诊断及建议"(用户要求各条目详解归位并补全 1-3 条)
+    dict(key="chendonghai_h004", rel="0-第6批/陈东海170016.pdf",
+         smoke=True, min_len=1500, visual=True),  # 八所出入境边防检查站
+    dict(key="chengang_h004", rel="0-第6批/陈刚 280377.pdf",
+         smoke=True, min_len=1000),  # 福建省漳州市医院: "总检结论与建议"
+    dict(key="chenni_h004", rel="0-第6批/陈霓23303X.pdf",
+         smoke=True, min_len=1000),  # 中科体检(彭泽县): "本次检查发现"
+    # 纯扫描 2 份(生产走 hybrid/VLM 链): 需 OCR 服务, 默认跳过
+    dict(key="zhaizemin_scan", rel="0-第6批/翟泽民024739.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="caizhenyu_scan", rel="0-第6批/蔡镇宇058535.PDF", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 ]

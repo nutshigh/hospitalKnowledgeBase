@@ -91,7 +91,7 @@ def _extract(pdf):
     t2 = _remove_findings_section(t, sec) if sec and len(sec) > 50 else t
     rows = extract_indicator_rows(t2)
     col_rows = col_rows_with_fallback(pdf, t2)
-    signals = extract_abnormal_signals(pdf)
+    signals = extract_abnormal_signals(pdf, skip_text=sec or "")
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
     _full_by_result: dict = {}
@@ -153,7 +153,13 @@ def _extract(pdf):
         indicators.append({"item_name": r["item_name"], "result": r["result"],
                            "unit": r.get("unit", ""), "ref_low": r.get("ref_low"),
                            "ref_high": r.get("ref_high"), "signal_flag": sig})
+    # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(与 service 同构)
+    _csrc_only = (
+        {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
+        - {(s["item_name"], s["result"]) for s in signals if not s.get("_conclusion_src")})
     for s_key in signal_names:
+        if s_key in _csrc_only:
+            continue
         if s_key not in seen_sig and s_key not in col_keys:
             indicators.append({"item_name": s_key[0], "result": s_key[1], "unit": "",
                                "ref_low": None, "ref_high": None,
@@ -245,21 +251,26 @@ class TestGxBjJudgmentChain:
 # gen 脚本 norm() 已去空格) —— 与广西/北京 13 份同口径: 当前代码重提取 → 判定链
 # 黄红名单 vs 快照。目的: 锁"已适配报告不被后续改动改坏"。
 SUMM = os.path.join(SAMPLES, "各地汇总")
-# 2026-09-16: 第三批 10 份样例在本仓库 体检报告样例/0-第三批
+# 2026-09-16: 第三批 10 份样例在本仓库 体检报告样例/0-第3批
 B3 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
-    "体检报告样例", "0-第三批")
+    "体检报告样例", "0-第3批")
 # 2026-09-23: 第四批样例目录(与第三批分开)
 B4 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
-    "体检报告样例", "0-第四批")
+    "体检报告样例", "0-第4批")
 # 2026-09-28: 第五批样例目录(H004 57-61)
 B5 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
-    "体检报告样例", "0-第五批")
+    "体检报告样例", "0-第5批")
+# 2026-10-07: 第六批样例目录(H004 67-71)
+B6 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "0-第6批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -313,6 +324,20 @@ _BASELINE_CASES = {
     "单吉飞": ("h004", "63", os.path.join(B5, "单吉飞174056.PDF")),
     "董涛": ("h004", "64", os.path.join(B5, "董涛249011.pdf")),
     "厚柏刚": ("h004", "65", os.path.join(B5, "厚柏刚04361X.pdf")),
+    # 2026-10-07: 第六批前 5 份中文本规则链可复现的 4 份(67 安周/68 白炜/70 蔡克田/
+    # 71 蔡国炜, 用户验收)。69 翟泽民 = 纯扫描(VLM 指标, 规则链无产物) → 不纳入,
+    # 由 DB 三件套快照(test_h004_baseline_guard.py)守。
+    "安周": ("h004", "67", os.path.join(B6, "安周032011.pdf")),
+    "白炜": ("h004", "68", os.path.join(B6, "白炜100044.pdf")),
+    "蔡克田": ("h004", "70", os.path.join(B6, "蔡克田230012.pdf")),
+    "蔡国炜": ("h004", "71", os.path.join(B6, "蔡国炜11005X.pdf")),
+    # 2026-10-08: 第六批后 5 份中文本规则链可复现的 4 份(72 蔡道龙/74 陈东海/
+    # 75 陈刚/76 陈霓, 用户验收)。73 蔡镇宇 = 纯扫描(VLM 指标, 规则链无产物) → 不纳入,
+    # 由 DB 三件套快照守。
+    "蔡道龙": ("h004", "72", os.path.join(B6, "蔡道龙055752.pdf")),
+    "陈东海": ("h004", "74", os.path.join(B6, "陈东海170016.pdf")),
+    "陈刚": ("h004", "75", os.path.join(B6, "陈刚 280377.pdf")),
+    "陈霓": ("h004", "76", os.path.join(B6, "陈霓23303X.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

@@ -1923,7 +1923,7 @@ def test_vlm_form_gate_long_narrative_only():
     import os
     pdf = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))))),
-        "体检报告样例", "0-第五批", "董涛249011.pdf")
+        "体检报告样例", "0-第5批", "董涛249011.pdf")
     if not os.path.exists(pdf):
         import pytest
         pytest.skip("董涛样本缺失")
@@ -1951,7 +1951,7 @@ def test_layout_qualified_risk_ref_dropped():
     import os
     pdf = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))))),
-        "体检报告样例", "0-第五批", "董涛249011.pdf")
+        "体检报告样例", "0-第5批", "董涛249011.pdf")
     if not os.path.exists(pdf):
         import pytest
         pytest.skip("董涛样本缺失")
@@ -1986,3 +1986,321 @@ def test_signal_skips_rev_dual_block_values():
     assert ("阴离子间隙(AG)", "9.2") not in results, results
     # 综述行"(2)总胆固醇(CHOL): 5.80↑" 仍作信号(块表区外的正文)
     assert ("总胆固醇(CHOL)", "5.80") in results, results
+
+
+# === 2026-10-06: 第六批(67-76) ===
+
+def test_dedup_double_layer_page():
+    # 陈东海(八所边检)PDF 双文本层: 同 y 重叠重复行("3、"/"3、抗乙型肝炎…") → 去重
+    from app.modules.report.service import _dedup_double_layer
+
+    class _Page:
+        def __init__(self, lines):
+            self._lines = lines  # (y, x0, x1, text)
+
+        def get_text(self, kind="text"):
+            return {"blocks": [{"lines": [
+                {"bbox": (x0, y, x1, y + 10), "spans": [{"text": t}]}
+                for (y, x0, x1, t) in self._lines]}]}
+
+    page = _Page([
+        (82.9, 238.9, 355.9, "体检结果汇总"),
+        (82.9, 238.4, 355.4, "体检结果汇总"),
+        (120.9, 28.1, 268.5, "1.双源CT检查胸部平扫三维成像(包含平扫)："),
+        (120.9, 40.1, 562.5, "双源CT检查胸部平扫三维成像(包含平扫)：双肺少许结节灶及磨玻璃影。"),
+        (245.6, 28.5, 48.8, "3、"),
+        (245.6, 28.1, 224.3, "3、抗乙型肝炎病毒表面抗体阳性"),
+    ])
+    out = _dedup_double_layer(page)
+    assert out is not None
+    lines = out.split("\n")
+    assert lines.count("体检结果汇总") == 1, lines
+    assert "3、" not in [l.strip() for l in lines], lines
+    assert any("3、抗乙型肝炎病毒表面抗体阳性" in l for l in lines), lines
+    # 单层页(无重复)返回 None
+    page2 = _Page([(100.0, 10.0, 200.0, "正常页第一行"), (120.0, 10.0, 200.0, "正常页第二行")])
+    assert _dedup_double_layer(page2) is None
+
+
+def test_batch6_profile_flags():
+    from app.modules.report.report_profiles import match_profile, compile_profile
+    az = compile_profile(match_profile("吉林大学中日联谊医院 体检报告"))
+    assert az.get("anchor_only") is True
+    assert az["extra_anchor_re"].search("主检结论和建议：")
+    assert az["extra_break_re"].search("主检助理（汇总）：")
+    cm = compile_profile(match_profile("检查机构：海南慈铭奥亚健康体检中心"))
+    assert cm["extra_break_re"].search("分项报告")
+    mn = compile_profile(match_profile("儋州美年大健康体检中心"))
+    assert mn["extra_break_re"].search("分项报告")
+    zk = compile_profile(match_profile("中科体检服务号"))
+    assert zk["extra_break_re"].search("杜美英  副主任医师，自1986年工作以")
+    assert zk["extra_skip_re"].search("如有疑问，请扫码提交解读报告")
+    # 陈东海(八所边检): 只取"一、诊断及建议"起(用户 2026-10-06 拍板)
+    dw = compile_profile(match_profile("中华人民共和国八所出入境边防检查站 体检报告"))
+    assert dw.get("anchor_only") is True
+    assert dw["extra_anchor_re"].search("一、诊断及建议")
+
+
+def test_non_indicator_table_page_detection():
+    # 陈霓: 结论词/级别表、建议项目表、微量元素解读表、档案表整页跳过
+    from app.modules.report.table_extractor import _is_non_indicator_table_page
+    assert _is_non_indicator_table_page(["序号", "分类项目", "结论词", "级别"])
+    assert _is_non_indicator_table_page(["序号", "检查项目", "检查意义建议详情", "1"])
+    assert _is_non_indicator_table_page(["项目", "临床意义", "生理功能", "缺乏的解决方案"])
+    assert _is_non_indicator_table_page(["个人历次体检档案记录"])
+    assert _is_non_indicator_table_page(["体检分级提示"])
+    assert _is_non_indicator_table_page(["强烈建议下次体检项目"])
+    # 真实指标表不触发
+    assert not _is_non_indicator_table_page(["检查项目", "检查结果", "身高", "172.7cm"])
+    assert not _is_non_indicator_table_page(["项目名称", "检查结果", "参考范围", "单位"])
+    assert not _is_non_indicator_table_page(["血清铁蛋白", "437.71", "↑", "[26.78--397.88]"])
+
+
+def test_arrow_summary_label_quantifier_not_result():
+    # 陈霓 小结标签行"(2)多肿瘤标志物12项（男）：血清铁蛋白：437.71↑" —— "12" 非结果
+    from app.modules.report.table_extractor import _pair_from_lines
+    lines = ["(2)多肿瘤标志物12项（男）：血清铁蛋白：437.71↑"]
+    assert _pair_from_lines(lines, 0, "arrow") is None
+    # 正常箭头小结行不受影响
+    lines2 = ["尿酸 431 ↑"]
+    r = _pair_from_lines(lines2, 0, "arrow")
+    assert r and r["item_name"] == "尿酸" and r["result"] == "431", r
+
+
+def test_batch6_generic_skip_rules():
+    # 电话字段页眉必须行首锚定(行内"…电话：182…"不得整行误跳)
+    from app.modules.report.service import _FINDINGS_STOP_SKIP_RE
+    assert _FINDINGS_STOP_SKIP_RE.search("电话号码: 13876705806")
+    assert not _FINDINGS_STOP_SKIP_RE.search(
+        "请到肝胆腺体外科门诊（…，马天如副主任医师，电话：18277052009）进一步评估及诊治。")
+
+
+# === 2026-10-07: 第 6 批前 5 份用户反馈修复 ===
+
+def test_repeated_advice_line_kept():
+    # 安周: 第 13 条"建议：定期复查。"与第 11 条同文, 段内去重曾吞掉(用户反馈漏建议)
+    from app.modules.report.service import _locate_findings_sections
+    text = "总检结论\n1、脂肪肝\n建议：定期复查。\n2、甲状腺结节\n建议：定期复查。\n主检医师：张三"
+    sec = _locate_findings_sections(text)
+    assert sec and sec.count("建议：定期复查。") == 2, sec
+
+
+def test_trailing_zero_marker_stripped():
+    # 白炜: PDF 文本层每段末尾多一个"0"字形(印刷无, OCR 证实)
+    from app.modules.report.service import _reflow_conclusion_lines
+    out = _reflow_conclusion_lines(
+        "检查综述：\n★  T波改变0\n（1）部分T波改变与生理状态有关。0\n0\n★  低密度脂蛋白(LDL)偏高0")
+    assert "改变0" not in out and "★  T波改变" in out
+    assert "有关。0" not in out
+    assert "偏高0" not in out
+    # 续行标点前的 0 是正文一部分(华裕健"…可能性，0"+"类…"), 不得剥
+    out2 = _reflow_conclusion_lines("评估良恶性的可能性，0\n类需要进一步评估；1-3类基本是良性病变。")
+    assert "0类" in out2.replace("\n", "")
+
+
+def test_reflow_word_break_and_value_fragment_merge():
+    # 蔡国炜: 折行断词"10m"+"m"=10mm(曾按发现边界拆开); 纯值片段"0.1--0.6)"并入上行
+    from app.modules.report.service import _reflow_conclusion_lines
+    out = _reflow_conclusion_lines(
+        "3、胆囊彩超:胆囊息肉\n建议定期复查肝胆B超，如息肉生长过快或直径超过10m\nm，请及时肝胆科就诊。")
+    assert "10mm，请及时肝胆科就诊。" in out, out
+    out2 = _reflow_conclusion_lines(
+        "单核细胞绝对值增高:0.64*10^9/L(参考区间:\n0.1--0.6)\n"
+        "红细胞平均体积减低:78.8fL(参考区间:82--1\n00)\n平均血红蛋白浓度增高:364g/L(参考区间:31\n6--354)")
+    lines = [l for l in out2.splitlines()]
+    assert "单核细胞绝对值增高:0.64*10^9/L(参考区间:0.1--0.6)" in lines, lines
+    assert "红细胞平均体积减低:78.8fL(参考区间:82--100)" in lines, lines
+    assert "平均血红蛋白浓度增高:364g/L(参考区间:316--354)" in lines, lines
+
+
+def test_norm_value_cell_double_sign_paren():
+    # 白炜尿隐血"10(+-)": 双符号括号整体作结果(旧式只认单符号, 值不被识别 → 假黄)
+    from app.modules.report.table_extractor import _norm_value_cell
+    assert _norm_value_cell("10(+-)") == "10(+-)"
+    assert _norm_value_cell("10(+)") == "10"
+
+
+def test_batch6_fix_profiles():
+    # 蔡克田/蔡国炜: anchor_only(一般健康问题) + 医学科普/分项报告断点
+    from app.modules.report.report_profiles import match_profile, compile_profile
+    cm = compile_profile(match_profile("海南慈铭奥亚健康体检中心 主检报告"))
+    assert cm.get("anchor_only") is True
+    assert cm["extra_anchor_re"].search("一般健康问题：")
+    assert cm["extra_break_re"].search("医学科普")
+    assert cm["extra_break_re"].search("分项报告")
+    assert cm["extra_break_re"].search("医学科普") and not cm["extra_break_re"].search("第四部分 医学科普")
+
+
+def test_reverse_downgrade_white_wei_and_maoming():
+    # 白炜: 文本表头序误报反序, 数据行序明确正序 → 降级(用户 2026-10-07 反馈假黄);
+    # 茂名: 数据行序 16/7 不够"明确正序" → 维持反序(存量行为不变)
+    import os
+    import pytest
+    from app.modules.report.service import _extract_pdf_text
+    from app.modules.report.table_extractor import (
+        _data_order_clearly_normal, _text_has_reversed_ref)
+    for pdf, exp_rev, exp_normal in [
+            (os.path.join("..", "体检报告样例", "0-第6批", "白炜100044.pdf"), True, True),
+            ("/home/wjyy2/hospitalKnowledgeBase/体检报告样例/各地汇总/茂名人民_H004_11.pdf",
+             True, False)]:
+        if not os.path.exists(pdf):
+            pytest.skip(f"样本缺失: {pdf}")
+        lines = [l.strip() for l in _extract_pdf_text(pdf, hybrid=False).splitlines() if l.strip()]
+        assert _text_has_reversed_ref(lines) is exp_rev, pdf
+        assert _data_order_clearly_normal(lines) is exp_normal, pdf
+
+
+def test_chinese_numeral_requires_separator():
+    # 2026-10-07 今日回归: 汉字序号支持必须带分隔符/空白 —— "一般健康问题"/
+    # "二氧化碳结合力" 不得被"一/二"剥头(曾产出回填垃圾"般健康问题"/"氧化碳结合力偏低[21.4")
+    from app.modules.report.service import _parse_numbered_titles, _keep_body_after_colon
+    ts = _parse_numbered_titles("一般健康问题：\n二氧化碳结合力偏低[21.4\n一、不完全性右束支传导阻滞")
+    assert "般健康问题" not in ts and "氧化碳结合力偏低[21.4" not in ts, ts
+    assert "不完全性右束支传导阻滞" in ts, ts
+    kept = _keep_body_after_colon("一般健康问题：\n二氧化碳结合力偏低")
+    assert "般健康问题" not in kept and "氧化碳" not in kept, kept
+
+
+def test_numbered_title_check_prefix_takes_finding():
+    # "N、检查/部位名:发现" 取发现侧(蔡克田/蔡国炜表格结论回填条目"胸部CT平扫"曾被当条目)
+    from app.modules.report.service import _parse_numbered_titles
+    assert _parse_numbered_titles("1、胸部CT平扫:双肺多发结节，Lung-RADS 2") == ["双肺多发结节"]
+    assert _parse_numbered_titles("12、牙周:牙结石") == ["牙结石"]
+    assert _parse_numbered_titles("6、外耳道:右外耳道耵聍") == ["右外耳道耵聍"]
+    # 冒号前是发现/方向词, 或冒号后是建议句 → 仍取冒号前
+    assert _parse_numbered_titles("7、红细胞计数增高:5.85*10^12/L") == ["红细胞计数增高"]
+    assert _parse_numbered_titles("3、龋齿:建议充填") == ["龋齿"]
+
+
+def test_negated_finding_not_extracted():
+    # 白炜 TCT"NILM": "无上皮内病变或恶性病变" 的发现是阴性描述, 不得当异常条目
+    from app.modules.report.service import (
+        _negated_occurrence, _all_occurrences_in_junk_context)
+    sent = "★ 液基薄层细胞学（TCT）:无上皮内病变或恶性病变（NILM）。"
+    assert _negated_occurrence(sent, "上皮内病变") is True
+    assert _negated_occurrence(sent, "恶性病变") is True
+    assert _all_occurrences_in_junk_context(sent, "上皮内病变") is True
+    # 复合形容词"无痛性血尿"不误杀; 正常发现不误杀
+    assert _negated_occurrence("彩超提示：无痛性血尿，建议复查。", "血尿") is False
+    assert _negated_occurrence("甲状腺右叶结节，建议复查。", "结节") is False
+
+
+def test_urgent_re_excludes_risk_factor_compound():
+    # 蔡克田"积极控制相关危险因素"曾判红区(用户反馈): "危险"复合词不是急症语义;
+    # LLM 误判也由确定性复核清除; 真急症("有生命危险/立即就医")仍红
+    from app.modules.report.service import _mark_urgent, _URGENT_RE
+    assert _URGENT_RE.search("积极控制相关危险因素，心内科随诊") is None
+    assert _URGENT_RE.search("危险分层评估") is None
+    assert _URGENT_RE.search("有生命危险，建议立即就医") is not None
+    items = [
+        {"item_name": "双侧颈动脉分叉处局部内-中膜增厚",
+         "suggestion": "建议…积极控制相关危险因素，心内科随诊", "is_urgent": True},
+        {"item_name": "真急症", "suggestion": "有生命危险，请立即就医", "is_urgent": False},
+    ]
+    out = {i["item_name"]: i["is_urgent"] for i in _mark_urgent(items)}
+    assert out["双侧颈动脉分叉处局部内-中膜增厚"] is False
+    assert out["真急症"] is True
+
+
+# === 2026-10-07: 后 5 份(72-76/69)反馈修复 ===
+
+def test_dash_placeholder_and_bracket_ref():
+    # 陈东海尿常规 [名][值][--][参考][--]: 占位符跳过继续消化参考;
+    # 陈霓"[<5.2]"方括号参考
+    from app.modules.report.table_extractor import extract_indicator_rows
+    rows = extract_indicator_rows("酸碱度\n7.0\n--\n4.5-8.0\n--\n细菌")
+    assert rows and str(rows[0]["ref_low"]) == "4.5" and str(rows[0]["ref_high"]) == "8.0", rows
+    rows2 = extract_indicator_rows("总胆固醇\n7.23\n↑\n[<5.2]\nmmol/L")
+    assert rows2 and str(rows2[0]["ref_high"]) == "5.2", rows2
+
+
+def test_limit_ref_before_result_swap():
+    # 陈刚乙肝表 [名][<参考单限][单位][结果][↑] dump 序 → 交换取真结果
+    from app.modules.report.table_extractor import extract_indicator_rows
+    rows = extract_indicator_rows("乙型肝炎病毒表面抗体\n<10.00\nmIU/mL\n272.75\n↑")
+    assert rows and rows[0]["item_name"] == "乙型肝炎病毒表面抗体"
+    assert rows[0]["result"] == "272.75" and str(rows[0]["ref_high"]) == "10.00", rows
+
+
+def test_conclusion_skip_and_break_patterns():
+    # 陈霓"体检号 22783236"(无冒号)/陈刚双语页眉/竖线行; 翟泽民"健康知识"断点
+    from app.modules.report.service import (
+        _FINDINGS_STOP_SKIP_RE, _FINDINGS_STOP_BREAK_RE2)
+    for t in ("体检号 22783236", "健康体检报告 MEDICAL EXAMINATION REPORT",
+              "陈刚  |  男  |  40  |  60366000270"):
+        assert _FINDINGS_STOP_SKIP_RE.search(t), t
+    assert _FINDINGS_STOP_BREAK_RE2.match("健康知识：")
+    assert _FINDINGS_STOP_BREAK_RE2.match("健康科普")
+    # 正文不误跳
+    assert not _FINDINGS_STOP_SKIP_RE.search("建议定期复查。")
+
+
+def test_classify_electrolyte_and_hp_antibody():
+    # 阴离子隙→电解质; 幽门螺杆菌尿素酶A/B抗体→胃部幽门螺杆菌检测(不再误归肾功能)
+    from app.core.indicator_groups import classify
+    assert classify("阴离子隙") == "电解质"
+    assert classify("幽门螺杆菌尿素酶A抗体") == "胃部幽门螺杆菌检测"
+    assert classify("幽门螺杆菌尿素酶B抗体") == "胃部幽门螺杆菌检测"
+    assert classify("幽门螺杆菌细胞毒抗体") == "胃部幽门螺杆菌检测"
+    assert classify("尿素氮") == "肾功能"
+
+
+def test_vlm_dual_table_incomplete_left_header():
+    # 蔡镇宇双栏表(左半表头缺列): 按名称列切段解析 + 未映射列提示词按标志 +
+    # 纯单位 token 不当名称("mmHg")
+    from app.core.vlm_client import _parse_markdown_table
+    html = ("<table><tr><td>项目</td><td>结果</td><td></td><td>项目</td><td>结果</td>"
+            "<td>参考值</td><td>提示</td><td>单位</td></tr>"
+            "<tr><td>身高</td><td>173</td><td>cm</td><td>体重</td><td>102.1</td><td></td><td>Kg</td><td></td></tr>"
+            "<tr><td>体重指数</td><td>34.1</td><td>偏高</td><td>脉搏</td><td>92</td><td></td><td></td><td></td></tr>"
+            "<tr><td>血压（收缩压）</td><td>141</td><td>偏高</td><td>mmHg</td><td>血压（舒张压）</td><td>103</td><td></td><td>偏高</td></tr>"
+            "</table>")
+    inds = _parse_markdown_table(html)
+    names = {i["item_name"]: i for i in inds}
+    assert "身高" in names and names["身高"]["result"] == "173", names
+    assert "体重" in names and names["体重"]["result"] == "102.1", names
+    assert names.get("体重指数", {}).get("signal_flag") == 3, names
+    assert names.get("血压（收缩压）", {}).get("signal_flag") == 3, names
+    assert "mmHg" not in names, names
+
+
+def test_chendonghai_visual_item_order():
+    # 陈东海: 双文本层 PDF 视觉重排(去重+按 y)后, "1、…"后跟其内容、"2、…"后跟"病史"
+    # (用户 2026-10-07 拍板: 标题与内容归位(b) + 1-3 条详解补全(c))
+    import os
+    import pytest
+    pdf = os.path.join("..", "体检报告样例", "0-第6批", "陈东海170016.pdf")
+    if not os.path.exists(pdf):
+        pytest.skip("样本缺失")
+    from app.modules.report.service import (
+        _compile_profile_re, _extract_pdf_text, _load_report_profiles,
+        _locate_findings_sections, _strip_ocr_html, _reflow_conclusion_lines)
+    mp, _ = _load_report_profiles()
+    t = _extract_pdf_text(pdf, hybrid=False, visual_sort=True)
+    prof = mp(_extract_pdf_text(pdf, hybrid=False))
+    assert prof.get("visual_sort") is True
+    comp = _compile_profile_re(prof)
+    sec = _reflow_conclusion_lines(_locate_findings_sections(
+        _strip_ocr_html(t), extra_break_re=comp["extra_break_re"],
+        extra_skip_re=comp["extra_skip_re"], extra_anchor_re=comp["extra_anchor_re"],
+        anchor_only=True))
+    i1 = sec.find("1、双肺少许结节灶及磨玻璃影")
+    i2 = sec.find("2、血白细胞计数升高")
+    assert 0 <= i1 < i2, sec[:300]
+    assert "胸部CT" in sec[i1:i1 + 200]
+    assert "病史：" in sec[i2:i2 + 200]
+
+
+def test_weak_positive_yellow_only_without_flag_col_and_ref_mismatch():
+    # 2026-10-07(用户口径): 结果=弱阳性 + 与参考范围不一致(参考阴性) + 无提示/标志列 → 判黄
+    from app.core.vlm_client import _parse_markdown_table
+    hdr = "<tr><td>项目</td><td>结果</td><td>参考值</td></tr>"
+    html = f"<table>{hdr}<tr><td>幽门螺杆菌尿素酶A抗体</td><td>弱阳性</td><td>阴性</td></tr></table>"
+    assert _parse_markdown_table(html)[0].get("signal_flag") == 1
+    # 无参考(无法认定不一致) → 不判
+    html2 = f"<table>{hdr}<tr><td>X抗体</td><td>弱阳性</td><td></td></tr></table>"
+    assert not _parse_markdown_table(html2)[0].get("signal_flag")
+    # 有提示/标志列 → 由提示列决定(不置弱阳性黄)
+    html3 = ("<table><tr><td>项目</td><td>结果</td><td>参考值</td><td>提示</td></tr>"
+             "<tr><td>粘液丝</td><td>弱阳性</td><td>阴性</td><td></td></tr></table>")
+    assert not _parse_markdown_table(html3)[0].get("signal_flag")
