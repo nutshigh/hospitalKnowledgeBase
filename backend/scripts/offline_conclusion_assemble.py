@@ -45,7 +45,8 @@ def run(pdf_path: str, hybrid: bool = False):
     if not conclusion:
         return None, None
     items = asyncio.run(_extract_abnormalities_async(
-        conclusion, weak_candidates=bool(profile.get("multi_findings"))))
+        conclusion, weak_candidates=bool(profile.get("multi_findings")),
+        colon_strip=not bool(profile.get("no_colon_strip"))))
     return conclusion, items
 
 

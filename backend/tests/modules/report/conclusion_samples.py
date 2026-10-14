@@ -235,4 +235,31 @@ SAMPLES = [
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
     dict(key="caizhenyu_scan", rel="0-第6批/蔡镇宇058535.PDF", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+
+    # === 第七批(2026-10-12): 11 份(江西/漳州/恩施/敦煌, 新地区) ===
+    # 结论内容在图片页/混合页, 生产走 hybrid OCR → 离线测试无 OCR, 默认跳过
+    # (终态由 DB 三件套与结论重提取护栏守)。
+    dict(key="renxiaoguang_h004", rel="0-第7批/任晓光07581X.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="shishuo_h004", rel="0-第7批/石硕 120015.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="baixuerui_scan", rel="0-第7批/白瑞雪136029.PDF", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="huyue_scan", rel="0-第7批/胡月 150206.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="zoujibo_scan", rel="0-第7批/邹佶博151311.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    # 文本件 6 份: 冒烟级(min_len 按 2026-10-12 修复目标态设置)
+    dict(key="yangjunyu_h004", rel="0-第7批/杨钧予 164419.pdf",
+         smoke=True, min_len=400),    # 漳州正兴医院: 只取"医学建议"段(用户验收)
+    dict(key="jizhuowu_h004", rel="0-第7批/纪卓武032317.pdf",
+         smoke=True, min_len=250),    # 敦煌康美综合医院: "【总检结论】"◎分科条目
+    dict(key="guoxiaoping_h004", rel="0-第7批/郭小平300072.pdf",
+         smoke=True, min_len=1000),   # 恩施州中心医院: 只取"健康指导建议"段(用户验收, 含重要疾病/阳性结果)
+    dict(key="chenwei_h004", rel="0-第7批/陈炜 303515.pdf",
+         smoke=True, min_len=1200),   # 漳州第三医院: "主要问题"+医生建议
+    dict(key="chenxueting_h004", rel="0-第7批/陈雪婷 280424.pdf",
+         smoke=True, min_len=700),    # 漳州市医院: "本次体检*提示"
+    dict(key="huangjiajun_h004", rel="0-第7批/黄佳军218016.pdf",
+         smoke=True, min_len=700),    # 恩施州中心医院: 只取"本次健康建议"(用户验收)
 ]

@@ -13,11 +13,12 @@ from app.modules.report.batch_service import BatchService
 _log = logging.getLogger("app.interp.worker")
 
 
-def _weak_candidates_enabled(db, report_id: int) -> bool:
-    """报告是否启用弱切分候选(profile multi_findings, 默认关)。
+def _profile_switch(db, report_id: int, name: str) -> bool:
+    """报告命中的医院档案开关值(默认关/False)。
 
     2026-09-12: 弱切分(多发现行/多方向行)按院声明 —— 这里用原始 PDF 文本匹配
     档案(文本报告 <1s; 纯扫描件提取为空 → 默认关, 其条目靠【】标题/LLM)。
+    2026-10-12: 泛化为通用开关读取(multi_findings / no_colon_strip 等)。
     """
     try:
         from app.modules.report.models import ReportInfo, ReportTask
@@ -32,7 +33,7 @@ def _weak_candidates_enabled(db, report_id: int) -> bool:
         if not text:
             return False
         match_profile, _ = _load_report_profiles()
-        return bool(match_profile(text).get("multi_findings"))
+        return bool(match_profile(text).get(name))
     except Exception as e:
         _log.warning("weak_candidates probe failed report=%d: %s", report_id, e)
         return False
@@ -83,7 +84,8 @@ def handle_interpretation_task(message: dict):
                         if not has_ab:
                             items = run_async(_extract_abnormalities_async(
                                 report_info.conclusion_text,
-                                weak_candidates=_weak_candidates_enabled(db, report_id)))
+                                weak_candidates=_profile_switch(db, report_id, "multi_findings"),
+                                colon_strip=not _profile_switch(db, report_id, "no_colon_strip")))
                             if items:
                                 _store_abnormalities(db, report_id, existing.id, items)
                                 _log.info("backfill abnormalities report=%d count=%d", report_id, len(items))
@@ -129,7 +131,8 @@ def handle_interpretation_task(message: dict):
                     if interp:
                         items = run_async(_extract_abnormalities_async(
                                 report_info.conclusion_text,
-                                weak_candidates=_weak_candidates_enabled(db, report_id)))
+                                weak_candidates=_profile_switch(db, report_id, "multi_findings"),
+                                colon_strip=not _profile_switch(db, report_id, "no_colon_strip")))
                         if items:
                             _store_abnormalities(db, report_id, interp.id, items)
                         # 刷新解释统计（含结论异常）

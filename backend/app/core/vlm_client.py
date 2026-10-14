@@ -102,6 +102,8 @@ def _norm_flag_cell(cell) -> str:
     "\\uparrow" 而失配(鲍海宽胆红素三项标志丢失)。
     """
     s = str(cell or "").strip().replace("$", "")
+    # 2026-10-13: LaTeX 星号("^{*}"/"\*")归一为 "*"(红星医院 标志列 "*" = 异常标志)
+    s = re.sub(r"\^?\{?\*\}?", "*", s).replace("\\*", "*")
     return (s.replace("\\uparrow", "↑").replace("\\downarrow", "↓").strip())
 
 
@@ -180,11 +182,34 @@ def _parse_markdown_table(text: str) -> list[dict]:
     out: list[dict] = []
     if "<tr>" in text:
         blocks = re.findall(r"<table[^>]*>(.*?)</table>", text, re.S)
+        _last_header: list = []
+        _ctx = ""
         for b in (blocks or [text]):
             rows = _html_table_rows(b)
             if _is_history_table(rows):
                 continue  # 历年对比表整表跳过(历史值不是本次指标)
-            out.extend(_rows_to_indicators(rows))
+            # 2026-10-13: 表标题跟踪(尿常规/粪便常规) —— 裸"隐血"按所属表命名
+            _head_txt = " ".join(str(c) for r in rows[:1] for c in r)
+            if re.search(r"尿常规|尿液|尿沉渣", _head_txt):
+                _ctx = "urine"
+            elif re.search(r"粪便|大便|粪常规|便常规", _head_txt):
+                _ctx = "stool"
+            # 2026-10-13: 跨页续表补表头 —— OCR 在页边界把一张表拆成两段时, 后段
+            # 无表头行(胡月 白带常规+BV 跨页: 后段"清洁度 III度↑"行整表被
+            # _rows_to_indicators 丢弃) → 无表头段沿用上一段表头再解析。
+            _has_head = any(_match_header_columns(r or []) for r in rows[:2])
+            if _has_head:
+                _last_header = next(
+                    (r for r in rows[:2] if _match_header_columns(r or [])), [])
+            elif _last_header and rows:
+                rows = [list(_last_header)] + rows
+            _parsed = _rows_to_indicators(rows)
+            if _ctx in ("urine", "stool"):
+                for _p in _parsed:
+                    if (_p.get("item_name") or "").strip() in ("隐血", "潜血"):
+                        _p["item_name"] = ("尿隐血" if _ctx == "urine"
+                                           else "粪便隐血")
+            out.extend(_parsed)
         return out
     cur: list[list[str]] = []
     for line in text.split("\n"):
@@ -282,8 +307,8 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
             if not name or name in ("(each indicator)", "项目名称", "结果") \
                     or re.fullmatch(_unit_tok, name):
                 return
-        if re.search(r"(姓名[:：]|性别[:：]|门诊号|体检编号|既往病史|家族病史|月经史|"
-                     r"遗传病史|过敏史|婚育史|手术史|输血史|神经及精神疾病)", name):
+        if re.search(r"(姓名[:：]|性别[:：]|门诊号|体检编号|样本编号|既往病史|家族病史|月经史|"
+                     r"遗传病史|过敏史|婚育史|手术史|输血史|神经及精神疾病|科\s*室|单位名称|单位备注)", name):
             return
         if not indicator.get("result") and not (indicator.get("ref_low") or indicator.get("ref_high")):
             return
@@ -462,7 +487,7 @@ def _row_to_indicator(row: list[str], col_map: dict,
         if _ci not in col_map or col_map.get(_ci) == "item_name":
             continue
         _c = _norm_flag_cell(cell)
-        if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常)$", _c):
+        if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\*)$", _c):
             indicator["signal_flag"] = 3
             break
     # 2026-09-14: 箭头附着在结果单元格尾部("14.0 \uparrow"/"0.59\downarrow"/"14.0↑")
@@ -478,7 +503,7 @@ def _row_to_indicator(row: list[str], col_map: dict,
         key = col_map.get(i)
         if key is None:
             if allow_unmapped_flag and re.match(
-                    r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常)$",
+                    r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\*)$",
                     _norm_flag_cell(cell)):
                 indicator["signal_flag"] = 3
                 continue
@@ -506,17 +531,23 @@ def _row_to_indicator(row: list[str], col_map: dict,
         elif key == "unit":
             cell = _normalize_math_text(cell.strip())
             # 2026-08-26: 无单位行(体重指数等)参考范围可能被 VLM 对齐到单位列
+            # 2026-10-13: 等级区间("I度～II度", 胡月白带清洁度续表参考列错落单位列)
+            # 非数值参考 → 用户口径"可以不显示", 丢弃
             if re.search(r"\d[\d.]*\s*[~\-—～到至]\s*[\d.]+", cell) or re.match(r"[<>＜＞~～]\s*[\d.]+", cell):
                 lo, hi = _parse_ref_range(cell)
                 indicator["ref_low"] = lo
                 indicator["ref_high"] = hi
+            elif re.fullmatch(
+                    r"(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]|[IV]+)\s*度?\s*[~～\-—]\s*"
+                    r"(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]|[IV]+)\s*度?", cell):
+                pass
             else:
                 indicator["unit"] = cell
         elif key == "flag":
             # 2026-08-29: 提示/标志列 → 报告方异常标志(↑/↓/偏高/H/L/阳性/LaTeX \uparrow) → signal_flag=3
             # 2026-09-23: 先归一数学包裹("$ \uparrow $" → "↑")
             cell = _norm_flag_cell(cell)
-            if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常)$", cell):
+            if re.match(r"^(偏高|升高|增高|↑|H|偏低|降低|↓|L|阳性|异常|\*)$", cell):
                 indicator["signal_flag"] = 3
         elif key == "ref_low":
             indicator["ref_low"] = cell or None

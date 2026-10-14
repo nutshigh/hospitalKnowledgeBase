@@ -13,6 +13,7 @@ normalize_indicators), 秒级复现"提取→组装→净化"的最终产物, �
 ⚠ 若修改 service.py 的组装逻辑, 必须同步本脚本(防漂移)。
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,9 +55,12 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     if findings_sec and len(findings_sec) > 50:
         text = _remove_findings_section(text, findings_sec)
 
-    rows = extract_indicator_rows(text)
+    rows = extract_indicator_rows(
+        text, reversed_dump=bool(profile.get("reversed_dump")) if profile else False)
     col_rows = col_rows_with_fallback(pdf_path, text)
-    signals = extract_abnormal_signals(pdf_path, skip_text=findings_sec or "")
+    signals = extract_abnormal_signals(
+        pdf_path, skip_text=findings_sec or "",
+        red_marks=bool(profile.get("red_marks")) if profile else False)
     # 2026-09-28: 信号通道误配折行名碎片(与 service.process_task 同构)
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
@@ -70,6 +74,19 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
             _name_pool, _full_by_result))
         for _s in signals
     ]
+    # 2026-10-14: 倒序转储医院(江西边检) —— 信号通道反序表区错配守卫(与 service 同构)
+    if profile and profile.get("reversed_dump"):
+        _num_by_name = {}
+        for _r0 in list(col_rows) + list(rows):
+            _rv0 = (_r0.get("result") or "").strip()
+            if re.search(r"\d", _rv0):
+                _num_by_name.setdefault(_r0["item_name"], _rv0)
+        signals = [
+            _s for _s in signals
+            if not (_num_by_name.get(_s.get("item_name"))
+                    and _num_by_name[_s["item_name"]] != (_s.get("result") or "").strip()
+                    and not re.search(r"\d", (_s.get("result") or "")))
+        ]
 
     col_flag_keys = {
         (r["item_name"], r["result"]) for r in col_rows if r.get("signal_flag") == 3
@@ -172,6 +189,51 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     if _pname:
         indicators = [i for i in indicators
                       if (i.get("item_name") or "").strip() != _pname]
+    # 2026-10-13: 与 service 同构 —— ocr_content_pages 档案(漳州市医院)的 OCR-HTML
+    # 表并入(结论标题/化验小图表; 生产走 process_task 同名分支)
+    if profile.get("ocr_content_pages"):
+        try:
+            from app.core.vlm_client import _parse_markdown_table as _pmt_ocr
+            _tbl = normalize_indicators(_pmt_ocr(text)) or []
+            _by = {re.sub(r"\s+", "", x.get("item_name", "")): x
+                   for x in indicators if x.get("item_name")}
+            for _x in _tbl:
+                _k = re.sub(r"\s+", "", _x.get("item_name") or "")
+                if not _k:
+                    continue
+                _cur = _by.get(_k)
+                if _cur is None:
+                    indicators.append(_x)
+                    _by[_k] = _x
+                    continue
+                if (_x.get("signal_flag") or 0) > (_cur.get("signal_flag") or 0):
+                    _cur["signal_flag"] = _x.get("signal_flag")
+                for _fld in ("ref_low", "ref_high", "unit"):
+                    if not _cur.get(_fld) and _x.get(_fld):
+                        _cur[_fld] = _x[_fld]
+        except Exception:
+            pass
+    for _ind4 in indicators:
+        _r4 = _ind4.get("result")
+        if isinstance(_r4, str) and ("＋" in _r4 or "－" in _r4 or "−" in _r4):
+            _ind4["result"] = (_r4.replace("＋", "+").replace("－", "-")
+                               .replace("−", "-"))
+    # 2026-10-13: 同名值形态差兜底上色 —— 恩施红字信号 "+-"(清 CaN 后)与表格行值
+    # "+-    Ca10" 精确键不中, 标志落在重复行被去重丢弃(尿潜血/尿白细胞曾漏黄);
+    # 按**名称**补标志(红字/箭头是报告方标注, 名称即指标; rev/dual 块表 auth 行不参与)。
+    _sig_f_by_name: dict = {}
+    for _s in signals:
+        _n = (_s.get("item_name") or "").strip()
+        if not _n:
+            continue
+        _f = 2 if _s.get("signal") == "arrow" else 1
+        _sig_f_by_name[_n] = max(_sig_f_by_name.get(_n, 0), _f)
+    for _r in indicators:
+        if _r.get("item_name") in auth_names:
+            continue
+        _f = _sig_f_by_name.get((_r.get("item_name") or "").strip(), 0)
+        if _f and (_r.get("signal_flag") or 0) < _f:
+            _r["signal_flag"] = _f
     return normalize_indicators(indicators)
 
 

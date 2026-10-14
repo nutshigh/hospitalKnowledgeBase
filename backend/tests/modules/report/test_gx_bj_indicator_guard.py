@@ -89,9 +89,12 @@ def _extract(pdf):
     # 2026-09-28: 与生产 process_task 组装同构 —— 结论段按行序子序列删除;
     # 信号通道折行名碎片改挂全名(曾繁鲁"[HR]乙型肝炎表面抗体测定(HBsAb)")
     t2 = _remove_findings_section(t, sec) if sec and len(sec) > 50 else t
-    rows = extract_indicator_rows(t2)
+    rows = extract_indicator_rows(
+        t2, reversed_dump=bool(comp.get("reversed_dump")))
     col_rows = col_rows_with_fallback(pdf, t2)
-    signals = extract_abnormal_signals(pdf, skip_text=sec or "")
+    signals = extract_abnormal_signals(
+        pdf, skip_text=sec or "",
+        red_marks=bool(comp.get("red_marks")))
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
     _full_by_result: dict = {}
@@ -107,6 +110,19 @@ def _extract(pdf):
     col_flag_keys = {(r["item_name"], r["result"]) for r in col_rows if r.get("signal_flag") == 3}
     if col_flag_keys:
         signals = [s for s in signals if (s["item_name"], s["result"]) not in col_flag_keys]
+    # 2026-10-14: 倒序转储医院(江西边检)信号错配守卫 —— 与 service.process_task 同构
+    if comp.get("reversed_dump"):
+        _num_by_name = {}
+        for _r0 in list(col_rows) + list(rows):
+            _rv0 = (_r0.get("result") or "").strip()
+            if re.search(r"\d", _rv0):
+                _num_by_name.setdefault(_r0["item_name"], _rv0)
+        signals = [
+            _s for _s in signals
+            if not (_num_by_name.get(_s.get("item_name"))
+                    and _num_by_name[_s["item_name"]] != (_s.get("result") or "").strip()
+                    and not re.search(r"\d", (_s.get("result") or "")))
+        ]
     signal_names = {(s["item_name"], s["result"]) for s in signals}
     arrow_keys = {(s["item_name"], s["result"]) for s in signals if s.get("signal") == "arrow"}
     indicators = []
@@ -164,6 +180,21 @@ def _extract(pdf):
             indicators.append({"item_name": s_key[0], "result": s_key[1], "unit": "",
                                "ref_low": None, "ref_high": None,
                                "signal_flag": 2 if s_key in arrow_keys else 1})
+    # 2026-10-13: 同名值形态差兜底上色(与 service 同构 —— 恩施红字信号 "+-"(清 CaN 后)
+    # 与表格行值 "+-    Ca10" 精确键不中, 尿潜血(BLD)/尿白细胞(LEU) 曾漏黄)
+    _sig_f_by_name: dict = {}
+    for _s in signals:
+        _n = (_s.get("item_name") or "").strip()
+        if not _n:
+            continue
+        _f = 2 if _s.get("signal") == "arrow" else 1
+        _sig_f_by_name[_n] = max(_sig_f_by_name.get(_n, 0), _f)
+    for _r in indicators:
+        if _r.get("item_name") in auth_names:
+            continue
+        _f = _sig_f_by_name.get((_r.get("item_name") or "").strip(), 0)
+        if _f and (_r.get("signal_flag") or 0) < _f:
+            _r["signal_flag"] = _f
     for ind in indicators:
         if ind.get("signal_flag"):
             continue
@@ -271,6 +302,11 @@ B6 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "0-第6批")
+# 2026-10-13: 第七批样例目录(H004 77-87)
+B7 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "0-第7批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -338,6 +374,19 @@ _BASELINE_CASES = {
     "陈东海": ("h004", "74", os.path.join(B6, "陈东海170016.pdf")),
     "陈刚": ("h004", "75", os.path.join(B6, "陈刚 280377.pdf")),
     "陈霓": ("h004", "76", os.path.join(B6, "陈霓23303X.pdf")),
+    # 2026-10-13: 第七批前 5 份验收 —— 文本规则链可复现的 2 份(78 陈炜/80 郭小平,
+    # 80 含红字通道 red_marks); 77/81 纯扫描(VLM 指标)、79 化验表为扫描(生产
+    # 走 ocr_content+VLM) → 不在本层, 由 DB 三件套与结论护栏守。
+    "陈炜": ("h004", "78", os.path.join(B7, "陈炜 303515.pdf")),
+    "郭小平": ("h004", "80", os.path.join(B7, "郭小平300072.pdf")),
+    # 2026-10-14: 第七批后 6 份验收 —— 文本规则链可复现的 5 份(82 黄佳军/83 纪卓武/
+    # 84 任晓光/85 石硕/86 杨钧予; 84 信号通道守卫已同步); 87 邹佶博 纯扫描
+    # (VLM 指标, 规则链无产物) → 不纳入, 由 DB 三件套与结论护栏守。
+    "黄佳军": ("h004", "82", os.path.join(B7, "黄佳军218016.pdf")),
+    "纪卓武": ("h004", "83", os.path.join(B7, "纪卓武032317.pdf")),
+    "任晓光": ("h004", "84", os.path.join(B7, "任晓光07581X.pdf")),
+    "石硕": ("h004", "85", os.path.join(B7, "石硕 120015.pdf")),
+    "杨钧予": ("h004", "86", os.path.join(B7, "杨钧予 164419.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

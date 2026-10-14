@@ -335,7 +335,10 @@ def _clean_textual_noise(s: str) -> str:
     _FIX = {"－": "-", "（": "(", "）": ")", "：": ":", "，": ",", "．": "."}
     for a, b in _FIX.items():
         s = s.replace(a, b)
-    return s.strip().replace(" ", "").replace("\u3000", "")
+    # 2026-10-13: 报告方异常标记星号剥除("*钾" → "钾", 漳州市医院生化表) ——
+    # 否则标准名不命中("钾"有单位兜底, "*钾"没有)且与其它报告的"钾"不同一标准。
+    s = s.strip().lstrip("*＊#▲△★●○■◆◇◎□").strip()
+    return s.replace(" ", "").replace("\u3000", "")
 
 
 # 剥头部前缀(长词优先, 防"血小板"被"血"误剥): 剥后必须命中才采用(见 _match_with_fallback)
@@ -418,6 +421,12 @@ _PRECISE_ALIASES: Dict[str, str] = {
     "红细胞分布宽度标准差": "红细胞分布宽度(RDW-SD)",
     "红细胞分布宽度(RDW-CV)": "红细胞变异系数(RDW-CV)",
     "红细胞分布宽度(RDW-SD)": "红细胞分布宽度(RDW-SD)",
+    # 2026-10-13: EB 病毒抗体分型(恩施)不能并入通用别名"EB病毒抗体" —— 否则 IgA/IgG/IgM
+    # 三条同结果("阴性(-)")的行被 (standard, result) 去重吞掉 IgM(用户反馈绿区漏提)。
+    "EB病毒衣壳抗原IgA抗体": "EB病毒抗体IgA",
+    "EB病毒lgA抗体": "EB病毒抗体IgA",
+    "EB病毒衣壳抗原IgG抗体": "EB病毒抗体IgG",
+    "EB病毒衣壳抗原IgM抗体": "EB病毒抗体IgM",
 }
 
 
@@ -515,6 +524,9 @@ def normalize_item_name(raw_name: str, result: Optional[str] = None,
     return cleaned, None
 
 
+
+
+
 def normalize_indicators(indicators: list[dict]) -> list[dict]:
     """名称标准化 + 参考范围拆分 + 去重。
 
@@ -541,17 +553,46 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
         )
         if key in seen:
             # 2026-08-29: 同 key 去重时保留 signal_flag 更高者(标志行优先于无标志行)
+            # 2026-10-13: 同键**字段合并** —— LLM 解析行(先出现, 常缺 unit/ref)与规则行
+            # (漳州市医院化验表, 单位/参考完整)同键去重时, 缺字段从后者补齐、标志取大;
+            # 此前保首个导致 钾/二氧化碳 等单位永久丢失。
             for existing in deduped:
                 ekey = (
                     existing.get("item_name_standard") or existing.get("item_name", ""),
                     str(existing.get("result", "") or "").strip(),
                 )
-                if ekey == key and (ind.get("signal_flag") or 0) > (existing.get("signal_flag") or 0):
+                if ekey != key:
+                    continue
+                for _fld in ("unit", "ref_low", "ref_high"):
+                    if not existing.get(_fld) and ind.get(_fld):
+                        existing[_fld] = ind[_fld]
+                if (ind.get("signal_flag") or 0) > (existing.get("signal_flag") or 0):
                     deduped.remove(existing)
                     deduped.append(ind)
+                break
             continue
         seen.add(key)
         deduped.append(ind)
+
+    # 2026-10-13: 同标准多行时剔"参考词被当结果"的重复行 —— 尿酮|阴性(参考) 与
+    # 尿酮|+-(真值) 并存(漳州市医院尿常规: 参考列"阴性"被某来源当结果提取);
+    # 仅当组内存在**非参考词结果**时才删参考词行(单一"阴性"结果的真定性项不受影响)。
+    _REF_WORDS = {"阴性", "阴性(-)", "阴性（-）", "阴性(- )", "-", "--", "正常",
+                  "未见异常", "未见明显异常"}
+    _grp: dict = {}
+    for _ind in deduped:
+        _k2 = _ind.get("item_name_standard") or _ind.get("item_name", "")
+        _grp.setdefault(_k2, []).append(_ind)
+    _drop_ids = set()
+    for _k2, _rows in _grp.items():
+        if len(_rows) > 1 and any(
+                str(_x.get("result") or "").strip() not in _REF_WORDS
+                for _x in _rows):
+            for _x in _rows:
+                if str(_x.get("result") or "").strip() in _REF_WORDS:
+                    _drop_ids.add(id(_x))
+    if _drop_ids:
+        deduped = [_x for _x in deduped if id(_x) not in _drop_ids]
 
     if len(deduped) != len(indicators):
         logger.info(

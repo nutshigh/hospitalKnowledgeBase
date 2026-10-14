@@ -3861,5 +3861,719 @@
     "yellow"
    ]
   ]
+ },
+ "77": {
+  "name": "测试6(本院)",
+  "interp_id": 919,
+  "conclusion_len": 1816,
+  "conclusion_hash": "19fc756de5dc813c",
+  "indicators": [
+   [
+    "上皮细胞",
+    "yellow"
+   ],
+   [
+    "丙氨酸氨基转移酶",
+    "yellow"
+   ],
+   [
+    "嗜酸性粒细胞数",
+    "yellow"
+   ],
+   [
+    "嗜酸性粒细胞比率",
+    "yellow"
+   ],
+   [
+    "杆菌",
+    "yellow"
+   ],
+   [
+    "维生素C",
+    "yellow"
+   ],
+   [
+    "舒张压",
+    "yellow"
+   ],
+   [
+    "超氧化物歧化酶",
+    "yellow"
+   ],
+   [
+    "高密度胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "乳腺低回声病灶",
+    "yellow"
+   ],
+   [
+    "子宫肌瘤",
+    "yellow"
+   ],
+   [
+    "慢性咽炎",
+    "yellow"
+   ],
+   [
+    "扁桃体I°肿大",
+    "yellow"
+   ],
+   [
+    "牙结石",
+    "yellow"
+   ],
+   [
+    "瓣膜返流",
+    "yellow"
+   ],
+   [
+    "继发龋",
+    "yellow"
+   ],
+   [
+    "肝血管瘤多考虑",
+    "yellow"
+   ],
+   [
+    "腰臀比大于0.8",
+    "yellow"
+   ],
+   [
+    "血压降低",
+    "yellow"
+   ],
+   [
+    "阴道菌群失衡",
+    "yellow"
+   ],
+   [
+    "龋齿",
+    "yellow"
+   ]
+  ]
+ },
+ "78": {
+  "name": "测试6()",
+  "interp_id": 918,
+  "conclusion_len": 1362,
+  "conclusion_hash": "a4d58c966a81e0ac",
+  "indicators": [
+   [
+    "粘液丝",
+    "yellow"
+   ],
+   [
+    "蛋白质",
+    "yellow"
+   ],
+   [
+    "谷丙转氨酶",
+    "yellow"
+   ],
+   [
+    "谷氨酰氨转移酶",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣少量反流",
+    "yellow"
+   ],
+   [
+    "双侧甲状腺囊性结节",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓伴不齐",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "79": {
+  "name": "测试6(漳州市医院)",
+  "interp_id": 945,
+  "conclusion_len": 1004,
+  "conclusion_hash": "0041cdffba96e542",
+  "indicators": [
+   [
+    "二氧化碳",
+    "yellow"
+   ],
+   [
+    "尿比密",
+    "yellow"
+   ],
+   [
+    "尿素氮",
+    "yellow"
+   ],
+   [
+    "尿酮",
+    "yellow"
+   ],
+   [
+    "平均红细胞血红蛋白量",
+    "yellow"
+   ],
+   [
+    "红细胞平均体积",
+    "yellow"
+   ],
+   [
+    "红细胞总数",
+    "yellow"
+   ],
+   [
+    "血小板总数",
+    "yellow"
+   ],
+   [
+    "隐血",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣反流",
+    "yellow"
+   ],
+   [
+    "甲状腺弥漫性改变",
+    "yellow"
+   ],
+   [
+    "红细胞数增高,呈小细胞低色素",
+    "yellow"
+   ]
+  ]
+ },
+ "80": {
+  "name": "测试6()",
+  "interp_id": 931,
+  "conclusion_len": 1119,
+  "conclusion_hash": "148d0f88915e1fa4",
+  "indicators": [
+   [
+    "EB病毒衣壳抗原IgG抗体",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体(定量)",
+    "yellow"
+   ],
+   [
+    "尿潜血(BLD)",
+    "yellow"
+   ],
+   [
+    "尿白细胞(LEU)",
+    "yellow"
+   ],
+   [
+    "尿红细胞(RBC)",
+    "yellow"
+   ],
+   [
+    "粘液丝",
+    "yellow"
+   ],
+   [
+    "血压",
+    "yellow"
+   ],
+   [
+    "载脂蛋白A(APOA)",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白(HDL)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "J点上抬伴ST段抬高",
+    "yellow"
+   ],
+   [
+    "P-R间期延长",
+    "yellow"
+   ],
+   [
+    "左前降支壁冠状动脉（浅表型）",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌感染",
+    "yellow"
+   ],
+   [
+    "气管憩室",
+    "yellow"
+   ],
+   [
+    "甲状腺右叶背侧近包膜实性结节",
+    "yellow"
+   ],
+   [
+    "肾结石（左侧）",
+    "yellow"
+   ],
+   [
+    "脂肪肝（轻度）",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "部分导联T波低平或倒置",
+    "yellow"
+   ]
+  ]
+ },
+ "81": {
+  "name": "测试6(漳州第医院)",
+  "interp_id": 947,
+  "conclusion_len": 1333,
+  "conclusion_hash": "d32deb4f119cc39a",
+  "indicators": [
+   [
+    "清洁度",
+    "yellow"
+   ],
+   [
+    "细菌",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "二、三尖瓣少量反流",
+    "yellow"
+   ],
+   [
+    "双侧甲状腺囊性结节",
+    "yellow"
+   ],
+   [
+    "胆囊壁上中等回声团",
+    "yellow"
+   ],
+   [
+    "胆囊息肉样变",
+    "yellow"
+   ]
+  ]
+ },
+ "82": {
+  "name": "测试6(恩施出入境边防检查站科级)",
+  "interp_id": 949,
+  "conclusion_len": 948,
+  "conclusion_hash": "74e864d495ed6d5f",
+  "indicators": [
+   [
+    "RBC分布宽度CV(RDW-CV)",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体(定量)",
+    "yellow"
+   ],
+   [
+    "尿蛋白质(PRO)",
+    "yellow"
+   ],
+   [
+    "微白蛋白",
+    "yellow"
+   ],
+   [
+    "未分类结晶",
+    "yellow"
+   ],
+   [
+    "甘油三酯(TG)",
+    "yellow"
+   ],
+   [
+    "粘液丝",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "J点上抬",
+    "yellow"
+   ],
+   [
+    "前列腺稍大",
+    "yellow"
+   ],
+   [
+    "肝血管瘤",
+    "yellow"
+   ],
+   [
+    "肺部结节",
+    "yellow"
+   ],
+   [
+    "肾结石",
+    "yellow"
+   ],
+   [
+    "胸膜粘连",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "83": {
+  "name": "测试6(中华人民共和国敦煌出入境边防检查站)",
+  "interp_id": 1027,
+  "conclusion_len": 2701,
+  "conclusion_hash": "5ebbff355a07ad8a",
+  "indicators": [
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "嗜中性粒细胞百分数",
+    "yellow"
+   ],
+   [
+    "尿蛋白",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "淋巴细胞百分数",
+    "yellow"
+   ],
+   [
+    "淋巴细胞绝对值",
+    "yellow"
+   ],
+   [
+    "甘油三酯",
+    "yellow"
+   ],
+   [
+    "红细胞压积",
+    "yellow"
+   ],
+   [
+    "红细胞平均血红蛋白浓度",
+    "yellow"
+   ],
+   [
+    "血小板数",
+    "yellow"
+   ],
+   [
+    "血红蛋白",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "CagA",
+    "yellow"
+   ],
+   [
+    "Urease",
+    "yellow"
+   ],
+   [
+    "VacA",
+    "yellow"
+   ],
+   [
+    "Ⅰ级高血压",
+    "yellow"
+   ],
+   [
+    "体重指数",
+    "yellow"
+   ],
+   [
+    "双侧甲状腺结节",
+    "yellow"
+   ],
+   [
+    "左肺上叶小结节",
+    "yellow"
+   ],
+   [
+    "左肺上叶少许慢性炎症",
+    "yellow"
+   ],
+   [
+    "幽门螺杆菌抗体I型",
+    "yellow"
+   ],
+   [
+    "异常结果解读",
+    "yellow"
+   ]
+  ]
+ },
+ "84": {
+  "name": "测试6()",
+  "interp_id": 1029,
+  "conclusion_len": 911,
+  "conclusion_hash": "f25650f0ac3773d4",
+  "indicators": [
+   [
+    "乙肝核心抗体定量",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体定量",
+    "yellow"
+   ],
+   [
+    "同型半胱氨酸",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "维c",
+    "yellow"
+   ],
+   [
+    "谷草转氨酶",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "乙肝两对半（第2、5项阳性）",
+    "yellow"
+   ],
+   [
+    "双侧颈动脉内-中膜增厚伴右侧斑块形成",
+    "yellow"
+   ],
+   [
+    "左房偏大",
+    "yellow"
+   ]
+  ]
+ },
+ "85": {
+  "name": "测试6(总检日期)",
+  "interp_id": 1021,
+  "conclusion_len": 730,
+  "conclusion_hash": "bd31ea64315d9e33",
+  "indicators": [
+   [
+    "f/tPSA",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣少量反流",
+    "yellow"
+   ],
+   [
+    "前列腺钙化斑形成",
+    "yellow"
+   ],
+   [
+    "前肋骨折并少许骨痂形成",
+    "yellow"
+   ],
+   [
+    "双侧扁桃体肥大Ⅰ度",
+    "yellow"
+   ],
+   [
+    "右侧第5、6前肋骨折",
+    "yellow"
+   ],
+   [
+    "右肺中叶外侧段微小结节",
+    "yellow"
+   ],
+   [
+    "左肺下叶磨玻璃影",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "肝实质回声增多增强",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ]
+  ]
+ },
+ "86": {
+  "name": "测试6()",
+  "interp_id": 957,
+  "conclusion_len": 614,
+  "conclusion_hash": "4476bcec94ccce75",
+  "indicators": [
+   [
+    "嗜酸性粒细胞(EO)",
+    "yellow"
+   ],
+   [
+    "嗜酸性粒细胞百分比",
+    "yellow"
+   ],
+   [
+    "尿胆原",
+    "yellow"
+   ],
+   [
+    "白细胞",
+    "yellow"
+   ],
+   [
+    "粘液丝",
+    "yellow"
+   ],
+   [
+    "胆红素",
+    "yellow"
+   ],
+   [
+    "载脂蛋白A",
+    "yellow"
+   ],
+   [
+    "酮体",
+    "yellow"
+   ],
+   [
+    "镜检白细胞",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "二尖瓣少量反流",
+    "yellow"
+   ],
+   [
+    "前列腺增大并钙化斑形成",
+    "yellow"
+   ],
+   [
+    "双眼屈光不正",
+    "yellow"
+   ],
+   [
+    "右肾结石",
+    "yellow"
+   ],
+   [
+    "甲状腺左侧叶中等回声结节",
+    "yellow"
+   ],
+   [
+    "肝内强回声斑",
+    "yellow"
+   ],
+   [
+    "肝囊肿",
+    "yellow"
+   ],
+   [
+    "肥胖",
+    "yellow"
+   ],
+   [
+    "脂肪肝并肝囊肿声像",
+    "yellow"
+   ]
+  ]
+ },
+ "87": {
+  "name": "测试6(老爷庙边检站)",
+  "interp_id": 995,
+  "conclusion_len": 884,
+  "conclusion_hash": "5800df6946b1809d",
+  "indicators": [
+   [
+    "25-羟基维生素D",
+    "yellow"
+   ],
+   [
+    "乙肝表面抗体(HBsAb)",
+    "yellow"
+   ],
+   [
+    "总胆红素(TBIL)",
+    "yellow"
+   ],
+   [
+    "甘油三酯(TG)",
+    "yellow"
+   ],
+   [
+    "血同型半胱氨酸测定",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "心脏瓣膜疾病",
+    "yellow"
+   ],
+   [
+    "消化内科手机号",
+    "yellow"
+   ],
+   [
+    "瓣膜少量返流",
+    "yellow"
+   ],
+   [
+    "甘油三脂(TG)",
+    "yellow"
+   ],
+   [
+    "甲状腺弥漫性改变",
+    "yellow"
+   ],
+   [
+    "老年性、生理性退行性改变",
+    "yellow"
+   ],
+   [
+    "胆囊壁毛糙",
+    "yellow"
+   ]
+  ]
  }
 }
