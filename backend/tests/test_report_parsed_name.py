@@ -56,8 +56,14 @@ def _make_task(db, user_id="100001", status="queued", name="测试1"):
 
 
 def _mock_parse_text_pipeline():
-    """文本 PDF 解析路径的 mock: 命中 LLM 文本解析, 返回真实姓名孙越锋。"""
+    """文本 PDF 解析路径的 mock: 命中 LLM 文本解析, 返回真实姓名孙越锋。
+
+    2026-10-15: 规则优先管线(2026-09-10 版面改造)会对真实路径调坐标列/信号通道
+    (fitz 直开 PDF) —— 补空返回 mock; 姓名仍走"坏名/缺字段→LLM 补字段"回填契约。
+    """
     return (
+        patch("app.modules.report.table_extractor.col_rows_with_fallback", return_value=[]),
+        patch("app.modules.report.table_extractor.extract_abnormal_signals", return_value=[]),
         patch("app.modules.report.service._pdf_has_text", return_value=True),
         patch("app.modules.report.service._extract_pdf_text", return_value="体检文本"),
         patch("app.modules.report.service._parse_text_with_llm", return_value={
@@ -100,12 +106,15 @@ def test_process_task_parsed_name_none_when_missing(db):
         "name": None, "indicators": [],
     })
     p4 = patch("app.modules.report.service.rabbitmq.publish")
-    for p in (p1, p2, p3, p4):
+    # 2026-10-15: 规则优先管线会直开 PDF(坐标列/信号通道) → 补空返回 mock
+    p5 = patch("app.modules.report.table_extractor.col_rows_with_fallback", return_value=[])
+    p6 = patch("app.modules.report.table_extractor.extract_abnormal_signals", return_value=[])
+    for p in (p1, p2, p3, p4, p5, p6):
         p.start()
     try:
         process_task(db, t.id, "1")
     finally:
-        for p in (p1, p2, p3, p4):
+        for p in (p1, p2, p3, p4, p5, p6):
             p.stop()
     db.expire_all()
     r = db.query(ReportInfo).filter(ReportInfo.task_id == t.id).first()
@@ -177,6 +186,7 @@ def _patch_detail_services(client_deps=(), *, task_status="completed", parsed_na
         id=1, task_id=1, name=name, parsed_name=parsed_name,
         gender=None, age=None, report_date=None, check_type=None,
         unit_name=None, created_at=datetime(2026, 1, 1),
+        conclusion_text=None,  # 2026-10-15: 详情响应后续新增字段(结论文本)
     )
     task_stub = SimpleNamespace(status=task_status)
 

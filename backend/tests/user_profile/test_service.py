@@ -357,13 +357,13 @@ def test_get_overview_trends_include_abnormal_child_items(db):
                             (3, date(2026, 6, 1), "210", "0.33")]:
         db.add(ReportInfo(id=rid, user_id="123456", name="张三", report_date=dt))
         db.add(ReportIndicator(id=rid * 100 + 1, report_id=rid, item_name=parent,
-                               item_name_standard="血小板计数（PLT）",
+                               item_name_standard="血小板数(PLT)",
                                result_value=pv, unit="x10^9/L"))
         db.add(ReportIndicator(id=rid * 100 + 2, report_id=rid, item_name=child_abn,
-                               item_name_standard="血小板计数（PLT）",
+                               item_name_standard="血小板数(PLT)",
                                result_value=cv, unit="%"))
         db.add(ReportIndicator(id=rid * 100 + 3, report_id=rid, item_name=child_quiet,
-                               item_name_standard="血小板计数（PLT）",
+                               item_name_standard="血小板数(PLT)",
                                result_value="9.1", unit="fL"))
     db.commit()
     # 父项与异常子项各给一点黄判定(报告3)
@@ -375,11 +375,11 @@ def test_get_overview_trends_include_abnormal_child_items(db):
 
     result = get_overview(db, user_id="123456", name="张三")
     by_std = {t["item_name_standard"]: t for t in result["indicator_trends"]}
-    assert "血小板计数（PLT）" in by_std
-    assert "血小板比积（PCT）" in by_std          # 异常子项出现
+    assert "血小板数(PLT)" in by_std
+    assert "血小板压积(PCT)" in by_std          # 异常子项出现
     assert "血小板平均体积（MPV）" not in by_std  # 无判定子项不出现
-    assert len(by_std["血小板计数（PLT）"]["points"]) == 3
-    assert len({p["report_id"] for p in by_std["血小板比积（PCT）"]["points"]}) == 3
+    assert len(by_std["血小板数(PLT)"]["points"]) == 3
+    assert len({p["report_id"] for p in by_std["血小板压积(PCT)"]["points"]}) == 3
 
 
 def test_get_overview_trends_capped_at_config_limit(db):

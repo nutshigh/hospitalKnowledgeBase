@@ -15,7 +15,10 @@ def test_classify_urine_not_blood_routine():
     assert classify("红细胞(高倍视野)") == "尿常规"
     assert classify("尿液颜色") == "尿常规"
     assert classify("尿酸碱度") == "尿常规"      # 含"尿酸"子串但不能进肾功能
-    assert classify("尿微量白蛋白浓度") == "尿常规"
+    # 2026-10-14: 尿蛋白四项按用户口径(2026-09-24)归免疫栏 —— "尿微量白蛋白"属
+    # 尿蛋白四项(免疫检测), 裸"微白蛋白"才是尿常规里那项(旧断言已过期)。
+    assert classify("尿微量白蛋白浓度") == "免疫检测"
+    assert classify("微白蛋白") == "尿常规"
     assert classify("胆红素") == "尿常规"        # 尿试纸裸项(无总/直接前缀)
     assert classify("酮体") == "尿常规"
     assert classify("蛋白质") == "尿常规"

@@ -18,16 +18,23 @@ def _read(path):
 def test_monthly_rollover_renames_to_yyyymm_and_starts_new_file(tmp_path):
     """跨月初一次 rollover:旧文件 rename 为 app.log.<YYYY-MM>,新 app.log 为空等待新写入。"""
     log_file = tmp_path / "app.log"
-    handler = MonthlyRotatingFileHandler(str(log_file))
-    handler.setFormatter(logging.Formatter("%(message)s"))
-
-    logger = logging.getLogger("test_monthly_rollover")
-    logger.handlers.clear()
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-
+    # 2026-10-14: 确定性构造(修时间炸弹) —— stdlib TimedRotatingFileHandler.__init__
+    # 在文件已存在时用 **文件 mtime** 计算 rolloverAt(否则用 time.time()); freezegun
+    # 不伪造文件系统 mtime, 因此必须: 冻结时间**内**预创建文件并把 mtime 设为冻结值,
+    # 再构造 handler。旧写法(real mtime 构造)只在真实月份恰为 7 月时通过。
     with freeze_time("2026-07-31 23:59:00", ignore=["transformers"]):
+        log_file.touch()
+        _t = time.time()
+        os.utime(log_file, (_t, _t))
+        handler = MonthlyRotatingFileHandler(str(log_file))
+        handler.setFormatter(logging.Formatter("%(message)s"))
+
+        logger = logging.getLogger("test_monthly_rollover")
+        logger.handlers.clear()
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
         logger.info("july-line-1")
     handler.flush()
 

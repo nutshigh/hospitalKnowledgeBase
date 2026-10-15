@@ -39,7 +39,13 @@ def db():
 
 
 def _parse_mock(indicators):
+    # 2026-10-15: 2026-09-10 版面改造后默认是**规则优先**(INDICATOR_EXTRACTOR=signal:
+    # 行式/坐标列→指标, LLM 只补字段), 本组用例验证的是 **LLM 解析分支**的
+    # "category 输出→normalize_panel→落库(无效置空)"契约(该分支仍被
+    # INDICATOR_EXTRACTOR 开关使用), 故显式切到 LLM 分支驱动。
+    import os as _os
     return (
+        patch.dict(_os.environ, {"INDICATOR_EXTRACTOR": "llm"}),
         patch("app.modules.report.service._pdf_has_text", return_value=True),
         patch("app.modules.report.service._extract_pdf_text", return_value="体检文本"),
         patch("app.modules.report.service._parse_text_with_llm", return_value={

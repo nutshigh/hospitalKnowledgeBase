@@ -172,7 +172,7 @@ def test_stale_after_indicator_standard_backfill_regenerates(db):
 
     for rid, val in [(1, "300"), (2, "290")]:
         _report(db, rid, rdate=date(2025, 5, rid))
-        _indicator(db, rid, rid, "血小板计数", "血小板计数（PLT）", val, "x10^9/L")
+        _indicator(db, rid, rid, "血小板计数", "血小板数(PLT)", val, "x10^9/L")
         _completed(db, rid)
     _judgment(db, 1001, 1, 1, "red")
     _judgment(db, 1002, 2, 2, "yellow")
@@ -188,7 +188,7 @@ def test_stale_after_indicator_standard_backfill_regenerates(db):
     assert fp1
 
     for ind in db.query(ReportIndicator).filter(ReportIndicator.report_id.in_([1, 2])).all():
-        ind.item_name_standard = "血小板比积（PCT）"  # 模拟 007 标准名回填,id 不变
+        ind.item_name_standard = "血小板压积(PCT)"  # 模拟 007 标准名回填,id 不变
     db.commit()
 
     with patch(_model_patch) as m:
@@ -378,7 +378,7 @@ def test_key_indicators_include_abnormal_child_items(db):
     for rid in (1, 2):
         _report(db, rid, rdate=date(2025, rid, 1))
         _indicator(db, rid, rid, "血糖", "空腹血糖", "6.0")
-        _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板比积（PCT）", "0.29", "%")
+        _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板压积(PCT)", "0.29", "%")
         _completed(db, rid)
     _judgment(db, 1, 1, 1, "yellow")
     _judgment(db, 2, 2, 2, "yellow")
@@ -392,7 +392,7 @@ def test_key_indicators_include_abnormal_child_items(db):
 
     names = [k["item_name"] for k in result["key_indicators"]]
     assert len(names) == 2
-    assert set(names) == {"空腹血糖", "血小板比积（PCT）"}
+    assert set(names) == {"空腹血糖", "血小板压积(PCT)"}
 
 
 def test_sort_key_standard_name_stable_across_overview_and_change(db):
@@ -518,10 +518,10 @@ def test_series_splits_same_report_different_item_names(db):
     for rid in (1, 2):
         db.add(ReportInfo(id=rid, user_id="u1", name="甲", report_date=date(2025, rid, 1)))
         db.add(ReportIndicator(id=rid * 100 + 1, report_id=rid, item_name="血小板计数",
-                               item_name_standard="血小板计数（PLT）",
+                               item_name_standard="血小板数(PLT)",
                                result_value="300", unit="x10^9/L"))
         db.add(ReportIndicator(id=rid * 100 + 2, report_id=rid, item_name="血小板比积",
-                               item_name_standard="血小板计数（PLT）",
+                               item_name_standard="血小板数(PLT)",
                                result_value="0.29", unit="%"))
         db.add(ReportInterpretation(id=rid, report_id=rid, overall_level="green",
                                     status="completed", red_count=0, yellow_count=0, green_count=0))
@@ -533,9 +533,9 @@ def test_series_splits_same_report_different_item_names(db):
     series = _series(db, window)
     by_name = {s["item_name"]: s for s in series}
     assert set(by_name) == {"血小板计数", "血小板比积"}
-    assert {s["item_name_standard"] for s in series} == {"血小板计数（PLT）", "血小板比积（PCT）"}
-    assert by_name["血小板计数"]["item_name_standard"] == "血小板计数（PLT）"
-    assert by_name["血小板比积"]["item_name_standard"] == "血小板比积（PCT）"
+    assert {s["item_name_standard"] for s in series} == {"血小板数(PLT)", "血小板压积(PCT)"}
+    assert by_name["血小板计数"]["item_name_standard"] == "血小板数(PLT)"
+    assert by_name["血小板比积"]["item_name_standard"] == "血小板压积(PCT)"
     for s in series:
         per_report = {}
         for p in s["points"]:
@@ -553,7 +553,7 @@ def test_overview_and_change_include_abnormal_child_parity(db):
         _report(db, rid, rdate=rdate)
         _completed(db, rid)
         _indicator(db, rid, rid, "血糖", "空腹血糖（GLU）", "6.0")
-        _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板比积（PCT）", "0.29", "%")
+        _indicator(db, rid * 10 + 1, rid, "血小板比积", "血小板压积(PCT)", "0.29", "%")
     _judgment(db, 1, 1, 1, "yellow")
     _judgment(db, 2, 2, 2, "yellow")
     _judgment(db, 3, 1, 11, "yellow")
@@ -567,7 +567,7 @@ def test_overview_and_change_include_abnormal_child_parity(db):
 
     ov_names = [t["item_name_standard"] for t in ov["indicator_trends"]]
     co_names = [k["item_name_standard"] for k in co["key_indicators"]]
-    assert "血小板比积（PCT）" in ov_names and "血小板比积（PCT）" in co_names
+    assert "血小板压积(PCT)" in ov_names and "血小板压积(PCT)" in co_names
     assert ov_names == co_names
     for t in ov["indicator_trends"]:
         reps = [p["report_id"] for p in t["points"]]

@@ -112,7 +112,9 @@ def test_sub_age_group_sql():
 def test_high_risk_list_basic():
     sql, p = build_high_risk_list_sql(GroupFilters(), sort="red_count",
                                       limit=20, offset=0)
-    assert "interp.overall_level = 'red' OR interp.red_count >= 3" in sql
+    # 2026-10-15: 高风险口径于 2026-08-06(f967744 统计模块)起为"红/黄区 或 ≥3 红项",
+    # 旧断言('= red')已过期
+    assert "interp.overall_level IN ('red','yellow') OR interp.red_count >= 3" in sql
     assert "ri.id AS report_id" in sql
     assert "ri.name" in sql
     assert "ORDER BY interp.red_count DESC" in sql

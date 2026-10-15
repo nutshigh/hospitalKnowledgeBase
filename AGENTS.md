@@ -1693,8 +1693,14 @@ in static graph mode`, 进程内无法自愈(必须重启); 此前无自动恢�
 **测试**: `tests/test_ocr_watchdog.py`(探活/重启/防抖/滚动/恢复 10 条)、
 `tests/core/test_vlm_client_ocr.py`(重试/4xx不重试/outage 阈值 15 条)、
 `tests/test_main_wiring.py::test_ocr_watchdog_starts_on_startup_and_cancels_on_shutdown`。
-**已知(2026-10-15 核实)**: `pytest tests/` 全量 1318 passed 另有 13 个**历史遗留
-失败**(stash 验证与本次改动无关): statistics/test_group_sql、interp_worker_risk、
-parse_category_persist×3、report_parsed_name×5、standard_catalog、user_profile×2
-—— 多为早前验收口径变更后未同步的旧测试(如 classify"尿微量白蛋白"归免疫栏);
-两个测试时间炸弹已随本次修正(logging rollover mtime / stale classify 断言)。
+**全量测试状态(2026-10-15 清理后)**: `pytest tests/` = **1331 passed / 47 skipped /
+0 failed**。此前 13 个历史遗留失败已全部清理(纯测试侧, 零业务代码改动):
+11 个源自 2026-09-13 的 `50ad9b9` 分支合并(app 侧测试配 merge 侧代码)——
+parse_category×3/report_parsed_name×5(补版面接线引入的坐标列/信号 mock;
+category 组显式走 `INDICATOR_EXTRACTOR=llm` 分支验证 category 落库契约)、
+user_profile×2(标准名对齐院方标准表: 血小板数(PLT)/血小板压积(PCT))、
+interp_worker_risk(退役钩子 `try_generate_comparison_summary`→`ensure_change_overview`);
+1 个 `f967744`(2026-08-06 统计模块高风险口径 `IN ('red','yellow')`);
+1 个为 checkout 迁移丢文件(《体检项目指标标准表.md》已从旧 checkout 拷回, 该文件在
+.gitignore 属有意不入库); 另有 2 个测试时间炸弹已修(logging rollover mtime /
+stale classify 断言)。

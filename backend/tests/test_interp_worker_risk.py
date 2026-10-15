@@ -52,7 +52,9 @@ def test_interp_ok_publishes_risk():
               lambda hid: _get_db_gen(s)),
         patch("app.modules.interpretation.worker.run_interpretation_agent",
               side_effect=_agent),
-        patch("app.modules.user_profile.service.try_generate_comparison_summary"),
+        # 2026-10-15: 旧钩子 try_generate_comparison_summary 已于 2026-09-09
+        # (661fa02)退役, worker 现钩子为 ensure_change_overview(变化总览缓存预热)
+        patch("app.modules.user_profile.service.ensure_change_overview"),
         patch("app.modules.interpretation.worker.BatchService"),
         patch("app.modules.interpretation.worker.rabbitmq", mq),
     ]
