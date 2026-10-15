@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.ai.async_run import run_async
 from app.config import settings
 from app.modules.report.models import ReportTask, ReportInfo, ReportIndicator
-from app.core.vlm_client import vlm_client
+from app.core.vlm_client import vlm_client, OcrUnavailableError
 from app.core.term_normalizer import normalize_indicators, normalize_item_name
 from app.core.image_preprocess import preprocess
 from app.core.rabbitmq import rabbitmq, TaskMessage
@@ -4106,6 +4106,8 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     _pi = _vlm_res.get("personal_info") or {}
                     if _pi.get("name") and not (personal_info or {}).get("name"):
                         personal_info = _pi
+                except OcrUnavailableError:
+                    raise  # 2026-10-14: OCR 服务级故障穿透(worker 记 ocr_failed 重试)
                 except Exception as e:
                     _log.warning("scanned pdf VLM indicators failed task=%s: %s", task_id, e)
             elif compiled.get("ocr_content_pages"):
@@ -4139,6 +4141,8 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     _pi = _vlm_res.get("personal_info") or {}
                     if _pi.get("name") and not (personal_info or {}).get("name"):
                         personal_info = _pi
+                except OcrUnavailableError:
+                    raise  # 2026-10-14: OCR 服务级故障穿透(worker 记 ocr_failed 重试)
                 except Exception as e:
                     _log.warning("scanned pdf VLM indicators failed task=%s: %s", task_id, e)
         else:
@@ -4497,6 +4501,8 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
     import fitz
     doc = fitz.open(file_path)
     texts = []
+    _ocr_attempted = 0
+    _ocr_failed = 0
     for i, page in enumerate(doc):
         if visual_sort and not force_ocr:
             # 2026-10-07: 双文本层页(陈东海)先去重再按 y 排序 —— block 级排序保留双份
@@ -4531,6 +4537,7 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
             try:
                 pix = page.get_pixmap(matrix=fitz.Matrix(2.2, 2.2))
                 img = base64.b64encode(pix.tobytes("png")).decode()
+                _ocr_attempted += 1
                 r = vlm_client.extract_from_image(img)
                 ocr_t = (r.get("raw_text") or "").strip()
                 if force_ocr or len(ocr_t) > len(t):
@@ -4555,6 +4562,7 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
                     ocr_t = re.sub(r"\^\{(\d+)\}", r"^\1", ocr_t)
                     t = ocr_t
             except Exception as e:
+                _ocr_failed += 1
                 _log.warning("hybrid OCR page %d failed: %s", i + 1, e)
         if t:
             # 2026-10-12: ☑ 表单水印残片剥除(恩施州中心医院 PDF 页眉/表头逐字渲染
@@ -4564,6 +4572,13 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
                 t = re.sub(r"☑+", "", t)
             texts.append(f"--- Page {i+1} ---\n{t}")
     doc.close()
+    # 2026-10-14: 混合 OCR 大面积失败 = OCR 服务级故障 → 抛 OcrUnavailableError
+    # (parsing worker 记 failed_stage=ocr_failed 可重试), 不再静默产出缺页报告;
+    # 个别页失败仍按历史行为跳过(该页留空文本)。
+    from app.core.vlm_client import OcrUnavailableError, _ocr_outage
+    if _ocr_outage(_ocr_attempted, _ocr_failed):
+        raise OcrUnavailableError(
+            f"OCR service outage during hybrid extract: {_ocr_failed}/{_ocr_attempted} pages failed")
     return "\n\n".join(texts)
 
 

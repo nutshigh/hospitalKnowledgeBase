@@ -1660,3 +1660,41 @@ vs "指导与建议"7 条(4 条无建议项已随跨页修复进入结论, 不�
   **87 排除**(纯扫描 VLM 指标, 规则链无产物; 由 DB 三件套守)。
 - **全量护栏**: 见下(最终一轮)。第七批 11 份 = 77 白瑞雪/78 陈炜/79 陈雪婷/80 郭小平/
   81 胡月/82 黄佳军/83 纪卓武/84 任晓光/85 石硕/86 杨钧予/87 邹佶博 全部验收并冻结。
+
+## OCR 服务稳定性加固(2026-10-14, 看门狗+串行化+重试)
+
+**背景**: PaddleOCR-VL(8001) 长跑后偶发 `RuntimeError: int(Tensor) is not supported
+in static graph mode`, 进程内无法自愈(必须重启); 此前无自动恢复、`/health` 是浅检查
+(不碰模型)、启动日志覆盖写丢弃崩溃 traceback、解析侧对 OCR 页失败**静默缺页**。
+
+**四层加固(全部已实机演练/单测)**:
+1. **服务端串行化 + 统计**(`paddle_ocr_service/main.py`): `threading.Lock` 串行化
+   `pipeline.predict`(Paddle 管线非线程安全, 多 worker 并发是长跑崩溃的可疑诱因之一;
+   实测 3 并发请求严格串行完成); 新增 `GET /stats`(pages/failed/inflight/uptime/
+   model_loaded); predict 异常显式 `logger.exception` 保证 traceback 落盘。
+2. **OCR 看门狗**(`app/core/ocr_watchdog.py`, 随 FastAPI 8000 startup 启动, 同
+   interp_watchdog 模式; 配置 `OCR_WATCHDOG_*`):
+   - **深度探活**: 内嵌 200x60 小图真实调 `/ocr`(非 /health), 默认每 120s;
+   - **故障重启**: 连续 2 次失败 → 按**端口**(fuser -k)杀本机 OCR 进程并同 start.sh
+     命令重启(绝对路径 paddle_venv), 等待就绪; 重启防抖 90s;
+   - **滚动重启兜底**: 累计处理 ≥2000 页或运行 ≥4h 且 inflight==0 时主动重启;
+   - 全量日志 `app.ocr.watchdog` → app.log。
+   **实机演练**(2026-10-15): kill OCR → 探活 streak 1/2 → streak 2/2 → 自动重启 →
+   21s 后恢复, 全程 ~2.5 分钟无需人工。
+3. **客户端重试**(`vlm_client.VLMClient.extract_from_image`): 连接错误/超时/5xx
+   重试 `OCR_CLIENT_RETRIES`(默认 2, 退避 1s/3s); 4xx 不重试。
+4. **故障上抛落 stage**: 大面积失败(全部失败或 ≥max(2,50%)页) → 抛
+   `OcrUnavailableError`(`_ocr_outage` 判定; 个别页偶发失败仍按历史行为跳过) →
+   parsing worker 记 `failed_stage=ocr_failed`(**可重试**, 不在 UNRETRYABLE 集合),
+   不再静默产出缺页报告。覆盖 `_extract_pdf_text(hybrid)` 页循环与
+   `extract_from_images`(两处 `except` 已改为穿透 OcrUnavailableError)。
+5. **start.sh**: OCR 日志改 `>>` **追加**保留(崩溃 traceback 不丢)。
+
+**测试**: `tests/test_ocr_watchdog.py`(探活/重启/防抖/滚动/恢复 10 条)、
+`tests/core/test_vlm_client_ocr.py`(重试/4xx不重试/outage 阈值 15 条)、
+`tests/test_main_wiring.py::test_ocr_watchdog_starts_on_startup_and_cancels_on_shutdown`。
+**已知(2026-10-15 核实)**: `pytest tests/` 全量 1318 passed 另有 13 个**历史遗留
+失败**(stash 验证与本次改动无关): statistics/test_group_sql、interp_worker_risk、
+parse_category_persist×3、report_parsed_name×5、standard_catalog、user_profile×2
+—— 多为早前验收口径变更后未同步的旧测试(如 classify"尿微量白蛋白"归免疫栏);
+两个测试时间炸弹已随本次修正(logging rollover mtime / stale classify 断言)。

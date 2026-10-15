@@ -14,6 +14,7 @@ from app.modules.report.router import router as report_router
 from app.modules.report.batch_router import router as batch_router
 from app.core.batch_sweeper import start as start_sweeper
 from app.core.interp_watchdog import start as start_interp_watchdog
+from app.core.ocr_watchdog import start as start_ocr_watchdog
 from app.modules.interpretation.router import router as interpretation_router
 from app.modules.statistics.router import router as statistics_router
 from app.modules.statistics.group_router import router as statistics_group_router
@@ -105,9 +106,25 @@ def create_app() -> FastAPI:
         task.add_done_callback(_on_wd_done)
         app.state.interp_watchdog_task = task
 
+    @app.on_event("startup")
+    async def _start_ocr_watchdog():
+        import logging
+        _wd_log = logging.getLogger("app.ocr.watchdog")
+
+        def _on_wd_done(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                _wd_log.error("OcrWatchdog task exited unexpectedly: %r", exc)
+
+        task = asyncio.create_task(start_ocr_watchdog())
+        task.add_done_callback(_on_wd_done)
+        app.state.ocr_watchdog_task = task
+
     @app.on_event("shutdown")
     async def _stop_batch_sweeper():
-        for attr in ("batch_sweeper_task", "interp_watchdog_task"):
+        for attr in ("batch_sweeper_task", "interp_watchdog_task", "ocr_watchdog_task"):
             task = getattr(app.state, attr, None)
             if task:
                 task.cancel()

@@ -9,6 +9,7 @@ from app.core.retry import backoff_for_retry, is_bulk_window_now
 from app.modules.report.service import process_task, get_task_status
 from app.modules.report.batch_models import BatchImportFile
 from app.modules.report.batch_service import BatchService
+from app.core.vlm_client import OcrUnavailableError
 
 _log = logging.getLogger("app.parse")
 
@@ -44,12 +45,15 @@ def handle_parsing_task(message: dict):
             if batch_id and file_id:
                 BatchService.update_batch_progress(
                     batch_hospital_id, hospital_id, db, batch_id, file_id, "parsed_ok")
-        except Exception:
+        except Exception as exc:
             latency_ms = int((time.time() - t_start) * 1000)
             _log.warning(
                 "parsing fail task=%s hospital=%s batch=%s file=%s latency_ms=%d",
                 task_id, hospital_id, batch_id, file_id, latency_ms,
             )
+            # 2026-10-14: OCR 服务级故障单列阶段(ocr_failed) —— 看门狗/人工恢复
+            # OCR 后该阶段可整体重试(区别于其它解析异常, 便于运维定位批量失败根因)。
+            stage = "ocr_failed" if isinstance(exc, OcrUnavailableError) else "parsing"
             # 失败:由 process_task 已写 retry_count/status;此处按 retry_count 决策
             task = get_task_status(db, task_id)
             retries = task.retry_count if task else 0
@@ -59,7 +63,7 @@ def handle_parsing_task(message: dict):
                     try:
                         BatchService.update_batch_progress(
                             batch_hospital_id, hospital_id, db, batch_id, file_id,
-                            "failed", stage="parsing")
+                            "failed", stage=stage)
                     except Exception:
                         pass
                 raise  # 让 _callback nack(requeue=False) → DLQ

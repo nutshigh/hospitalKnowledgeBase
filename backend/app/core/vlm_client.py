@@ -1,11 +1,31 @@
 import html
 import logging
+import math
 import re
+import time
 from typing import Optional
 from httpx import Client, Timeout
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class OcrUnavailableError(RuntimeError):
+    """OCR 服务整体不可用(崩溃/重启窗口): 单页重试后仍大面积失败。
+
+    调用方(parsing worker)据此记 failed_stage=ocr_failed(可重试), 而不是
+    静默产出缺页的报告。单页偶发失败(已知个别扫描页不稳定的历史行为)不触发。
+    """
+
+
+def _ocr_outage(attempted: int, failed: int) -> bool:
+    """整体故障判定: 尝试 >=2 页且 (全部失败 或 失败数 >= max(MIN_FAILS, 一半))。"""
+    if attempted < 2 or failed <= 0:
+        return False
+    if failed == attempted:
+        return True
+    return failed >= max(settings.OCR_OUTAGE_MIN_FAILS,
+                         math.ceil(attempted * settings.OCR_OUTAGE_FAIL_RATIO))
 
 OCR_PROMPT = """<image>\n<|grounding|>Extract all lab test indicators from this medical report as a Markdown table.
 
@@ -637,11 +657,27 @@ class VLMClient:
         PaddleOCR-VL 输出页面级 markdown（含表格），复用现有
         _parse_markdown_table / _parse_personal_info 解析。
         """
-        response = self.client.post(
-            f"{self.base_url}/ocr",
-            json={"image_base64": image_base64},
-        )
-        response.raise_for_status()
+        # 2026-10-14: 单页失败重试(OCR 看门狗重启窗口内的请求靠这里吸收) ——
+        # 连接错误/超时/5xx 重试 settings.OCR_CLIENT_RETRIES 次(退避 1s/3s)。
+        last_exc: Optional[Exception] = None
+        attempts = max(0, int(getattr(settings, "OCR_CLIENT_RETRIES", 0)))
+        for i in range(attempts + 1):
+            try:
+                response = self.client.post(
+                    f"{self.base_url}/ocr",
+                    json={"image_base64": image_base64},
+                )
+                response.raise_for_status()
+                break
+            except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                retriable = status is None or status >= 500
+                last_exc = e
+                if i >= attempts or not retriable:
+                    raise
+                logger.warning("ocr page request failed (attempt %s/%s): %s",
+                               i + 1, attempts + 1, e)
+                time.sleep(1.0 + 2.0 * i)
         data = response.json()
         content = (data.get("markdown") or "").strip()
         content = _clean_markdown(content)
@@ -676,6 +712,11 @@ class VLMClient:
                 raw_texts.append(result["raw_text"])
         if failed_pages:
             logger.warning("VLM extract_from_images failed pages: %s", failed_pages)
+        # 2026-10-14: 大面积失败 = 服务级故障 → 抛 OcrUnavailableError(worker 记
+        # failed_stage=ocr_failed 走重试); 个别页失败仍按历史行为跳过。
+        if _ocr_outage(len(images_base64), len(failed_pages)):
+            raise OcrUnavailableError(
+                f"OCR service outage: {len(failed_pages)}/{len(images_base64)} pages failed")
         return {"personal_info": personal_info, "indicators": all_indicators,
                 "raw_text": "\n\n".join(raw_texts)}
 

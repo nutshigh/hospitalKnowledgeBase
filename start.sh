@@ -283,7 +283,9 @@ if [[ "$SKIP_MODELS" == "0" ]]; then
       log "PaddleOCR-VL 已运行 (8001)"
     else
       log "启动 PaddleOCR-VL (8001, GPU 3)..."
-      nohup bash -c "cd $BACKEND_DIR && export HF_ENDPOINT=https://hf-mirror.com; CUDA_VISIBLE_DEVICES=3 PADDLEOCR_VL_MODEL=/data/models/PaddleOCR-VL-1.5 PP_DOCLAYOUT_MODEL=/data/models/PP-DocLayoutV2 $PADDLE_VENV/python -m uvicorn paddle_ocr_service.main:app --host 0.0.0.0 --port 8001" > /data/logs/paddle-ocr.stdout.log 2>&1 &
+      # 2026-10-14: 日志改**追加**保留 —— OCR 服务崩过会自愈重启(看门狗), 覆盖写会
+      # 丢掉崩溃时刻的完整 traceback; 追加文件仅存 uvicorn 访问日志与异常栈, 体积小。
+      nohup bash -c "cd $BACKEND_DIR && export HF_ENDPOINT=https://hf-mirror.com; CUDA_VISIBLE_DEVICES=3 PADDLEOCR_VL_MODEL=/data/models/PaddleOCR-VL-1.5 PP_DOCLAYOUT_MODEL=/data/models/PP-DocLayoutV2 $PADDLE_VENV/python -m uvicorn paddle_ocr_service.main:app --host 0.0.0.0 --port 8001" >> /data/logs/paddle-ocr.stdout.log 2>&1 &
       echo $! > /tmp/start-sh-ocr.pid
       log "  PaddleOCR-VL 启动中 (PID: $!, log: /data/logs/paddle-ocr.stdout.log)"
     fi

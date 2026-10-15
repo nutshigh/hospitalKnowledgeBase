@@ -123,6 +123,19 @@ class Settings(BaseSettings):
     INTERP_WATCHDOG_ENABLED: bool = True
     INTERP_WATCHDOG_INTERVAL: int = 300        # 5min
     INTERP_WATCHDOG_STALL_THRESHOLD: int = 1800  # 30min, 须 > consumer_timeout
+    # OCR 看门狗(2026-10-14): 深度探活 PaddleOCR 8001(int(Tensor) 崩溃后进程内无法
+    # 自愈, 须重启), 连续失败自动重启; 运行页数/时长超阈值且空闲时滚动重启
+    OCR_WATCHDOG_ENABLED: bool = True
+    OCR_WATCHDOG_INTERVAL: int = 120           # 探活周期 2min(每次=1 次真实 OCR 推理)
+    OCR_WATCHDOG_MAX_FAILS: int = 2            # 连续失败 N 次判定服务损坏 → 重启
+    OCR_WATCHDOG_ROLL_PAGES: int = 2000        # 累计处理页数阈值(滚动重启兜底)
+    OCR_WATCHDOG_ROLL_MINUTES: int = 240       # 运行时长阈值(4h, 滚动重启兜底)
+    OCR_WATCHDOG_RESTART_TIMEOUT: int = 240    # 重启后等待就绪上限(模型加载时间)
+    # OCR 客户端(2026-10-14): 单页请求失败重试 + 整体故障阈值(超阈值抛
+    # OcrUnavailableError → parsing worker 记 failed_stage=ocr_failed 可重试)
+    OCR_CLIENT_RETRIES: int = 2                 # 单页额外重试次数
+    OCR_OUTAGE_MIN_FAILS: int = 2               # 故障判定最小失败页数
+    OCR_OUTAGE_FAIL_RATIO: float = 0.5          # 且失败页占比 ≥ 该值
     BULK_WINDOW_START: int = 22
     BULK_WINDOW_END: int = 8
     BATCH_FILE_MAX_SIZE: int = 52428800        # 50MB
