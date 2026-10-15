@@ -1704,3 +1704,30 @@ interp_worker_risk(退役钩子 `try_generate_comparison_summary`→`ensure_chan
 1 个为 checkout 迁移丢文件(《体检项目指标标准表.md》已从旧 checkout 拷回, 该文件在
 .gitignore 属有意不入库); 另有 2 个测试时间炸弹已修(logging rollover mtime /
 stale classify 断言)。
+
+## 影像检查 11 项红黄绿总览(2026-10-14, 报告详情)
+
+**事实**: 医生端与 user-portal 报告详情页新增"影像类结果分级"卡片(两列色块, 红→黄→绿
+排序, 同级保持接口顺序) —— 11 项检查
+(心电图/胸部X片/胸部CT/彩超心脏/甲状腺/颈动脉/腹部+男泌尿/子宫附件/乳腺/腹部+女泌尿/
+头颅CT核磁)各自红黄绿; 男 8 项(无子宫附件/乳腺/腹部+女泌尿)、女 10 项、gender NULL 11 项。
+
+- **数据源 = 双源并集(零重跑/零管线改动/不碰基线)**: 源A = 最新 completed 解读的
+  `indicator_judgment(source='conclusion')` 条目; 源B = `report_info.conclusion_text`
+  原文收紧扫描(表头/正常句/化验行/长句截断/条件句守卫 过滤); 每项取最高级。
+- **代码**: 纯函数 `backend/app/modules/report/imaging_items.py::build_imaging_items(text,
+  gender, entries)`; `service.get_conclusion_entries(db, report_id)`; schema
+  `ImagingItemSchema`; `GET /api/v1/reports/{id}` **纯追加**字段
+  `imaging_items: [{name, level}]`(level ∈ red/yellow/green; 空文本且无条目 → `[]`,
+  前端显示"未提取到结论")。前端: 两端 `ReportDetailPage.tsx` 结论卡之后的色块卡片。
+- **口径要点(改词表前先看 spec)**: 化验类词整体遮蔽(LAB_MASK); 裸"肺"带负向断言
+  (`肺(?!动脉|功能|通气|活量|弥散|静脉)`, 防"肺动脉瓣"又保"肺增殖灶"); 不用"脑血管"
+  (科普泛称, 心脑血管疾病≠脑部影像); **"椎动脉"不算彩超(颈动脉)**(独立椎动脉彩超,
+  用户 2026-10-14 审表口径); "左心室高电压"归心电图不算心脏彩超; "颈部淋巴结"不命中
+  颈动脉; 红=保守(行动句+强紧急词+条件句守卫, 当前语料预期近零)。
+- **验收工具**: `backend/scripts/check_imaging_items.py`(77 份离线审表+命中证据, 只读);
+  纯函数断言 `backend/tests/modules/report/test_imaging_items.py`(11 条, 秒级, 含用户
+  两轮审表反馈回归)。审表方法已沉淀: 先跑审表给用户按**姓名**审(用户会逐份核对), 收敛后
+  再动前端。
+- **spec**: `docs/superpowers/specs/2026-10-14-imaging-items-module-design.md`
+  (含替代路线否决记录/过滤细则终稿/实现记录)。

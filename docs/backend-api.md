@@ -263,6 +263,7 @@ Query 参数:`page`(≥1,默认 1)、`page_size`(1–100,默认 20)。
 | check_type | string\|null | 检查类型 |
 | unit_name | string\|null | 单位名称 |
 | indicators | list | 指标列表(见下) |
+| imaging_items | list | 影像检查 11 项红黄绿总览(2026-10-14 新增):`[{name, level}]`,level ∈ red/yellow/green;男 8 项/女 10 项/性别缺失 11 项;结论未提取时为空数组 |
 | created_at | datetime | 创建时间 |
 
 指标 `ReportIndicatorSchema` 字段:`item_name`、`item_name_standard`、`item_code`、`result_value`、`unit`、`ref_range_low`、`ref_range_high`、`category`。

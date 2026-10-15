@@ -4797,3 +4797,27 @@ def _clean_green_indicator(item_name: str, result_value: str) -> Optional[str]:
 
 def get_report_indicators(db: Session, report_id: int) -> List[ReportIndicator]:
     return db.query(ReportIndicator).filter(ReportIndicator.report_id == report_id).all()
+
+
+def get_conclusion_entries(db: Session, report_id: int) -> List[tuple]:
+    """影像 11 项模块源A: 最新 completed 解读的结论条目 [(item_name, color_level), ...]。
+
+    2026-10-14: 供 build_imaging_items 使用(不套展示层去重); 无解读或条目返回 []。
+    """
+    from app.modules.interpretation.models import IndicatorJudgment, ReportInterpretation
+    interp = (
+        db.query(ReportInterpretation.id)
+        .filter(ReportInterpretation.report_id == report_id,
+                ReportInterpretation.status == "completed")
+        .order_by(ReportInterpretation.id.desc())
+        .first()
+    )
+    if not interp:
+        return []
+    rows = (
+        db.query(IndicatorJudgment.item_name, IndicatorJudgment.color_level)
+        .filter(IndicatorJudgment.interpretation_id == interp[0],
+                IndicatorJudgment.source == "conclusion")
+        .all()
+    )
+    return [(r[0], r[1]) for r in rows]

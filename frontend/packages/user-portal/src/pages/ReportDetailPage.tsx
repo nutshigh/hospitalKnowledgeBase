@@ -248,6 +248,10 @@ export default function ReportDetailPage() {
     .filter((it: any) => it.color_level === 'red' && it.origin_line)
     .map((it: any) => it.origin_line as string);
 
+  // 2026-10-14: 影像 11 项展示排序(红→黄→绿, 同级保持接口固定顺序)
+  const imagingItems = [...(report.imaging_items || [])].sort((a: any, b: any) =>
+    (COLOR_ORDER[a.level] ?? 3) - (COLOR_ORDER[b.level] ?? 3));
+
 
   return (
     <Layout title={report.name || '报告详情'}>
@@ -347,6 +351,37 @@ export default function ReportDetailPage() {
               ? renderConclusionText(conclusionText, redConclusionSentences)
               : '未提取到结论，请尝试重新上传'}
           </div>
+        )}
+      </div>
+
+      {/* 2026-10-14: 影像检查 11 项红黄绿总览(独立卡片/色块, 与指标列表区分) */}
+      <div style={{
+        background: 'var(--color-surface)', borderRadius: 'var(--radius-md)', padding: 16,
+        boxShadow: 'var(--shadow-sm)', border: '1px solid var(--color-border-light)',
+        marginBottom: 20,
+      }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: '#000', marginBottom: 12 }}>
+          影像类结果分级
+        </div>
+        {imagingItems.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {imagingItems.map((it: any) => (
+              <div key={it.name} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
+                borderRadius: 8, border: '1px solid var(--color-border-light)',
+                background: 'var(--color-bg)',
+              }}>
+                <span style={{
+                  width: 11, height: 11, borderRadius: '50%', flexShrink: 0,
+                  background: it.level === 'red' ? 'var(--color-red)'
+                    : it.level === 'yellow' ? 'var(--color-yellow)' : 'var(--color-green)',
+                }} />
+                <span style={{ fontSize: 14, color: 'var(--color-text)' }}>{it.name}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>未提取到结论</div>
         )}
       </div>
 

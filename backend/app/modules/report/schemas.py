@@ -40,6 +40,11 @@ class ReportListResponse(BaseModel):
     page_size: int
 
 
+class ImagingItemSchema(BaseModel):
+    name: str
+    level: str
+
+
 class ReportDetailResponse(BaseModel):
     id: int
     task_id: Optional[int] = None
@@ -52,4 +57,6 @@ class ReportDetailResponse(BaseModel):
     conclusion_text: Optional[str] = None
     indicators: List[ReportIndicatorSchema] = []
     module_order: List[str] = []
+    # 2026-10-14: 影像检查 11 项红黄绿总览(纯追加字段; 见 imaging_items.py)
+    imaging_items: List[ImagingItemSchema] = []
     created_at: datetime

@@ -157,6 +157,12 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
         for i in indicators
     ]
     grouped, module_order = group_indicators(indicator_dicts)
+    # 2026-10-14: 影像检查 11 项红黄绿总览(双源并集, 纯追加字段)
+    from app.modules.report.imaging_items import build_imaging_items
+    imaging_items = build_imaging_items(
+        report.conclusion_text, report.gender,
+        service.get_conclusion_entries(db, report_id),
+    )
     return {
         "id": report.id, "task_id": report.task_id,
         "name": display_name, "gender": report.gender, "age": report.age,
@@ -164,6 +170,7 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
         "unit_name": report.unit_name, "conclusion_text": report.conclusion_text,
         "indicators": grouped,
         "module_order": module_order,
+        "imaging_items": imaging_items,
         "created_at": report.created_at,
     }
 

@@ -139,6 +139,12 @@ export default function ReportDetailPage() {
     .map((it: any) => it.origin_line as string);
   const levelCounts = computeLevelCounts(interp?.indicators || []);
 
+  // 2026-10-14: 影像 11 项展示排序(红→黄→绿, 同级保持接口固定顺序)
+  const imagingItems = [...(report.imaging_items || [])].sort((a: any, b: any) => {
+    const order: any = { red: 0, yellow: 1, green: 2 };
+    return (order[a.level] ?? 3) - (order[b.level] ?? 3);
+  });
+
 
   return (
     <DoctorLayout>
@@ -152,6 +158,29 @@ export default function ReportDetailPage() {
         {report.conclusion_text ? (
           <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
             {renderConclusionText(report.conclusion_text, redConclusionSentences)}
+          </div>
+        ) : (
+          <div style={{ color: '#999', fontStyle: 'italic' }}>未提取到结论</div>
+        )}
+      </Card>
+
+      {/* 2026-10-14: 影像检查 11 项红黄绿总览(独立卡片/色块, 与指标列表区分) */}
+      <Card title={<span style={{ fontSize: 18, color: '#000' }}>影像类结果分级</span>} style={{ marginBottom: 16 }}>
+        {imagingItems.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {imagingItems.map((it: any) => (
+              <div key={it.name} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
+                borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa',
+              }}>
+                <span style={{
+                  width: 11, height: 11, borderRadius: '50%', flexShrink: 0,
+                  background: it.level === 'red' ? 'var(--color-red)'
+                    : it.level === 'yellow' ? 'var(--color-yellow)' : 'var(--color-green)',
+                }} />
+                <span style={{ fontSize: 14 }}>{it.name}</span>
+              </div>
+            ))}
           </div>
         ) : (
           <div style={{ color: '#999', fontStyle: 'italic' }}>未提取到结论</div>
