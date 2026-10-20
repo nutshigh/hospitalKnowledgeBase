@@ -128,12 +128,20 @@ class Settings(BaseSettings):
     OCR_WATCHDOG_ENABLED: bool = True
     OCR_WATCHDOG_INTERVAL: int = 120           # 探活周期 2min(每次=1 次真实 OCR 推理)
     OCR_WATCHDOG_MAX_FAILS: int = 2            # 连续失败 N 次判定服务损坏 → 重启
-    OCR_WATCHDOG_ROLL_PAGES: int = 2000        # 累计处理页数阈值(滚动重启兜底)
+    # 2026-10-16: 实测 int(Tensor) 崩溃间隔约 15-70 页(OEM 上游问题) → 阈值从
+    # 2000 降为 50, 空闲窗口主动换桶, 降低单次长跑中途崩溃概率
+    OCR_WATCHDOG_ROLL_PAGES: int = 50          # 累计处理页数阈值(滚动重启兜底)
     OCR_WATCHDOG_ROLL_MINUTES: int = 240       # 运行时长阈值(4h, 滚动重启兜底)
     OCR_WATCHDOG_RESTART_TIMEOUT: int = 240    # 重启后等待就绪上限(模型加载时间)
+    # 2026-10-16: 文本层字体映射损坏的报告强制逐页 OCR(逗号分隔 task id; 《体检报告
+    # 样例》里陈宏宏即此形态)。.env 可配, _force_ocr_task_ids 优先读环境变量再回落本项。
+    FORCE_OCR_TASKS: str = ""
     # OCR 客户端(2026-10-14): 单页请求失败重试 + 整体故障阈值(超阈值抛
     # OcrUnavailableError → parsing worker 记 failed_stage=ocr_failed 可重试)
     OCR_CLIENT_RETRIES: int = 2                 # 单页额外重试次数
+    # 2026-10-16: OCR 页级缓存目录(内容寻址 sha1(图片)) —— 默认关; 长报告批量重跑
+    # 时开启(如 /tmp/ocr_page_cache), OCR 崩溃后重试只补未缓存页, 保证收敛。
+    OCR_CACHE_DIR: str = ""
     OCR_OUTAGE_MIN_FAILS: int = 2               # 故障判定最小失败页数
     OCR_OUTAGE_FAIL_RATIO: float = 0.5          # 且失败页占比 ≥ 该值
     BULK_WINDOW_START: int = 22

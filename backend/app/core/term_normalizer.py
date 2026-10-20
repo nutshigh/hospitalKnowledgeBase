@@ -427,6 +427,14 @@ _PRECISE_ALIASES: Dict[str, str] = {
     "EB病毒lgA抗体": "EB病毒抗体IgA",
     "EB病毒衣壳抗原IgG抗体": "EB病毒抗体IgG",
     "EB病毒衣壳抗原IgM抗体": "EB病毒抗体IgM",
+    # 2026-10-19(付本明): 无"抗体"后缀的抗原分型行自映射 —— 否则不同抗原(核抗原/衣壳/
+    # 早期)同结果(">50.00")会被 (standard, result) 去重互吞(衣壳IgG 曾整行丢失)
+    "EB病毒核抗原IgG": "EB病毒核抗原IgG",
+    "EB病毒衣壳抗原IgG": "EB病毒衣壳抗原IgG",
+    "EB病毒衣壳抗原IgA": "EB病毒衣壳抗原IgA",
+    "EB病毒衣壳抗原IgM": "EB病毒衣壳抗原IgM",
+    "EB病毒早期抗原IgA": "EB病毒早期抗原IgA",
+    "EB病毒早期抗原IgG": "EB病毒早期抗原IgG",
 }
 
 

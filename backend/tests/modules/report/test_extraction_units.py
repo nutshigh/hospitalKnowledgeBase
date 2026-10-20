@@ -1148,7 +1148,10 @@ def test_parse_markdown_table_strips_star_and_normalizes_greek():
 
 def test_force_ocr_task_ids_parsing(monkeypatch):
     # 方案a: FORCE_OCR_TASKS 解析(逗号/空白分隔, 忽略非数字)
+    # 2026-10-16: 部署 .env 里的 FORCE_OCR_TASKS(如 89)不得泄漏进断言 → 隔离 settings
+    from app.config import settings as _st
     from app.modules.report.service import _force_ocr_task_ids
+    monkeypatch.setattr(_st, "FORCE_OCR_TASKS", "")
     monkeypatch.setenv("FORCE_OCR_TASKS", "39, 40 , x")
     assert _force_ocr_task_ids() == {39, 40}
     monkeypatch.setenv("FORCE_OCR_TASKS", "")
@@ -2304,3 +2307,202 @@ def test_weak_positive_yellow_only_without_flag_col_and_ref_mismatch():
     html3 = ("<table><tr><td>项目</td><td>结果</td><td>参考值</td><td>提示</td></tr>"
              "<tr><td>粘液丝</td><td>弱阳性</td><td>阴性</td><td></td></tr></table>")
     assert not _parse_markdown_table(html3)[0].get("signal_flag")
+
+
+def test_mark_indicators_by_summary_marks_longest_existing_row_only():
+    # 2026-10-19(用户口径): 总结段异常项给既有行标黄, 不新建; 只标最长匹配
+    from app.modules.report.table_extractor import mark_indicators_by_summary
+    inds = [
+        {"item_name": "红细胞(隐血)", "result": "1+", "signal_flag": 0},
+        {"item_name": "蛋白", "result": "+-", "signal_flag": 0},
+        {"item_name": "总蛋白", "result": "70", "signal_flag": 0},
+        {"item_name": "隐血", "result": "阴性", "signal_flag": 0},
+        {"item_name": "身高", "result": "170", "signal_flag": 0},
+    ]
+    sec = ("1、【尿红细胞(隐血)+1】\n2、【尿常规：尿蛋白弱阳性】\n"
+           "3、【EB病毒核抗原IgG偏高】\n4、【超重】")
+    mark_indicators_by_summary(inds, sec)
+    by = {i["item_name"]: i["signal_flag"] for i in inds}
+    assert by["红细胞(隐血)"] == 3      # 前缀"尿" + 值后缀"+1" 剥除后包含匹配
+    assert by["蛋白"] == 3              # "尿常规：尿蛋白弱阳性" → "尿蛋白" 包含
+    assert by["总蛋白"] == 0            # 只标最长匹配(未被"蛋白"误标)
+    assert by["隐血"] == 0              # 不同指标(红细胞(隐血)才是异常项)
+    assert by["身高"] == 0
+    assert len(inds) == 5               # 不新建行
+
+
+def test_apply_redref_flags_only_out_of_numeric_ref():
+    # 2026-10-19(望京口径): 红字 + 数值结果超数值参考 → f1; 无参考/范围内不标
+    from app.modules.report.table_extractor import apply_redref_flags
+    inds = [
+        {"item_name": "乳酸脱氢酶", "result": "131", "ref_low": "135",
+         "ref_high": "214", "signal_flag": 0},
+        {"item_name": "高密度脂蛋白胆固醇", "result": "2.05", "ref_low": "1.05",
+         "ref_high": "1.68", "signal_flag": 0},
+        {"item_name": "天冬氨酸氨基转移酶", "result": "13", "ref_low": "13",
+         "ref_high": "35", "signal_flag": 0},
+        {"item_name": "身高", "result": "166", "ref_low": None,
+         "ref_high": None, "signal_flag": 0},
+        {"item_name": "PH", "result": "5", "ref_low": "4.6",
+         "ref_high": "8.0", "signal_flag": 0},
+    ]
+    sigs = [{"item_name": n, "result": "", "signal": "redref"}
+            for n in ("乳酸脱氢酶", "高密度脂蛋白胆固醇", "天冬氨酸氨基转移酶", "身高", "PH")]
+    apply_redref_flags(inds, sigs)
+    by = {i["item_name"]: i["signal_flag"] for i in inds}
+    # 2026-10-19(陈阳反馈): 红字=报告方异常标注, 有参考即判黄(打印参考范围内也判,
+    # PH 5 参考 4.6-8.0 仍红); 无参考项(身高)保持绿
+    assert by["乳酸脱氢酶"] == 2
+    assert by["高密度脂蛋白胆固醇"] == 2
+    assert by["天冬氨酸氨基转移酶"] == 2
+    assert by["身高"] == 0
+    assert by["PH"] == 2
+
+
+def test_urine_urobilinogen_dash_ref_weak_positive_no_flag():
+    # 2026-10-19(封猛反馈): 尿胆原结果"-"(阴性/无结果), 其后"弱阳性"是**参考范围列**,
+    # 不是异常标注 → 不得判黄
+    from app.modules.report.table_extractor import extract_indicator_rows
+    txt = """项目名称
+检查结果
+参考范围
+单位
+*尿胆原
+-
+ 
+弱阳性
+ 
+*胆红素
+-
+ 
+阴性
+"""
+    rows = {r["item_name"]: r for r in extract_indicator_rows(txt)}
+    assert "尿胆原" in rows
+    assert not rows["尿胆原"].get("signal_flag")
+
+
+def test_name_wrap_cjk_latin_continuation_merges():
+    # 2026-10-19(韩先锋反馈): "平均血小板体积测"/"定MPV"/9.3 → 全名, 不产"定MPV"碎片
+    from app.modules.report.table_extractor import extract_indicator_rows
+    txt = """平均血小板体积测
+定MPV
+9.3
+7-12.5
+fL
+平均血小板分布宽
+度PDW
+9.9
+8.2-17.5
+%
+"""
+    names = [r["item_name"] for r in extract_indicator_rows(txt)]
+    assert any("平均血小板体积" in n and "MPV" in n for n in names), names
+    assert any("平均血小板分布宽" in n and "PDW" in n for n in names), names
+    assert not any(n in ("定MPV", "度PDW") for n in names), names
+
+
+def test_junk_section_names_and_measure_merged_name():
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("合理建议")
+    assert _skip_name("补充说明")
+    assert _skip_name("室间隔厚度10mm左室后壁厚度")
+    # 2026-10-19(韩先锋反馈): 超声测量散文(室间隔/左室后壁厚度)不是检验指标
+    assert _skip_name("室间隔厚度")
+    assert _skip_name("左室后壁厚度")
+
+
+def test_reflow_numbered_title_and_body_newline():
+    # 2026-10-19(韩先锋反馈): 序号+异常名独立成行, 科普正文另起一行
+    from app.modules.report.service import _reflow_conclusion_lines
+    out = _reflow_conclusion_lines(
+        "阳性结果汇总\n1\nCT 示右肺结节\n科普正文一段。\n2\n癌胚抗原偏高\n"
+        "癌胚抗原是肿瘤筛查的指标。肺癌、消化系统肿瘤可明显升高。")
+    lines = [l for l in out.splitlines() if l.strip()]
+    assert lines[0] == "阳性结果汇总"
+    assert lines[1] == "1 CT 示右肺结节"
+    assert lines[2] == "科普正文一段。"
+    assert lines[3] == "2 癌胚抗原偏高"
+    assert lines[4].startswith("癌胚抗原是肿瘤筛查的指标")
+
+
+def test_reflow_join_body_starting_with_jianyu():
+    # 2026-10-19(韩先锋反馈): 正文折行处行首"见于…"是续写, 不得拆行
+    from app.modules.report.service import _reflow_conclusion_lines
+    out = _reflow_conclusion_lines(
+        "6\n尿潜血2+\n生理因素多见于剧烈运动或女性月经期污染尿\n"
+        "液。病理因素多见于泌尿系统炎症、结石、肿瘤、外伤等；也可\n"
+        "见于血液系统疾病。建议适度多饮水。")
+    assert "也可见于血液系统疾病" in out.replace("\n", ""), out
+
+
+def test_name_wrap_latin_percent_and_percent_prefix():
+    # 2026-10-19(韩先锋反馈): "70%红细胞散射光强"/"度" 正常合并(名称前缀允许%)
+    # 纯拉丁缩写续行("MON%"/"LYM%")并入中文名, 也不漏提绿区项
+    from app.modules.report.table_extractor import extract_indicator_rows
+    txt = """70%红细胞散射光强
+度
+0
+ch
+单核细胞百分数
+MON%
+6.4
+3-10
+%
+淋巴细胞百分数
+LYM%
+34.2
+20-50
+%
+"""
+    rows = {r["item_name"]: r for r in extract_indicator_rows(txt, latin_wrap=True)}
+    assert "70%红细胞散射光强度" in rows, rows.keys()
+    assert "单核细胞百分数MON%" in rows
+    assert "淋巴细胞百分数LYM%" in rows
+    assert "度" not in rows
+
+
+def test_junk_header_field_canjian_unit():
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("参检单位")
+    assert _skip_name("受检单位")
+
+
+def test_reflow_numbered_body_joins_midword_breaks():
+    # 2026-10-19(韩先锋反馈): 编号条目正文折行处("提示血脂代"/"谢异常",
+    # "桥本甲"/"状腺炎")必须拼接; 标题行仍独立
+    from app.modules.report.service import _reflow_conclusion_lines
+    out = _reflow_conclusion_lines(
+        "4\n低密度脂蛋白偏高\n提示血脂代\n谢异常。血脂代谢异常是危险因素。\n"
+        "8\n彩超示甲状腺病变\n甲状腺弥漫性病变通常是桥本甲\n状腺炎引起的。")
+    assert "提示血脂代谢异常" in out.replace("\\n", ""), out
+    assert "桥本甲状腺炎" in out.replace("\\n", ""), out
+    lines = out.splitlines()
+    assert "4 低密度脂蛋白偏高" in lines
+    assert "8 彩超示甲状腺病变" in lines
+
+
+
+def test_merge_range_fragments_truncated_ranges():
+    # 2026-10-19(韩先锋): 参考范围数字被换行拆断 → 拼接
+    from app.modules.report.table_extractor import _merge_range_fragments
+    out = _merge_range_fragments(["0.108-0.2", "82", "1.003-1.0", "30", "5000-1200", "0"])
+    # 相邻行按序处理: 0.108-0.2+82, 1.003-1.0+30(前一行已并), 5000-1200+0
+    assert out == ["0.108-0.282", "1.003-1.030", "5000-12000"], out
+    # 正常范围不拼; 小数位一致的真实范围不拼
+    assert _merge_range_fragments(["40-50", "%", "3.9-6.1", "mmol/L"]) == ["40-50", "%", "3.9-6.1", "mmol/L"]
+
+
+def test_qual_annot_hp_value():
+    # 2026-10-19(韩先锋): "阴性Hp(-)" 是定性结果, 不得被当下一行名称(重复行)
+    from app.modules.report.table_extractor import _is_value_line
+    assert _is_value_line("阴性Hp(-)")
+    assert _is_value_line("阳性(+)")
+
+
+def test_unit_split_merge_prefers_full_unit():
+    # 坐标列 "mmol/" + 行式 "mmol/L" 合并 → 完整单位(前端显示 mmol/L)
+    # 由 _range_with_unit/行式单位续接保证; 此处断言行式续接
+    from app.modules.report.table_extractor import extract_indicator_rows
+    rows = {r["item_name"]: r for r in extract_indicator_rows("总胆固醇\n5.78\nmmol/\nL\n2.33-5.18\n")}
+    assert rows["总胆固醇"]["unit"] == "mmol/L", rows

@@ -49,6 +49,21 @@ Rules:
 6. Keep result values exactly as shown in the report"""
 
 
+_REF_PAREN_TAIL_RE = re.compile(
+    r"\s*(?:"
+    r"[（(][^（()）]*(?:合适水平|参考范围|参考值|正常范围|范围|区间|危险分层)[^（()）]*[)）]"
+    r"|[（(]\s*[<>≤≥]?\s*[\d.]+\s*[-~～—–]\s*[\d.]+\s*[)）]"  # 纯数值区间括注(参考)
+    r")\s*$")
+
+
+def _strip_ref_paren_tail(value: str) -> str:
+    """结果单元格尾随参考说明括注剥离("7.16（合适水平：<5.20 …）" → "7.16",
+    2026-10-16 陈宏宏 OCR 表)。括注内含 合适水平/参考/范围/区间/危险分层 才剥,
+    "阳性（+）"等定性括注不动。"""
+    v = (value or "").strip()
+    return _REF_PAREN_TAIL_RE.sub("", v).strip()
+
+
 def _clean_markdown(text: str) -> str:
     """Strip special tokens and truncate hallucinated repetition."""
     text = text.replace("<｜end▁of▁sentence｜>", "")
@@ -547,6 +562,13 @@ def _row_to_indicator(row: list[str], col_map: dict,
             # 2026-09-24: 结果里的 LaTeX 符号归一(曾社健"弱阳性（ \\pm ）" → "弱阳性（±）")
             cell = (cell.replace("\\pm", "±").replace("\\mu", "μ")
                     .replace("\\times", "×").replace("\\cdot", "·"))
+            # 2026-10-19: 结果内 LaTeX 行内包裹/括号内侧空格归一
+            # ("阴性[ $ <0.10 $]" → "阴性[<0.10]", 陈宏宏 乙肝表面抗原)
+            cell = re.sub(r"\$\s*([^$]*?)\s*\$", r"\1", cell)
+            cell = re.sub(r"([\[【(（])\s+", r"\1", cell)
+            cell = re.sub(r"\s+([\]】)）])", r"\1", cell)
+            # 2026-10-16: 参考说明括注误入结果("7.16（合适水平：<5.20…）", 陈宏宏) → 剥
+            cell = _strip_ref_paren_tail(cell)
             indicator["result"] = cell
         elif key == "unit":
             cell = _normalize_math_text(cell.strip())
@@ -657,6 +679,28 @@ class VLMClient:
         PaddleOCR-VL 输出页面级 markdown（含表格），复用现有
         _parse_markdown_table / _parse_personal_info 解析。
         """
+        # 2026-10-16: 页级缓存(内容寻址) —— 崩溃重试只补未缓存页, 长报告可收敛;
+        # 默认关闭(OCR_CACHE_DIR 为空), 批量重跑时显式开启。
+        _cache_dir = (getattr(settings, "OCR_CACHE_DIR", "") or "").strip()
+        _cache_path = None
+        if _cache_dir and image_base64:
+            import hashlib as _hl
+            import os as _os
+            _key = _hl.sha1(image_base64.encode("utf-8")).hexdigest()
+            _cache_path = _os.path.join(_cache_dir, _key + ".json")
+            if _os.path.exists(_cache_path):
+                try:
+                    import json as _json
+                    data = _json.load(open(_cache_path, encoding="utf-8"))
+                    content = _clean_markdown((data.get("markdown") or "").strip())
+                    personal_info = _parse_personal_info(content)
+                    if not personal_info:
+                        personal_info = _parse_personal_info_cn(content)
+                    return {"personal_info": personal_info,
+                            "indicators": _parse_markdown_table(content),
+                            "raw_text": content}
+                except Exception:
+                    pass
         # 2026-10-14: 单页失败重试(OCR 看门狗重启窗口内的请求靠这里吸收) ——
         # 连接错误/超时/5xx 重试 settings.OCR_CLIENT_RETRIES 次(退避 1s/3s)。
         last_exc: Optional[Exception] = None
@@ -679,6 +723,14 @@ class VLMClient:
                                i + 1, attempts + 1, e)
                 time.sleep(1.0 + 2.0 * i)
         data = response.json()
+        if _cache_path:
+            try:
+                import json as _json
+                _os.makedirs(_cache_dir, exist_ok=True)
+                _json.dump({"markdown": (data.get("markdown") or "")},
+                           open(_cache_path, "w", encoding="utf-8"), ensure_ascii=False)
+            except Exception:
+                pass
         content = (data.get("markdown") or "").strip()
         content = _clean_markdown(content)
 

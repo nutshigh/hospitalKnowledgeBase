@@ -292,6 +292,78 @@ PROFILES = [
          # 2026-10-14: 化验表 OCR 导出为倒序四元组([值][↓][参考][单位][名]), 通用
          # 行式把"名"配到下一行值(谷草 27/165 错位) → 按院启用倒序四元组解析。
          reversed_dump=True),
+    # 崇左市人民医院(滕寿权, 2026-10-15 用户反馈): 结论段**只取"医生建议:"下内容** ——
+    # 报告前半为分科检查结果汇总(【血脂四项】/【肝功能】/【心电图】/【B超】…), 不属
+    # 总检结论; 通用锚点曾把汇总段一并收进结论。
+    dict(keywords=["崇左市人民医院"],
+         anchor_only=True,
+         extra_anchor=[r"^医生建议"]),
+    # === 2026-10-16: 第八批(11 份) ===
+    # 临沂市中医医院(李承龙): 与日照中医同模板, 结论标题为"医学建议"(无冒号), 通用锚点
+    # 不命中 → 专用锚点; 段尾由签名/页码断点收口。
+    dict(keywords=["临沂市中医医院"], anchor_only=True,
+         extra_anchor=[r"^医学建议"]),
+    # 昆明医科大学第一附属医院(陈婷婷): 结论 = "体检阳性结果分析及建议"下 1-21 条;
+    # 总检医生/日期签名插在第 13/14 条之间(跨页) → 跳过(extra_skip 优先于通用断点)。
+    dict(keywords=["昆明医科大学第一附属医院"], anchor_only=True,
+         extra_anchor=[r"^体检阳性结果分析及建议"],
+         # 总检医生/日期签名插在第 13/14 条之间; "主检医师温馨提示"是正文标题(非签名)
+         extra_skip=[r"^总检医生[:：]", r"^总检日期[:：]", r"^主检医师温馨提示"]),
+    # 温州医科大学附属第二医院(包强): 结论 = "主要健康问题与建议/次要健康问题与建议"
+    # (异常结果汇总表格与指标线重复, 不入结论); 段尾 = 体力活动问卷科普。
+    # 2026-10-16 用户反馈: "8、总体力活动低"的说明(IPAQ 段)属于该条内容 → 不截断,
+    # 段尾由主检医生签名收口; "PID：" 页眉字段跳过。
+    dict(keywords=["温州医科大学附属第二医院"], anchor_only=True,
+         extra_anchor=[r"^主要健康问题与建议"],
+         extra_skip=[r"^PID[:：]"]),
+    # 复旦大学附属中山医院厦门医院(陈佳漩): 结论 = "结论汇总"(一、一般检查…六、检验)
+    # + "结论分析"(逐项建议); 段尾 = 医学名词解析(科普)。
+    # 2026-10-16 用户口径: 只取"结论分析"段(结论汇总不入结论)
+    # no_colon_strip: 该段是"条目名:建议"标签式结构 —— 冒号剥离会把条目名全删掉
+    # (LLM 提取 0 条, 与恩施/江西边检同因), 发全文。
+    dict(keywords=["复旦大学附属中山医院"], anchor_only=True,
+         extra_anchor=[r"^结论分析"],
+         extra_break=[r"^医学名词解析"],
+         no_colon_strip=True),
+    # 联勤保障部队第910医院(陈坤铭): 结论 = "医生建议"下 1-11 条; 段尾签名/装订字段。
+    dict(keywords=["910医院"], anchor_only=True,
+         extra_anchor=[r"^医生建议[:：]"],
+         # 2026-10-16 用户反馈: 跨页页眉(日期/第N页/预约号/医院名)混入结论 → 跳过
+         extra_skip=[r"^审核时间[:：]", r"^装订", r"^日期[:：]",
+                     r"^第\s*\d*$", r"^\d+\s*页$", r"^预约号[:：]",
+                     r"^[/／]$", r"^联勤保障部队第910医院$"]),
+    # 开滦总医院(韩先锋): 结论 = "阳性结果汇总"段(逐条发现+建议); "合理建议"为模板
+    # 套话、其后为分科结果。目录行("2. 阳性结果汇总")不命中(用整行锚点)。
+    dict(keywords=["开滦总医院"], anchor_only=True,
+         extra_anchor=[r"^阳性结果汇总$"],
+         extra_break=[r"^合理建议", r"^补充说明"],
+         keep_bare_numbers=True,  # 2026-10-19: 条目序号(裸"1/2/3…")保留
+         # 2026-10-19: 名称折行 = 中文名 + 纯拉丁缩写("单核细胞百分数"/"MON%") → 合并
+         latin_wrap=True),
+    # 日照市中医医院(付本明/封猛): 跨页页眉(医院名/重复"健康建议：")混入结论 →
+    # 逐行跳过(用户反馈封猛: 跨页"健康建议："把句子割断)
+    dict(keywords=["日照市中医医院"],
+         extra_skip=[r"^健康建议[:：]$", r"^日照市中医医院(?:健康管理[（(]体检[)）]中心)?$",
+                     r"^美好人生", r"^登记号[:：]?"],
+         # 2026-10-19(用户口径): 结果非数字/文字参考且表内无标志的项(尿红细胞(隐血)+1/
+         # 尿蛋白弱阳性), 以总结段异常项给既有指标行标黄
+         summary_marks=True),
+    # 中国中医科学院望京医院(陈阳): 表内无提示列, 异常用红色字体标注 →
+    # red_marks_ref(用户 2026-10-19: 红色字体**超参考**才判黄; 无参考/范围内保持绿)
+    dict(keywords=["中国中医科学院望京医院"], red_marks_ref=True),
+    # 厦门大学附属中山医院(陈宏宏): 文本层字体映射乱码, 生产需 FORCE_OCR_TASKS 强制
+    # 逐页 OCR; 结论 = "体检结论分析"段。
+    dict(keywords=["厦门大学附属中山医院"], anchor_only=True,
+         extra_anchor=[r"^体检结论分析"]),
+    # 厦门大学附属心血管病医院(陈行富): 扫描混合件(hybrid OCR); 结论 = "体检结论分析"
+    # 段; 段尾裸日期页脚("2026-07-07")跳过(裸日期全局跳过会误伤存量(79 锁定漂移),
+    # 故按院声明)。
+    dict(keywords=["厦门大学附属心血管病医院"], anchor_only=True,
+         extra_anchor=[r"^体检结论分析"],
+         extra_skip=[r"^\d{4}-\d{1,2}-\d{1,2}$"],
+         # 2026-10-19: 结论跨页续段(前列腺增生/尿酮体/…/乙肝两对半)是图片块,
+         # 该页文本 135 字 > hybrid 阈值(100) 未 OCR → ocr_content 补 OCR
+         ocr_content_pages=True),
 
 ]
 
@@ -329,6 +401,11 @@ def match_profile(text: str) -> dict:
             merged["keep_post_sig"] = True
         if prof.get("keep_normal_numbered"):
             merged["keep_normal_numbered"] = True
+        # 2026-10-19: keep_bare_numbers(开滦 条目序号) 必须登记白名单
+        if prof.get("keep_bare_numbers"):
+            merged["keep_bare_numbers"] = True
+        if prof.get("latin_wrap"):
+            merged["latin_wrap"] = True
         if prof.get("ocr_content_pages"):
             merged["ocr_content_pages"] = True
         # 2026-10-12: 字距空格结论压缩写回(恩施州中心医院)白名单
@@ -339,6 +416,10 @@ def match_profile(text: str) -> dict:
         # 2026-10-13: 红字判黄按院声明(恩施)白名单
         if prof.get("red_marks"):
             merged["red_marks"] = True
+        if prof.get("red_marks_ref"):
+            merged["red_marks_ref"] = True
+        if prof.get("summary_marks"):
+            merged["summary_marks"] = True
         # 2026-10-13: tail_anchor 首块后移(漳州第三医院亚健康处方)白名单
         if prof.get("tail_anchor"):
             merged["tail_anchor"] = prof["tail_anchor"]

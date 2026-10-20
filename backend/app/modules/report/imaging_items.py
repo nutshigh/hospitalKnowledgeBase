@@ -52,6 +52,12 @@ _KEYWORD_RE = {name: re.compile(p) for name, p in _PATTERNS.items()}
 
 # === 过滤词表 ===
 # 化验词(匹配前删除; 长词优先防截断残留)
+# 2026-10-16: 科室名不是影像所见 —— "肾病科门诊就诊…"(尿常规建议)曾命中腹部+泌尿
+# 彩超关键词"肾"→ 假黄(陈佳漩, 用户质问黄区来源) → 科室名整体屏蔽。
+_DEPT_MASK = re.compile(
+    "肾病科|肾内科|肾脏内科|泌尿外科|泌尿科|肝胆外科|肝胆科|心内科|心血管内科|"
+    "消化内科|呼吸内科|内分泌科|甲状腺外科|乳腺外科|妇科|妇产科|眼科|耳鼻喉科|"
+    "口腔科|普外科|神经内科|神经外科|血液科|肿瘤科|风湿免疫科|胸外科|骨科")
 _LAB_MASK = re.compile("|".join(sorted([
     "肝功能", "肝纤维化检查", "肝功", "乙肝", "丙肝", "甲肝", "戊肝", "两对半", "肝炎病毒",
     "乙型肝炎", "丙型肝炎", "甲型肝炎", "戊型肝炎", "病毒性肝炎",
@@ -75,7 +81,7 @@ _SOXIN = re.compile(r"窦性心律(?![不齐过缓速缓慢偏])")
 _LAB_MARK = re.compile(
     "血脂|血糖|血尿酸|肌酐|尿素氮|载脂蛋白|甲胎蛋白|癌胚抗原|糖类抗原|FPSA|TPSA|"
     "同型半胱氨酸|铁蛋白|烯醇化酶|胃泌素|肌酸激酶|淀粉酶|脂肪酶|乳酸脱氢酶|转氨酶|"
-    "胆红素|白蛋白|球蛋白")
+    "胆红素|白蛋白|球蛋白|尿酸")
 # 科普/建议标记: 长句在首个标记处截断(仅扫前缀); "监测动态心电图"/"检查提示"例外
 _CUT = re.compile("|".join([
     "是指", "可见于", "常见于", "多见于", "发病率", "原因", "所致", "解释", "多数", "少数",
@@ -87,6 +93,9 @@ _CUT = re.compile("|".join([
     "中耳", "鼻炎", "鼓膜", "定期", "避免", "保持", "加强", "控制", "减轻", "摄入", "食用",
     "服用", "检查(?![提示发现所见结果显示可见])", "监测(?!动态心电图)", "手术史", "必要时", "诊治", "见于",
     "耳穴", "穴位",
+    # 2026-10-19(韩先锋假黄): 因果科普句("可造成心、脑、肾等重要脏器损害"/
+    # "轻微的上升可能与肝硬化、肝炎…")曾被部位词命中
+    "造成", "引起", "上升", "下降",
 ]))
 # 检查表头: 【…】内文以检查词结尾(可带结尾括号组; 003-26"螺旋CT平扫"类表头)
 _EXAM_END = re.compile(
@@ -173,7 +182,7 @@ def _scan_conclusion_text(text):
                         if m.start() == 0:
                             continue
                         core = core[:m.start()]
-                    masked = _LAB_MASK.sub("", _SOXIN.sub("", core))
+                    masked = _LAB_MASK.sub("", _DEPT_MASK.sub("", _SOXIN.sub("", core)))
                     for item in _match_items(masked):
                         levels.setdefault(item, "yellow")
                         if line not in evidence.setdefault(item, []):
@@ -189,7 +198,7 @@ def _entry_items(name) -> list:
     n = _collapse(str(name or ""))
     if not n or _NORMAL.search(n):
         return []
-    return _match_items(_LAB_MASK.sub("", n))
+    return _match_items(_LAB_MASK.sub("", _DEPT_MASK.sub("", n)))
 
 
 def build_imaging_items(conclusion_text, gender, entries=None) -> list:

@@ -1,9 +1,9 @@
 {
  "1": {
   "name": "测试5(崇左边境管理支队)",
-  "interp_id": 396,
-  "conclusion_len": 2302,
-  "conclusion_hash": "0a6335bad0331649",
+  "interp_id": 433,
+  "conclusion_len": 1976,
+  "conclusion_hash": "f2935f8a64f13057",
   "indicators": [
    [
     "L-γ-谷氨酰基转移酶",
@@ -40,6 +40,10 @@
   ],
   "conclusions": [
    [
+    "三尖瓣轻微反流",
+    "yellow"
+   ],
+   [
     "二尖瓣、三尖瓣少量返流",
     "yellow"
    ],
@@ -49,14 +53,6 @@
    ],
    [
     "右肾结石",
-    "yellow"
-   ],
-   [
-    "甲状腺双侧叶囊性病灶",
-    "yellow"
-   ],
-   [
-    "甲状腺左侧叶混合性病灶",
     "yellow"
    ],
    [

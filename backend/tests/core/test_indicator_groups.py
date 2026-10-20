@@ -124,3 +124,65 @@ def test_group_indicators_order_and_group():
     assert by_name["促甲状腺激素(TSH)测定"] == "甲状腺功能"
     assert by_name["甲胎蛋白(AFP)定量"] == "甲胎蛋白(AFP)定量"
     assert by_name["肿瘤特异生长因子"] is None
+
+def test_classify_shared_names_across_blood_and_urine():
+    """2026-10-19(用户反馈): 血/尿同名的单位消歧 —— 单位优先(10^9/10^12=血,
+    /μL、/HP=尿); 白带上下文把裸名 /HP 行归白带常规。"""
+    # 血单位(此前 10^9/L 被 /l 误当尿单位 → 血常规项整批误分尿常规)
+    assert classify("白细胞", "10^9/L") == "血常规"
+    assert classify("白细胞计数", "X10^9/L") == "血常规"
+    assert classify("红细胞计数", "X10^12/L") == "血常规"
+    assert classify("红细胞计数", "10~9/L") == "血常规"
+    # 尿/体液单位 → 尿常规(含血常规全名)
+    assert classify("红细胞数", "/μL") == "尿常规"
+    assert classify("白细胞计数", "/ul") == "尿常规"
+    assert classify("白细胞", "/HP") == "尿常规"
+    assert classify("镜检：白细胞数", "/HP") == "尿常规"
+    assert classify("白细胞", "g/L") not in (None,)  # g/L 不是尿单位
+
+
+def test_group_indicators_vaginal_same_name():
+    """陈婷婷: 血常规白细胞(10^9/L)、白带白细胞(/HP, 无镜检前缀)、尿镜检白细胞"""
+    rows = [
+        {"item_name": "白细胞", "result_value": "5.14", "unit": "10^9/L"},
+        {"item_name": "镜检：白细胞数", "result_value": "未检出", "unit": "/HP"},
+        {"item_name": "白细胞", "result_value": "15-30", "unit": "/HP"},
+        {"item_name": "清洁度", "result_value": "Ⅲ", "unit": None},
+        {"item_name": "加特纳球杆菌", "result_value": "阴性(-)", "unit": None},
+    ]
+    out, _order = group_indicators(rows)
+    got = [(r["item_name"], r.get("result_value"), r["group"]) for r in out]
+    assert ("白细胞", "5.14", "血常规") in got
+    assert ("镜检：白细胞数", "未检出", "尿常规") in got
+    assert ("白细胞", "15-30", "白带常规") in got
+    assert ("清洁度", "Ⅲ", "白带常规") in got
+    assert ("加特纳球杆菌", "阴性(-)", "白带常规") in got
+
+
+def test_group_indicators_blood_urine_duplicate_names():
+    """包强/陈佳漩: 红细胞数/白细胞计数 血尿同名 —— 按单位分开"""
+    rows = [
+        {"item_name": "红细胞计数(RBC)", "result_value": "5.36", "unit": "×10^12/L"},
+        {"item_name": "红细胞数", "result_value": "12", "unit": "/μL"},
+        {"item_name": "白细胞计数", "result_value": "6.57", "unit": "X10^9/L"},
+        {"item_name": "白细胞计数", "result_value": "90", "unit": "/ul"},
+    ]
+    out, _order = group_indicators(rows)
+    by = {(r["item_name"], r.get("result_value")): r["group"] for r in out}
+    assert by[("红细胞计数(RBC)", "5.36")] == "血常规"
+    assert by[("红细胞数", "12")] == "尿常规"
+    assert by[("白细胞计数", "6.57")] == "血常规"
+    assert by[("白细胞计数", "90")] == "尿常规"
+
+
+def test_bare_glucose_urine_vs_blood_disambiguated():
+    # 2026-10-19(韩先锋反馈): 同名"葡萄糖" 尿糖("-")归尿常规, 血糖(数值 mmol/L)归血糖
+    rows, _order = group_indicators([
+        {"item_name": "葡萄糖", "result_value": "-", "unit": None,
+         "ref_range_low": None, "ref_range_high": None, "category": None},
+        {"item_name": "葡萄糖", "result_value": "4.77", "unit": "mmol/L",
+         "ref_range_low": "3.9", "ref_range_high": "6.1", "category": None},
+    ])
+    by_result = {r["result_value"]: r["group"] for r in rows}
+    assert by_result["-"] == "尿常规"
+    assert by_result["4.77"] == "空腹血糖"

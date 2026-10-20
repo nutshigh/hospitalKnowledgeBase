@@ -26,14 +26,20 @@ from app.modules.report.service import (
     _locate_findings_sections, _remove_findings_section, _retarget_signal_name,
 )
 from app.modules.report.table_extractor import (
-    col_rows_with_fallback, extract_abnormal_signals, extract_indicator_rows,
-    extract_personal_info,
+    apply_redref_flags, col_rows_with_fallback, extract_abnormal_signals,
+    extract_indicator_rows, extract_personal_info,
 )
 from app.core.term_normalizer import normalize_indicators
 
 
-def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
-    text = _extract_pdf_text(pdf_path, hybrid=hybrid)
+def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
+             text_file: str = None) -> list[dict]:
+    # 2026-10-16: --force-ocr(文本层乱码件, 陈宏宏) / --text-file(复用已缓存 OCR 全文,
+    # 避免反复触发 OCR 长跑)
+    if text_file:
+        text = open(text_file, encoding="utf-8").read()
+    else:
+        text = _extract_pdf_text(pdf_path, hybrid=hybrid, force_ocr=force_ocr)
     match_profile, _compile = _load_report_profiles()
     profile = match_profile(text)
     compiled = _compile_profile_re(profile) if profile else {}
@@ -56,11 +62,13 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         text = _remove_findings_section(text, findings_sec)
 
     rows = extract_indicator_rows(
-        text, reversed_dump=bool(profile.get("reversed_dump")) if profile else False)
+        text, reversed_dump=bool(profile.get("reversed_dump")) if profile else False,
+        latin_wrap=bool(profile.get("latin_wrap")) if profile else False)
     col_rows = col_rows_with_fallback(pdf_path, text)
     signals = extract_abnormal_signals(
         pdf_path, skip_text=findings_sec or "",
-        red_marks=bool(profile.get("red_marks")) if profile else False)
+        red_marks=bool(profile.get("red_marks")) if profile else False,
+        red_ref=bool(profile.get("red_marks_ref")) if profile else False)
     # 2026-09-28: 信号通道误配折行名碎片(与 service.process_task 同构)
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
@@ -73,6 +81,17 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
             _s.get("item_name") or "", _s.get("result") or "",
             _name_pool, _full_by_result))
         for _s in signals
+    ]
+    # 2026-10-16: 信号通道把"参考值(阴性)+↑"配成信号行(陈坤铭 尿胆原) —— 同名
+    # 规则行已有不同结果且信号结果是 阴性/正常 类参考词 → 丢弃(与 service 同构)
+    _rule_res = {(r["item_name"]): (r.get("result") or "").strip()
+                 for r in list(col_rows) + list(rows)}
+    signals = [
+        _s for _s in signals
+        if not (_rule_res.get(_s.get("item_name"))
+                and _rule_res[_s["item_name"]] != (_s.get("result") or "").strip()
+                and re.fullmatch(r"(?:阴性|正常|未见异常|未见明显异常|[-—–])",
+                                 (_s.get("result") or "").strip()))
     ]
     # 2026-10-14: 倒序转储医院(江西边检) —— 信号通道反序表区错配守卫(与 service 同构)
     if profile and profile.get("reversed_dump"):
@@ -93,7 +112,8 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     }
     if col_flag_keys:
         signals = [s for s in signals if (s["item_name"], s["result"]) not in col_flag_keys]
-    signal_names = {(s["item_name"], s["result"]) for s in signals}
+    signal_names = {(s["item_name"], s["result"]) for s in signals
+                    if s.get("signal") != "redref"}
     arrow_keys = {
         (s["item_name"], s["result"]) for s in signals if s.get("signal") == "arrow"
     }
@@ -134,10 +154,28 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         if r["item_name"] not in auth_names:
             _rr = row_by_key.get(sig_key)
             if _rr:
-                if (not r.get("ref_low") and not r.get("ref_high")) \
-                        and (_rr.get("ref_low") or _rr.get("ref_high")):
+                def _f(v):
+                    try:
+                        return float(str(v))
+                    except (TypeError, ValueError):
+                        return None
+                _clo, _chi = _f(r.get("ref_low")), _f(r.get("ref_high"))
+                _rlo, _rhi = _f(_rr.get("ref_low")), _f(_rr.get("ref_high"))
+                _bad = (_clo is not None and _chi is not None and _chi <= _clo)
+                _rhi_s = str(_rr.get("ref_high") or "").strip()
+                _chi_s = str(r.get("ref_high") or "").strip()
+                _richer = bool(_chi is not None and _rhi is not None
+                               and _rhi > _chi and _chi_s and _rhi_s
+                               and _rhi_s.startswith(_chi_s) and _rhi_s != _chi_s)
+                if ((not r.get("ref_low") and not r.get("ref_high"))
+                        or _bad or _richer) \
+                        and _rlo is not None and _rhi is not None and _rhi > _rlo:
                     r["ref_low"], r["ref_high"] = _rr.get("ref_low"), _rr.get("ref_high")
-                if not r.get("unit") and _rr.get("unit"):
+                _cu = str(r.get("unit") or "").strip()
+                _ru = str(_rr.get("unit") or "").strip()
+                if _ru and (not _cu or (_cu.endswith("/") and _ru.startswith(_cu)
+                                       and len(_ru) > len(_cu))):
+                    r["unit"] = _rr["unit"]
                     r["unit"] = _rr.get("unit")
         indicators.append(r)
     for r in rows:
@@ -145,6 +183,13 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         if r["item_name"] in auth_names:
             continue
         if sig_key in col_keys:
+            continue
+        # 2026-10-19(韩先锋): 行式 result+unit == 列式 result → 列式更完整, 不重复建行
+        _row_full = (str(r.get("result") or "").strip() + " "
+                     + str(r.get("unit") or "").strip()).strip()
+        if any((c.get("item_name") or "").strip() == r["item_name"]
+               and str(c.get("result") or "").strip() == _row_full
+               for c in col_rows):
             continue
         sig = r.get("signal_flag", 0) or (
             2 if sig_key in arrow_keys else (1 if sig_key in signal_names else 0)
@@ -183,9 +228,17 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
             continue
         if "定性" in (_ind.get("item_name") or "") and str(_ind.get("result", "")).startswith("阳性"):
             _ind["signal_flag"] = 1
+    # 2026-10-19: 总结段异常项给既有行标黄(档案 summary_marks, 与 service 同构)
+    if profile and profile.get("summary_marks") and findings_sec:
+        from app.modules.report.table_extractor import mark_indicators_by_summary
+        mark_indicators_by_summary(indicators, findings_sec)
     # 2026-09-23: 姓名同名行清理(与 service.process_task 同构; 曹嘉冰封面"曹嘉冰/44")
-    from app.modules.report.table_extractor import extract_personal_info as _epi
+    from app.modules.report.table_extractor import (
+        extract_personal_info as _epi, extract_name_from_layout as _enfl, _name_ok)
     _pname = (_epi(text).get("name") or "").strip()
+    _lay = _enfl(pdf_path)
+    if _lay and _name_ok(_lay):
+        _pname = _lay
     if _pname:
         indicators = [i for i in indicators
                       if (i.get("item_name") or "").strip() != _pname]
@@ -224,7 +277,7 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
     _sig_f_by_name: dict = {}
     for _s in signals:
         _n = (_s.get("item_name") or "").strip()
-        if not _n:
+        if not _n or _s.get("signal") == "redref":
             continue
         _f = 2 if _s.get("signal") == "arrow" else 1
         _sig_f_by_name[_n] = max(_sig_f_by_name.get(_n, 0), _f)
@@ -234,16 +287,23 @@ def assemble(pdf_path: str, hybrid: bool = False) -> list[dict]:
         _f = _sig_f_by_name.get((_r.get("item_name") or "").strip(), 0)
         if _f and (_r.get("signal_flag") or 0) < _f:
             _r["signal_flag"] = _f
-    return normalize_indicators(indicators)
+    indicators = normalize_indicators(indicators)
+    # 2026-10-19: 红字+超参考 → f1(望京, 与 service 同构)
+    apply_redref_flags(indicators, signals)
+    return indicators
 
 
 def main():
     pdf = sys.argv[1]
     hybrid = "--hybrid" in sys.argv
+    force_ocr = "--force-ocr" in sys.argv
+    text_file = None
+    if "--text-file" in sys.argv:
+        text_file = sys.argv[sys.argv.index("--text-file") + 1]
     report_id = None
     if "--report-id" in sys.argv:
         report_id = int(sys.argv[sys.argv.index("--report-id") + 1])
-    inds = assemble(pdf, hybrid=hybrid)
+    inds = assemble(pdf, hybrid=hybrid, force_ocr=force_ocr, text_file=text_file)
     print(f"assemble: {len(inds)} 行")
     flagged = sorted((i["item_name"], i["result"]) for i in inds if i.get("signal_flag"))
     print(f"带标志(黄候选) {len(flagged)}:")

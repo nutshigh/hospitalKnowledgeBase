@@ -26,6 +26,7 @@ from app.modules.report.service import (  # noqa: E402
     _retarget_signal_name,
 )
 from app.modules.report.table_extractor import (  # noqa: E402
+    apply_redref_flags,
     col_rows_with_fallback,
     extract_abnormal_signals,
     extract_indicator_rows,
@@ -90,11 +91,13 @@ def _extract(pdf):
     # 信号通道折行名碎片改挂全名(曾繁鲁"[HR]乙型肝炎表面抗体测定(HBsAb)")
     t2 = _remove_findings_section(t, sec) if sec and len(sec) > 50 else t
     rows = extract_indicator_rows(
-        t2, reversed_dump=bool(comp.get("reversed_dump")))
+        t2, reversed_dump=bool(comp.get("reversed_dump")),
+        latin_wrap=bool(comp.get("latin_wrap")))
     col_rows = col_rows_with_fallback(pdf, t2)
     signals = extract_abnormal_signals(
         pdf, skip_text=sec or "",
-        red_marks=bool(comp.get("red_marks")))
+        red_marks=bool(comp.get("red_marks")),
+        red_ref=bool(comp.get("red_marks_ref")))
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
     _full_by_result: dict = {}
@@ -123,7 +126,8 @@ def _extract(pdf):
                     and _num_by_name[_s["item_name"]] != (_s.get("result") or "").strip()
                     and not re.search(r"\d", (_s.get("result") or "")))
         ]
-    signal_names = {(s["item_name"], s["result"]) for s in signals}
+    signal_names = {(s["item_name"], s["result"]) for s in signals
+                    if s.get("signal") != "redref"}
     arrow_keys = {(s["item_name"], s["result"]) for s in signals if s.get("signal") == "arrow"}
     indicators = []
     seen_sig = set()
@@ -150,15 +154,39 @@ def _extract(pdf):
         best = max(r.get("signal_flag") or 0, row_flag_map.get(sig_key, 0), sf)
         r["signal_flag"] = best
         rr = row_by_key.get(sig_key)
-        if rr and (not r.get("ref_low") and not r.get("ref_high")) \
-                and (rr.get("ref_low") or rr.get("ref_high")):
-            r["ref_low"], r["ref_high"] = rr.get("ref_low"), rr.get("ref_high")
-        if rr and not r.get("unit") and rr.get("unit"):
-            r["unit"] = rr.get("unit")
+        if rr:
+            def _f(v):
+                try:
+                    return float(str(v))
+                except (TypeError, ValueError):
+                    return None
+            _clo, _chi = _f(r.get("ref_low")), _f(r.get("ref_high"))
+            _rlo, _rhi = _f(rr.get("ref_low")), _f(rr.get("ref_high"))
+            _bad = (_clo is not None and _chi is not None and _chi <= _clo)
+            _rhi_s = str(rr.get("ref_high") or "").strip()
+            _chi_s = str(r.get("ref_high") or "").strip()
+            _richer = bool(_chi is not None and _rhi is not None
+                           and _rhi > _chi and _chi_s and _rhi_s
+                           and _rhi_s.startswith(_chi_s) and _rhi_s != _chi_s)
+            if ((not r.get("ref_low") and not r.get("ref_high"))
+                    or _bad or _richer) \
+                    and _rlo is not None and _rhi is not None and _rhi > _rlo:
+                r["ref_low"], r["ref_high"] = rr.get("ref_low"), rr.get("ref_high")
+            _cu = str(r.get("unit") or "").strip()
+            _ru = str(rr.get("unit") or "").strip()
+            if _ru and (not _cu or (_cu.endswith("/") and _ru.startswith(_cu)
+                                   and len(_ru) > len(_cu))):
+                r["unit"] = rr["unit"]
         indicators.append(r)
     for r in rows:
         sig_key = (r["item_name"], r["result"])
         if sig_key in col_keys:
+            continue
+        _row_full = (str(r.get("result") or "").strip() + " "
+                     + str(r.get("unit") or "").strip()).strip()
+        if any((c.get("item_name") or "").strip() == r["item_name"]
+               and str(c.get("result") or "").strip() == _row_full
+               for c in col_rows):
             continue
         sig = r.get("signal_flag", 0) or (
             2 if sig_key in arrow_keys else (1 if sig_key in signal_names else 0))
@@ -169,6 +197,10 @@ def _extract(pdf):
         indicators.append({"item_name": r["item_name"], "result": r["result"],
                            "unit": r.get("unit", ""), "ref_low": r.get("ref_low"),
                            "ref_high": r.get("ref_high"), "signal_flag": sig})
+    # 2026-10-19: 总结段异常项给既有行标黄(档案 summary_marks, 与 service 同构)
+    if comp.get("summary_marks") and sec:
+        from app.modules.report.table_extractor import mark_indicators_by_summary
+        mark_indicators_by_summary(indicators, sec)
     # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(与 service 同构)
     _csrc_only = (
         {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
@@ -185,7 +217,7 @@ def _extract(pdf):
     _sig_f_by_name: dict = {}
     for _s in signals:
         _n = (_s.get("item_name") or "").strip()
-        if not _n:
+        if not _n or _s.get("signal") == "redref":
             continue
         _f = 2 if _s.get("signal") == "arrow" else 1
         _sig_f_by_name[_n] = max(_sig_f_by_name.get(_n, 0), _f)
@@ -200,7 +232,10 @@ def _extract(pdf):
             continue
         if "定性" in (ind.get("item_name") or "") and str(ind.get("result", "")).startswith("阳性"):
             ind["signal_flag"] = 1
-    return normalize_indicators(indicators)
+    indicators = normalize_indicators(indicators)
+    # 2026-10-19: 红字+超参考 → f1(望京, 与 service 同构)
+    apply_redref_flags(indicators, signals)
+    return indicators
 
 
 def _to_num(v):
@@ -307,6 +342,11 @@ B7 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "0-第7批")
+# 2026-10-19: 第八批样例目录(H004 88-92...)
+B8 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "0-第8批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -387,6 +427,22 @@ _BASELINE_CASES = {
     "任晓光": ("h004", "84", os.path.join(B7, "任晓光07581X.pdf")),
     "石硕": ("h004", "85", os.path.join(B7, "石硕 120015.pdf")),
     "杨钧予": ("h004", "86", os.path.join(B7, "杨钧予 164419.pdf")),
+    # 2026-10-19: 第八批前 5 份验收 —— 文本规则链可复现的 4 份(88/90/91/92);
+    # 89 陈宏宏 = 文本层乱码(生产 FORCE_OCR_TASKS), 规则链无产物 → 由 DB 三件套守。
+    "包强": ("h004", "88", os.path.join(B8, "包强084038.pdf")),
+    "陈佳漩": ("h004", "90", os.path.join(B8, "陈佳漩+311944.pdf")),
+    "陈坤铭": ("h004", "91", os.path.join(B8, "陈坤铭150078.pdf")),
+    "陈婷婷": ("h004", "92", os.path.join(B8, "陈婷婷276320.pdf")),
+    # 2026-10-20: 第八批后 6 份验收 —— 文本规则链可复现的 5 份(94 陈阳/95 封猛/
+    # 96 付本明/97 韩先锋/98 李承龙; 94 红字通道 red_marks_ref、95/96 总结段标黄
+    # summary_marks、97 latin_wrap+keep_bare_numbers 已同步进护栏链)。
+    # 93 陈行富 = 扫描混合件(生产 ocr_content OCR, 规则链无产物) → 不纳入, 由 DB
+    # 三件套与结论护栏守。
+    "陈阳": ("h004", "94", os.path.join(B8, "陈阳144428.pdf")),
+    "封猛": ("h004", "95", os.path.join(B8, "封猛196030.pdf")),
+    "付本明": ("h004", "96", os.path.join(B8, "付本明160910无结论段.pdf")),
+    "韩先锋": ("h004", "97", os.path.join(B8, "韩先锋_6762853_5.pdf")),
+    "李承龙": ("h004", "98", os.path.join(B8, "李承龙291816.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

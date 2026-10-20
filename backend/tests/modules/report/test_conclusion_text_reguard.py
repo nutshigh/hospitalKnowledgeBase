@@ -62,6 +62,8 @@ B5 = os.path.join(REPO, "体检报告样例", "0-第5批")
 B6 = os.path.join(REPO, "体检报告样例", "0-第6批")
 # 2026-10-13: 第七批样例目录(H004 77-87)
 B7 = os.path.join(REPO, "体检报告样例", "0-第7批")
+# 2026-10-19: 第八批样例目录(H004 88-92...)
+B8 = os.path.join(REPO, "体检报告样例", "0-第8批")
 BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 CASES = {
@@ -154,6 +156,21 @@ CASES = {
     ("h004", "85"): os.path.join(B7, "石硕 120015.pdf"),
     ("h004", "86"): os.path.join(B7, "杨钧予 164419.pdf"),
     ("h004", "87"): os.path.join(B7, "邹佶博151311.pdf"),
+    # 第八批前 5 份(2026-10-19 用户验收): 88/90/91/92 文本链可复现; 89 文本层乱码
+    # (生产 FORCE_OCR_TASKS 强制 OCR) → 离线锁
+    ("h004", "88"): os.path.join(B8, "包强084038.pdf"),
+    ("h004", "89"): os.path.join(B8, "陈宏宏194027.pdf"),
+    ("h004", "90"): os.path.join(B8, "陈佳漩+311944.pdf"),
+    ("h004", "91"): os.path.join(B8, "陈坤铭150078.pdf"),
+    ("h004", "92"): os.path.join(B8, "陈婷婷276320.pdf"),
+    # 第八批后 6 份(2026-10-20 用户验收): 94/95/97/98 文本链可复现; 93 扫描混合件
+    # (生产 ocr_content OCR) / 96 无结论段样本 → 离线锁
+    ("h004", "93"): os.path.join(B8, "陈行富284014.pdf"),
+    ("h004", "94"): os.path.join(B8, "陈阳144428.pdf"),
+    ("h004", "95"): os.path.join(B8, "封猛196030.pdf"),
+    ("h004", "96"): os.path.join(B8, "付本明160910无结论段.pdf"),
+    ("h004", "97"): os.path.join(B8, "韩先锋_6762853_5.pdf"),
+    ("h004", "98"): os.path.join(B8, "李承龙291816.pdf"),
 }
 
 # hash == 验收基线(2026-09-15 基线重生成后 24 份; 含原 PENDING 6 份与
@@ -180,6 +197,10 @@ MATCH = {
     ("h004", "78"), ("h004", "80"),
     # 第七批后 6 份(2026-10-14 验收): 82 黄佳军/83 纪卓武/86 杨钧予
     ("h004", "82"), ("h004", "83"), ("h004", "86"),
+    # 第八批前 5 份(2026-10-19 验收): 88 包强/90 陈佳漩/91 陈坤铭/92 陈婷婷
+    ("h004", "88"), ("h004", "90"), ("h004", "91"), ("h004", "92"),
+    # 第八批后 6 份(2026-10-20 验收): 94 陈阳/95 封猛/97 韩先锋(keep_bare_numbers)/98 李承龙
+    ("h004", "94"), ("h004", "95"), ("h004", "97"), ("h004", "98"),
 }
 
 # 离线链(hybrid=False)与生产链条不等价: 扫描/图片件(离线取不到段), 或生产链
@@ -226,6 +247,13 @@ HYBRID = {
     ("h004", "84"): "da39a3ee5e6b4b0d",
     ("h004", "85"): "da39a3ee5e6b4b0d",
     ("h004", "87"): "da39a3ee5e6b4b0d",
+    # 第八批: 89 陈宏宏 —— 文本层字体映射乱码(生产 FORCE_OCR_TASKS=89), 离线锁(空);
+    # 生产结论文本由 DB 三件套守
+    ("h004", "89"): "da39a3ee5e6b4b0d",
+    # 第八批后 6 份(2026-10-20): 93 陈行富(扫描混合件, 生产 ocr_content OCR → 离线空产物);
+    # 96 付本明(无结论段样本, 离线无段 → 空产物锁; 生产 conclusion_text 为 NULL)
+    ("h004", "93"): "da39a3ee5e6b4b0d",
+    ("h004", "96"): "da39a3ee5e6b4b0d",
 }
 
 BASELINE = {
@@ -261,7 +289,8 @@ def _re_extract_text(key):
         extra_anchor_re=compiled.get("extra_anchor_re"),
         anchor_only=bool(compiled.get("anchor_only")),
         keep_post_sig=bool(compiled.get("keep_post_sig")),
-        keep_normal_numbered=bool(compiled.get("keep_normal_numbered")))
+        keep_normal_numbered=bool(compiled.get("keep_normal_numbered")),
+        keep_bare_numbers=bool(compiled.get("keep_bare_numbers")))
     if not (section and len(section) > 50):
         return None
     if profile and profile.get("table_conclusion"):

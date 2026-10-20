@@ -39,9 +39,11 @@ SAMPLES = [
          expected_titles=["超重", "肝小囊肿", "胆囊息肉样病变", "二尖瓣返流"]),
     dict(key="chongzuo_tengshouquan", rel="广西体检报告测试/广西崇左市人民医院.pdf",
          indicator_expected=['身高体重指数', '低密度脂蛋白胆固醇', '甘油三酯', '丙氨酸氨基转移酶', 'L-γ-谷氨酰基转移酶'],
-         must_contain=["【血脂四项】", "低密度脂蛋白增高4.73mmol/L", "脂肪肝声像"],
+         # 2026-10-15 用户口径(滕寿权): 结论段**只取"医生建议:"下内容** —— 报告前半的
+         # 分科检查结果汇总(【血脂四项】/…/脂肪肝声像)不再属于结论; 断言改为建议段内容。
+         must_contain=["医生建议", "低密度脂蛋白增高4.73mmol/L", "【脂肪肝】【超重】"],
          forbidden=["请关注您", "您的健康", "0773"],
-         expected_titles=["血脂异常", "右肾囊肿", "甲状腺双侧叶囊性病灶"]),
+         expected_titles=["甲状腺结节", "血脂异常", "右肾囊肿"]),
     dict(key="baise_liudan", rel="广西体检报告测试/广西百色市右江民族医学院附属医院.pdf",
          indicator_expected=['总胆固醇', '低密度脂蛋白胆固醇', '总胆红素', '载脂蛋白B', '血小板分布宽度'],
          must_contain=["体检结论分析", "幽门螺旋杆菌感染", "胆红素偏高"],
@@ -262,4 +264,29 @@ SAMPLES = [
          smoke=True, min_len=700),    # 漳州市医院: "本次体检*提示"
     dict(key="huangjiajun_h004", rel="0-第7批/黄佳军218016.pdf",
          smoke=True, min_len=700),    # 恩施州中心医院: 只取"本次健康建议"(用户验收)
+    # === 2026-10-16: 第八批(11 份) ===
+    # 付本明("无结论段")不登记普通样本 —— 见 test_conclusion_regression 的
+    # test_no_conclusion_sample(报告本身无总检建议段, 断言定位返回 None)。
+    dict(key="b8_baoqiang", rel="0-第8批/包强084038.pdf",
+         smoke=True, min_len=1200),   # 温州医科大学附属第二医院: 主要健康问题与建议
+    dict(key="b8_fengmeng", rel="0-第8批/封猛196030.pdf",
+         smoke=True, min_len=1100),   # 日照市中医医院: 健康建议
+    dict(key="b8_lichenglong", rel="0-第8批/李承龙291816.pdf",
+         smoke=True, min_len=750),    # 临沂市中医医院: 医学建议
+    dict(key="b8_chenjiaxuan", rel="0-第8批/陈佳漩+311944.pdf",
+         smoke=True, min_len=250),    # 复旦中山厦门: 只取"结论分析"段(用户口径)
+    dict(key="b8_chenkunming", rel="0-第8批/陈坤铭150078.pdf",
+         smoke=True, min_len=850),    # 联勤保障部队第910医院: 医生建议
+    dict(key="b8_chentingting", rel="0-第8批/陈婷婷276320.pdf",
+         smoke=True, min_len=1150),   # 昆明医科大学第一附属医院: 阳性结果分析及建议
+    dict(key="b8_chenyang", rel="0-第8批/陈阳144428.pdf",
+         smoke=True, min_len=350),    # 望京医院: 总检结论与建议
+    dict(key="b8_hanxianfeng", rel="0-第8批/韩先锋_6762853_5.pdf",
+         smoke=True, min_len=700),    # 开滦总医院: 阳性结果汇总
+    dict(key="b8_chenhonghong", rel="0-第8批/陈宏宏194027.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    # ^ 厦门大学附属中山医院: 文本层字体映射乱码(生产 FORCE_OCR_TASKS 强制 OCR)
+    dict(key="b8_chenxingfu", rel="0-第8批/陈行富284014.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    # ^ 厦门大学附属心血管病医院: 扫描混合件(生产 hybrid OCR)
 ]

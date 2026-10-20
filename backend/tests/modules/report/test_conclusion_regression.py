@@ -104,6 +104,25 @@ def test_smoke_polish(sample):
             assert bad not in ln, f"[{sample['key']}] 冒烟脏行: {bad!r} 于 {ln[:50]!r}"
 
 
+def test_no_conclusion_sample_returns_none():
+    """付本明(0-第8批, 文件名即"无结论段"): 报告无总检建议/结论段 → 锚点定位必须
+    返回 None, 不得把分科的"检查结论"误收进结论段(用户点名样本, 2026-10-16)。"""
+    from app.modules.report.service import _strip_ocr_html
+    pdf = str(SAMPLES_ROOT / "0-第8批" / "付本明160910无结论段.pdf")
+    if not __import__("os").path.exists(pdf):
+        pytest.skip("样本缺失")
+    doc = fitz.open(pdf)
+    full = "\n".join(
+        f"--- Page {i+1} ---\n" + doc[i].get_text() for i in range(doc.page_count))
+    doc.close()
+    prof = compile_profile(match_profile(full))
+    section = _locate_findings_sections(
+        _strip_ocr_html(full), extra_break_re=prof["extra_break_re"],
+        extra_skip_re=prof["extra_skip_re"], extra_anchor_re=prof["extra_anchor_re"],
+        anchor_only=bool(prof.get("anchor_only")))
+    assert section is None, f"无结论段报告不应定位到段: {(section or '')[:120]!r}"
+
+
 @pytest.mark.parametrize("sample", TITLE_SAMPLES, ids=[s["key"] for s in TITLE_SAMPLES])
 def test_deterministic_titles(sample):
     text = _polish(sample)

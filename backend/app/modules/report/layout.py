@@ -219,7 +219,9 @@ _ROLE_WORDS = {
     "name": ("项目名称", "检验项目", "检查项目", "检查项目名称", "指标名称",
              "检查内容", "测定项目", "序号项目名称", "项目"),
     "result": ("检查结果", "结果", "本次结果", "测定值"),
-    "prev": ("上次结果", "历史结果"),
+    # 2026-10-16: 6 列表(项目|单位|结果|参考值|上次|上上次2025-06-20, 陈坤铭) ——
+    # 后两列是历史结果, 不入库(曾把"上上次"列值当本次结果/并进名称)
+    "prev": ("上次结果", "历史结果", "上上次", "上次", "历次结果"),
     "ref": ("参考值", "参考范围", "正常值", "提示参考范围"),
     "unit": ("单位",),
     "flag": ("提示", "标志", "异常标识", "临床意义"),
@@ -261,6 +263,15 @@ def header_roles(cells: List[VRow]) -> Optional[List[Optional[str]]]:
     """表头逻辑行 → 角色序列(按 x 序); 非表头行返回 None。
     判定: ≥2 个 cell 命中角色词且含 result 与 name/或列数 ≥3 且含 result。"""
     roles = [cell_role(c.text.strip()) for c in cells]
+    # 2026-10-19(韩先锋, 用户确认): "检测值|结果"双值表 —— 检测值=主结果(2+/
+    # 阴性Hp(-)/25), 结果列=计数值/报告方标注(50, 任何非空=异常标记, flag2)。
+    _texts = ["".join((c.text or "").split()) for c in cells]
+    if any("检测值" in t for t in _texts):
+        for _i, _t in enumerate(_texts):
+            if "检测值" in _t:
+                roles[_i] = "result"
+            elif "结果" in _t and roles[_i] == "result":
+                roles[_i] = "flag2"
     words = [r for r in roles if r]
     if len(words) >= 2 and "result" in words and (len(cells) >= 3 or "name" in words):
         return roles

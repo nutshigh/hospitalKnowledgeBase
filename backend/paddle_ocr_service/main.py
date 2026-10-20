@@ -123,6 +123,8 @@ def ocr(req: OcrRequest):
             with _stats_lock:
                 _stats["failed"] += 1
             logger.exception("predict failed image=%s", img_path)
+            # 注(2026-10-16 实测): 进程内重建 pipeline 无法恢复 int(Tensor) 故障
+            # (paddlex vlm worker 状态已坏), 可靠路径是进程级重启(ocr_watchdog)。
             raise
         finally:
             with _stats_lock:

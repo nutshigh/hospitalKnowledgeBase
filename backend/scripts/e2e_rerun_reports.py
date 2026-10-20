@@ -102,6 +102,11 @@ def wipe(db: str, report_id: int, mode: str):
         cur.execute(f"DELETE FROM {db}.report_interpretation WHERE report_id=%s", (report_id,))
         if mode == "reprocess":
             cur.execute(f"DELETE FROM {db}.report_indicator WHERE report_id=%s", (report_id,))
+            # 2026-10-16: 结论文本也清空 —— process_task 仅在提取到结论时赋值, 不清会
+            # 残留旧结论("无结论段"报告 96 曾残留 LLM 壳结论 20 字)
+            cur.execute(
+                f"UPDATE {db}.report_info SET conclusion_text=NULL, parsed_name=NULL "
+                f"WHERE id=%s", (report_id,))
         c.commit()
     finally:
         c.close()
@@ -192,23 +197,60 @@ def main():
             return
 
     bases = {rid: snapshot(args.db, rid) for rid in report_ids}
+
+    def _ocr_ready(timeout_s=600) -> bool:
+        """OCR 故障等待: 真实小图探活(与看门狗同款), 直到服务恢复。"""
+        import httpx as _httpx
+        from app.core.ocr_watchdog import PROBE_IMAGE_B64
+        base = os.environ.get("OCR_BASE_URL", "http://localhost:8001").rstrip("/")
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                r = _httpx.post(f"{base}/ocr",
+                                json={"image_base64": PROBE_IMAGE_B64}, timeout=60)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            time.sleep(10)
+        return False
+
     for rid in report_ids:
-        wipe(args.db, rid, args.mode)
         if args.mode == "reprocess":
             from app.core.database import get_session
+            from app.core.vlm_client import OcrUnavailableError
             from app.modules.report.service import process_task
-            s = get_session(args.db)
-            try:
-                t0 = time.time()
-                process_task(s, rid, hospital_id)
-                s.commit()
-                # 2026-10-07: process_task 末尾已 publish interpretation(生产同路径),
-                # 此处不再补投 —— 否则每报告两条消息 → 两 worker 并发跑两版解读
-                # (旧版被删成孤儿判定, H004 曾积累 4031 条; 已一次性清理)
-                print(f"  [{rid}] process ok ({time.time()-t0:.0f}s) "
-                      f"(interp published by process_task)", flush=True)
-            finally:
-                s.close()
+            # 2026-10-16: OCR 长跑偶发 int(Tensor) 崩溃(上游) → 看门狗自愈期间本报告
+            # 会抛 OcrUnavailableError; 工具等待 OCR 恢复后 wipe 重跑(最多 2 次额外)。
+            for _attempt in range(3):
+                wipe(args.db, rid, args.mode)
+                s = get_session(args.db)
+                try:
+                    t0 = time.time()
+                    process_task(s, rid, hospital_id)
+                    s.commit()
+                    # 2026-10-07: process_task 末尾已 publish interpretation(生产同路径),
+                    # 此处不再补投 —— 否则每报告两条消息 → 两 worker 并发跑两版解读
+                    # (旧版被删成孤儿判定, H004 曾积累 4031 条; 已一次性清理)
+                    print(f"  [{rid}] process ok ({time.time()-t0:.0f}s) "
+                          f"(interp published by process_task)", flush=True)
+                    break
+                except OcrUnavailableError as _e:
+                    s.rollback()
+                    if _attempt >= 2:
+                        print(f"  [{rid}] OCR outage 3 次仍失败, 跳过继续后续报告: {_e}",
+                              flush=True)
+                        break
+                    print(f"  [{rid}] OCR outage, wait recovery then retry "
+                          f"({_attempt + 1}/2): {_e}", flush=True)
+                    _ocr_ready()
+                except Exception as _e:
+                    # 单报告失败不中断整批(2026-10-16): 记录并继续后续报告
+                    s.rollback()
+                    print(f"  [{rid}] process failed (skip, continue): {_e}", flush=True)
+                    break
+                finally:
+                    s.close()
         else:
             publish(hospital_id, rid)
             print(f"  [{rid}] published", flush=True)
