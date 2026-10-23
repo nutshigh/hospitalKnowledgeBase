@@ -150,12 +150,13 @@ _SKIP_NAMES = re.compile(
     r"主检医师|总检医师|总检建议与结论|温馨提示|说明[:：]|单位名称|单位备注|样本编号|"
     r"团体|序号|初步意见|合理建议|补充说明|参检单位|受检单位|室间隔厚度|左室后壁厚度|^的[\d.]+倍|"
     r"第\s*\d+\s*页|第|页/共|页|一般项目|内科查体|外科查体|一般检查|龄|"
-    r"参考范围|正常范围|参考区间|历史结果|提示参考范围|体检健康建议|健康建议|"
+    r"参考范围|单位参考范围|正常范围|参考区间|历史结果|提示参考范围|体检健康建议|健康建议|"
     r"总检建议|检查所见|"
     r"个/[\wμµ]+|个/视野|其它$|小结[:：]?$|体检$|住院号|病室|"
     r"报告日期|图像层厚|层距|电话|手机|终审日期|初审日期|打印日期|接收日期|总检时间|总审时间|总计|日期|"
     r"体检号[:：]?|体检者|体检号码|总检日期|查\s*体\s*号|查体日期|出生日期|档案ID|咨询电话|"
-    r"服务热线|服务时间|报告编号|登记号|检查时间|检查医生|检查结论|体检条码|条码|男$|女$|每$|法$|缘$|白A|"
+    r"服务热线|服务时间|报告编号|登记号|检查时间|检查医生|检查结论|体检条码|条码|查询报告|查询|医疗服务|扫码关注|扫码|"
+    r"^小于|^大于|^请尽快|^若出现任何症状|男$|女$|每$|法$|缘$|白A|"
     r"参考值|次/分|"
     r"单位[:：]|单位$|部门[:：]|体检报告|健康体检报告|本体检报告|"
     r"体重超过标准体重|边缘|合适水平|升高|降低|提示|异常|现病史|既往史|家族史|"
@@ -195,7 +196,9 @@ _SKIP_SUB_RE = re.compile(
     # 2026-10-14: 表头"正常参考值"列与前一行并名("正常参考值身高", 纪卓武);
     # "小结"尾缀合并名("辨色力正常小结"/"正常心电图小结"); 报告单头合并名
     # ("尿液分析检验报告单条码号"/"敦煌康美综合医院报告单标本号")
-    r"正常参考值|小结$|报告单|条码号|标本号|诊断意见|上上次|上次|附属|预约号|注意事项)"
+    r"正常参考值|小结$|报告单|条码号|标本号|诊断意见|上上次|上次|附属|预约号|注意事项|"
+    r"检查项目|采样时间|报告解读专线|爱康|用[⼾户]ID|试验[）)]$|[0-9A-F]{20,}|V\d+V\d+|"
+    r"操作[:：]|审核[:：]|男\s*[·•]|不适感觉|您于\d{4})"
 )
 
 
@@ -228,7 +231,8 @@ def _skip_name(s: str) -> bool:
         return True
     if _REPEAT_CHAR_JUNK_RE.match((s or "").strip()):
         return True  # 重复字装饰行
-    t = re.sub(r"\s+", "", s or "")
+    from app.core.term_normalizer import normalize_compat_chars
+    t = normalize_compat_chars(re.sub(r"\s+", "", s or ""))
     if _NAME_MEAS_RE.search(t):
         return True  # 2026-10-19: 名称内嵌测量值("室间隔厚度10mm…")是并格垃圾
     return bool(t != s and (_SKIP_NAMES.match(t) or _SKIP_SUB_RE.search(t)))
@@ -281,6 +285,15 @@ def _junk_row_cell(name: str, unit: str = "", result: str = "") -> bool:
     if (n.count("(") + n.count("（")) > (n.count(")") + n.count("）")):
         return True
     if unit and _JUNK_UNIT_MERGE_RE.search(unit):
+        return True
+    # 2026-10-20: 健康管理专家联系表(宋玉枣"乳腺结节|罗飞鹏|13887804240")
+    # 结果/单位是 11 位手机号 → 非指标行。
+    _phone_re = re.compile(r"^1[3-9]\d{9}$")
+    if _phone_re.match((result or "").strip()) or _phone_re.match((unit or "").strip()):
+        return True
+    if re.fullmatch(r"\d{1,3}", (result or "").strip()) and (
+            n in ("心电图", "心脏彩超", "双侧锁骨下动脉", "泌尿系超声-男")
+            or re.search(r"(?:超声|彩超|动脉)$", n)):
         return True
     if _EXAM_PART_JUNK_RE.match(n) and _NORMAL_RESULT_RE.match((result or "").strip()):
         return True
@@ -377,7 +390,7 @@ def _merge_range_fragments(lines: list[str]) -> list[str]:
     out: list[str] = []
     i = 0
     n = len(lines)
-    _rng = re.compile(r"^[<>≤≥]?\s*([\d.]+)\s*[-~－—]\s*([\d.]+)\s*$")
+    _rng = re.compile(r"^[<>≤≥]?\s*([\d.]+)\s*[-~－—]{1,2}\s*([\d.]+)\s*$")
 
     def _dec(x: str) -> int:
         return len(x.split(".")[1]) if "." in x else 0
@@ -451,7 +464,9 @@ def _merge_para_wrap(lines: list[str]) -> list[str]:
 def _parse_ref(rest: str) -> tuple[Optional[str], Optional[str]]:
     """从行内剩余文本解析参考范围: "3.1-5.7" / "1.16--1.42" / "<5.2" / ">1.04" / "～5.20" / "(18-24)"。
     2026-08-31: 容忍 ↑/↓ 异常前缀(广西人民"↑208～428" —— ↑ 是报告方异常标记, 非 ref 一部分)。
+    2026-10-21: 中文单限("小于2.25"/"大于0.90")归一为符号。
     """
+    rest = (rest or "").replace("小于", "<").replace("大于", ">")
     m = re.search(r"\(?([<>＜＞≤≥↑↓]?[\d.]+\s*[-~～至–—]{1,2}\s*[\d.]+|[<>＜＞≤≥~～]\s*[\d.]+)\)?", rest)
     if not m:
         return None, None
@@ -775,12 +790,14 @@ def extract_indicator_rows(text: str, keep_bare_arrow: bool = False,
         _page: list[str] = []
         for _ln in lines:
             if _ln.startswith("--- "):
-                if _page and not _is_non_indicator_table_page(_page):
+                if (_page and not _is_non_indicator_table_page(_page)
+                        and not _is_multi_value_history_page(_page)):
                     _kept.extend(_page)
                 _page = [_ln]
             else:
                 _page.append(_ln)
-        if _page and not _is_non_indicator_table_page(_page):
+        if (_page and not _is_non_indicator_table_page(_page)
+                and not _is_multi_value_history_page(_page)):
             _kept.extend(_page)
         lines = _kept
     # 2026-10-14: 倒序四元组先解析并从行式输入剔除消费行(防"名配下一行值"错位)。
@@ -1677,7 +1694,7 @@ def extract_name_from_layout(pdf_path: str) -> Optional[str]:
         return None
 
 
-_SUMMARY_ITEM_RE = re.compile(r"【([^】]{2,80})】")
+_SUMMARY_ITEM_RE = re.compile(r"【([^】]{1,80})】")
 _SUMMARY_VAL_TAIL_RE = re.compile(
     r"(?:偏高|偏低|升高|降低|增高|减低|异常|弱阳性|阳性|\+\d*|\d+\+|±|\+|-)\s*$")
 _SUMMARY_PREFIX_RE = re.compile(
@@ -1688,14 +1705,44 @@ def _norm_summary_name(s: str) -> str:
     return re.sub(r"[\s（）()\u3000]", "", s or "")
 
 
-def mark_indicators_by_summary(indicators: list, section: str) -> None:
+def mark_indicators_by_summary(indicators: list, section: str,
+                               bmi: bool = False) -> None:
     """2026-10-19: 档案声明 summary_marks(日照市中医医院) —— 总结段【异常项】给
     **既有**指标行标黄(signal_flag=3, 权威), 不新建行。用于结果非数字/参考为文字
     且表内无标志的项(尿红细胞(隐血)+1 / 尿蛋白弱阳性); 每个条目只标最长匹配行
     (防"蛋白"误标到"总蛋白")。"""
     if not section or not indicators:
         return
+    from app.core.term_normalizer import normalize_compat_chars
+    section = normalize_compat_chars(section)
     heads = []
+    # 2026-10-20: "【N】名称" 摘要行(常海毅): 名称在 】 之后, 【】内只有序号,
+    # 旧 _SUMMARY_ITEM_RE 只取到 "N" → 整份只标到次要条目。先单独取行尾名称。
+    for _ln in section.splitlines():
+        # 2026-10-20: 方括号编号条目 "[超重]"(姜兆龙) —— 与【N】名称同口径
+        _mbr = re.match(r"^\s*\d{1,3}\s*[、.．]\s*\[([^\]]{1,80})\]", _ln.strip())
+        if _mbr:
+            h = _mbr.group(1).strip()
+            for _ in range(3):
+                h2 = _SUMMARY_VAL_TAIL_RE.sub("", h).strip()
+                if h2 == h:
+                    break
+                h = h2
+            h = _norm_summary_name(h)
+            if len(h) >= 2:
+                heads.extend([x for x in re.split(r"[；;、]", h) if len(x) >= 2])
+            continue
+        _m = re.match(r"^\s*【\d{1,3}】\s*(.+)$", _ln.strip())
+        if _m:
+            h = _m.group(1).strip()
+            for _ in range(3):
+                h2 = _SUMMARY_VAL_TAIL_RE.sub("", h).strip()
+                if h2 == h:
+                    break
+                h = h2
+            h = _norm_summary_name(h)
+            if len(h) >= 2:
+                heads.extend([x for x in re.split(r"[；;、]", h) if len(x) >= 2])
     for m in _SUMMARY_ITEM_RE.finditer(section):
         h = _SUMMARY_PREFIX_RE.sub("", m.group(1).strip())
         for _ in range(3):
@@ -1705,11 +1752,16 @@ def mark_indicators_by_summary(indicators: list, section: str) -> None:
             h = h2
         h = _norm_summary_name(h)
         if len(h) >= 2:
-            heads.append(h)
+            heads.extend([x for x in re.split(r"[；;、]", h) if len(x) >= 2])
+    if bmi and any(("肥胖" in h or "超重" in h) for h in heads):
+        for ind in indicators:
+            n = _norm_summary_name(normalize_compat_chars(ind.get("item_name") or ""))
+            if n in ("体重指数", "体质指数", "BMI", "身高体重指数"):
+                ind["signal_flag"] = 3
     for h in heads:
         cand = []
         for idx, ind in enumerate(indicators):
-            n = _norm_summary_name(ind.get("item_name") or "")
+            n = _norm_summary_name(normalize_compat_chars(ind.get("item_name") or ""))
             if len(n) >= 2 and n in h:
                 cand.append((len(n), idx))
         if not cand:
@@ -1718,6 +1770,53 @@ def mark_indicators_by_summary(indicators: list, section: str) -> None:
         for ln, idx in cand:
             if ln == _max and (indicators[idx].get("signal_flag") or 0) < 3:
                 indicators[idx]["signal_flag"] = 3
+
+
+def mark_indicators_by_lab_summary(indicators: list, text: str) -> None:
+    """2026-10-21: 化验小结行标黄("1.小圆细胞偏高：3.1"/"1.25-羟基维生素D不足：21.186")。
+
+    仅扫描带冒号+值的行, 且方向词紧跟指标名; 只标既有行, 不新建。
+    """
+    if not text or not indicators:
+        return
+    from app.core.term_normalizer import normalize_compat_chars
+    for ln in normalize_compat_chars(text).splitlines():
+        if "：" not in ln and ":" not in ln:
+            continue
+        left = re.split(r"[:：]", ln, maxsplit=1)[0].strip()
+        left = re.sub(r"^\d{1,3}[.、]\s*(?=[\u4e00-\u9fa5])", "", left)
+        left = _norm_summary_name(left)
+        if len(left) < 3:
+            continue
+        for ind in indicators:
+            n = _norm_summary_name(normalize_compat_chars(ind.get("item_name") or ""))
+            if len(n) < 2:
+                continue
+            if re.search(re.escape(n) + r"(?:偏高|偏低|升高|降低|增高|减低|不足|过量|异常)", left):
+                if (ind.get("signal_flag") or 0) < 3:
+                    ind["signal_flag"] = 3
+
+
+def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = False,
+                                    clear_flags: list | None = None) -> None:
+    """2026-10-22: 档案级指标修整。
+
+    - strip_unit_flags: 单位列误并标志("↑kg/㎡"/"↓%") → 单位去箭头, signal_flag=2
+      (甄元: 标志列无表头, 与单位同格)。
+    - clear_flags: 纯扫描 VLM 误标的项目(宋文军 RDW-SD/MPV/MCV 无标志) → 清 0。
+    """
+    _clear = {re.sub(r"\s+", "", x) for x in (clear_flags or []) if x}
+    for ind in indicators:
+        _n = re.sub(r"\s+", "", ind.get("item_name") or "")
+        if _n in _clear:
+            ind["signal_flag"] = 0
+        if strip_unit_flags:
+            for _fld in ("unit", "ref_low", "ref_high"):
+                _v = ind.get(_fld)
+                if isinstance(_v, str) and re.search(r"[↑↓]", _v):
+                    ind[_fld] = re.sub(r"[↑↓]\s*", "", _v).strip()
+                    if _fld == "unit" and (ind.get("signal_flag") or 0) < 2:
+                        ind["signal_flag"] = 2
 
 
 def extract_personal_info(text: str) -> dict:
@@ -2109,6 +2208,9 @@ def extract_abnormal_signals(pdf_path: str, skip_text: str = "",
         # 2026-10-06: 非指标表页(陈霓"结论词/级别"表等)整页不进信号通道
         if _is_non_indicator_table_page([t for t, _s, _b in block_lines]):
             continue
+        # 2026-10-20: 无标题三值历史对比页(常海毅)不进信号通道
+        if _is_multi_value_history_page([t for t, _s, _b in block_lines]):
+            continue
         # 2026-10-13: 历年对比区也覆盖"历次检查异常结果比对"(石硕: ↓ 标志在对比表
         # 内, 信号通道把上次值 0.22 当本次异常信号 —— 与文本路径剥离同口径)
         skip_from = next((i for i, (t, _s, _b) in enumerate(block_lines)
@@ -2243,7 +2345,8 @@ def _pdf_text_layer_ok(pdf_path: str) -> bool:
         return False
 
 
-def col_rows_with_fallback(pdf_path: str, text: str) -> list[dict]:
+def col_rows_with_fallback(pdf_path: str, text: str,
+                           infer_columns: bool = False) -> list[dict]:
     # 2026-09-15: 坐标主路径已修(两联排表按角色最小重复周期分组, 高帅/白玮衡体格表
     # "身高|179.5cm 收缩压|121mmHg" 不再并成一名) → 重新优先启用; 空/异常回退文本列式。
     # 2026-10-14: 历年对比页(标题变体)页码 → 布局整页跳过(石硕)
@@ -2263,12 +2366,13 @@ def col_rows_with_fallback(pdf_path: str, text: str) -> list[dict]:
     except Exception:
         _skip_pages = None
     try:
-        rows = col_rows_via_layout(pdf_path, skip_pages=_skip_pages)
+        rows = col_rows_via_layout(pdf_path, skip_pages=_skip_pages,
+                                   infer_columns=infer_columns)
         if rows:
             return rows
     except TypeError:
         try:
-            rows = col_rows_via_layout(pdf_path)
+            rows = col_rows_via_layout(pdf_path, infer_columns=infer_columns)
             if rows:
                 return rows
         except Exception:
@@ -2286,7 +2390,96 @@ def col_rows_with_fallback(pdf_path: str, text: str) -> list[dict]:
 # 齐鲁反序表(名称/值/参考/单位/异常标识 = 五列表头, 无需 rev 特判)。
 # 值/参考的单元格判定复用本模块既有 helper(_norm_value_cell/_range_with_unit/_parse_ref)。
 # ⚠ 未接线: 由 service 组装在验证通过后切换; 行式通道不变。
-def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None) -> list[dict]:
+def _is_multi_value_history_page(page_lines: list) -> bool:
+    """三值列历史对比表页判定(2026-10-20, 常海毅第22-24页)。
+
+    文本层无标题时历年对比表 = 每指标一组 [参考, 值1, 值2, 值3, 名称](名称在块尾)。
+    统计"名称前连续 3 个值行"的行数, >=3 视为历史/多值表页 —— 行式与信号通道跳过,
+    防止历史值(↑)被当本次结果。
+    """
+    txts = [str(t).strip() for t in page_lines if str(t).strip()]
+    groups = 0
+    for i in range(3, len(txts)):
+        if not (_NAME_RE.match(txts[i]) and not _skip_name(txts[i])
+                and not _is_value_line(txts[i])):
+            continue
+        if all(_is_value_line(txts[i - k]) or _norm_value_cell(txts[i - k]) is not None
+               for k in (1, 2, 3)):
+            groups += 1
+    return groups >= 3
+
+
+def _infer_column_roles(col_xs: List[float], cells_flat: List) -> Optional[List[tuple]]:
+    """无表头/表头合并时的列角色推断(2026-10-20, 第九批 常海毅/姜兆龙)。
+
+    仅由**数据列内容**判定: 名称(文本)/结果(值)/参考(区间)/单位/标志。
+    列数或角色不确定(如多值历史对比表: 2+ 结果列)返回 None，由调用方跳过该段。
+    """
+    if not col_xs:
+        return None
+    cols: list[dict] = []
+    for cx in col_xs:
+        cs = [c.text.strip() for c in cells_flat
+              if abs(c.x0 - cx) <= 30.0 and (c.text or "").strip()]
+        n = len(cs)
+        if not n:
+            cols.append({"n": 0})
+            continue
+        name_n = result_n = ref_n = unit_n = flag_n = 0
+        for t in cs:
+            _strict_ref = bool(
+                re.search(r"[\d.]\s*[-~～至–—]{1,2}\s*[\d.]", t)
+                or re.fullmatch(r"[<>≤≥]\s*[\d.]+", t))
+            if (_NAME_RE.match(t) and not _is_value_line(t)
+                    and not _UNIT_RE.match(t) and not _strict_ref):
+                name_n += 1
+            if not _strict_ref and (_is_value_line(t)
+                                    or _norm_value_cell(t) is not None):
+                result_n += 1
+            if _strict_ref:
+                ref_n += 1
+            if _UNIT_RE.match(t) and not _strict_ref:
+                unit_n += 1
+            if (t in ("↑", "↓", "H", "L", "*", "＊")
+                    or _FLAG_ABNORMAL_RE.match(t) or _FLAG_NORMAL_RE.match(t)):
+                flag_n += 1
+        cols.append({"n": n, "name": name_n / n, "result": result_n / n,
+                     "ref": ref_n / n, "unit": unit_n / n, "flag": flag_n / n})
+    # 名称列: 文本占优且位于结果列左侧; 结果列: 值占优(区间列不算)
+    roles: list[Optional[str]] = [None] * len(col_xs)
+    for i, c in enumerate(cols):
+        if not c.get("n"):
+            continue
+        if c["unit"] >= 0.6 and c["result"] < 0.4:
+            roles[i] = "unit"
+        elif c["ref"] >= 0.35 and c["result"] < 0.4:
+            roles[i] = "ref"
+        elif c["name"] >= 0.5 and c["result"] < 0.5:
+            roles[i] = "name"
+        elif c["result"] >= 0.5 and c["name"] < 0.4:
+            roles[i] = "result"
+        elif c["flag"] >= 0.6:
+            roles[i] = "flag"
+    # 名称列取最左; 其余名称样列(英文缩写)不参与角色。结果列必须在名称右侧且唯一,
+    # 否则视为历史/多值表(常海毅第22-24页 3 个历史值列 → 跳过)。
+    name_idx = [i for i, r in enumerate(roles) if r == "name"]
+    if not name_idx:
+        return None
+    ni = name_idx[0]
+    for _i, _r in enumerate(roles):
+        if _r == "name" and _i != ni:
+            roles[_i] = None
+    result_idx = [i for i, r in enumerate(roles) if r == "result" and i > ni]
+    if len(result_idx) != 1:
+        return None
+    for _i, _r in enumerate(roles):
+        if _r == "result" and _i < ni:
+            roles[_i] = None
+    return [(roles[i], col_xs[i]) for i in range(len(col_xs))]
+
+
+def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None,
+                        infer_columns: bool = False) -> list[dict]:
     """列语义组装(Phase 2 v6, 表头分段 + 段内独立列谱):
     - region 内每个表头行 → 新段; 段内数据行独立做 x0 列聚簇(容差 30);
     - 列数 > 角色数时剔除"窄标志列"(该列 ≥60% cell 为 ↑↓HL*/'-' 等短标记, 如华西 ↑ 列);
@@ -2339,6 +2532,10 @@ def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None) -> list
         elif _last_rx is not None and lines:
             # 跨页/跨 region 续表(德宏毕建国化验大表): 继承最近表头谱(继承段)
             segs.append((_last_rx, 0, len(lines), True))
+        # 2026-10-20: 无任何表头的整份表格(常海毅: 文本层只有数据行, 表头缺失)
+        # 且档案声明 infer_columns → 整个 region 作为推断段。
+        if not segs and infer_columns and lines:
+            segs = [(None, 0, len(lines), True)]
         # 处理: 段 s0 的表头行之前若有数据(页首块), 归该段
         if segs:
             segs[0] = (segs[0][0], 0, segs[0][2], segs[0][3])
@@ -2360,40 +2557,66 @@ def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None) -> list
                     col_xs[-1] = (col_xs[-1] + x) / 2
                 else:
                     col_xs.append(x)
-            pass
-            # 窄标志列剔除(仅当 列数 > 角色数)
-            while len(col_xs) > len(roles_xs):
-                best_i = None
-                best_ratio = 0.0
-                for i, cx in enumerate(col_xs):
-                    cs = [c.text.strip() for c in cells_flat
-                          if abs(c.x0 - cx) <= 30.0]
-                    if not cs:
-                        continue
-                    short = sum(1 for t in cs if len(t) <= 2
-                                or t in ("↑", "↓", "H", "L", "*", "-", "异常"))
-                    if short / len(cs) > best_ratio:
-                        best_ratio = short / len(cs)
-                        best_i = i
-                if best_i is None or best_ratio < 0.6:
-                    break
-                col_xs.pop(best_i)
-            # 2026-09-15: 两联排/多联排表(项目名称|检查结果 成对重复, 高帅/白玮衡体格表
-            # "身高|179.5cm  收缩压|121mmHg")—— 角色序列取**最小重复周期**分组, 每组各产
-            # 一行; 常规五列表周期=列数 → 单行, 行为不变。
-            ncol = len(roles_xs)
-            period = ncol if ncol else 1
-            for _p in range(1, ncol):
-                if ncol % _p == 0 and all(roles_xs[i][0] == roles_xs[i % _p][0]
-                                          for i in range(ncol)):
-                    period = _p
-                    break
+            # 2026-10-20: 表头合并("单位参考范围"一列覆盖单位+参考两数据列, 姜兆龙)
+            # 或无表头续表且档案声明 infer_columns(常海毅) → 按数据列内容推断角色,
+            # 不再用表头 x 索引硬对齐(空列/合并列会造成角色整体错位)。
+            _merged_header = False
+            if s0 < len(lines):
+                _merged_header = any(
+                    ("单位" in (c.text or "") and "参考" in (c.text or ""))
+                    for c in lines[s0])
+            if _merged_header or (infer_columns and inherited):
+                _inferred = _infer_column_roles(col_xs, cells_flat)
+                if not _inferred:
+                    continue  # 多值历史对比表/无法判定 → 跳过该段
+                roles_xs = list(_inferred)
+                # 2026-10-21: 合并表头"单位参考范围"覆盖相邻两列 —— 内容推断若把
+                # 末两列判为 None(姜兆龙第6页混合表), 按列序补 unit/ref。
+                if _merged_header and len(roles_xs) >= 2:
+                    if roles_xs[-1][0] is None:
+                        roles_xs[-1] = ("ref", roles_xs[-1][1])
+                    if len(roles_xs) >= 3 and roles_xs[-2][0] is None:
+                        roles_xs[-2] = ("unit", roles_xs[-2][1])
+                period = len(roles_xs)
+            else:
+                # 窄标志列剔除(仅当 列数 > 角色数)
+                while len(col_xs) > len(roles_xs):
+                    best_i = None
+                    best_ratio = 0.0
+                    for i, cx in enumerate(col_xs):
+                        cs = [c.text.strip() for c in cells_flat
+                              if abs(c.x0 - cx) <= 30.0]
+                        if not cs:
+                            continue
+                        short = sum(1 for t in cs if len(t) <= 2
+                                    or t in ("↑", "↓", "H", "L", "*", "-", "异常"))
+                        if short / len(cs) > best_ratio:
+                            best_ratio = short / len(cs)
+                            best_i = i
+                    if best_i is None or best_ratio < 0.6:
+                        break
+                    col_xs.pop(best_i)
+                # 2026-09-15: 两联排/多联排表(项目名称|检查结果 成对重复, 高帅/白玮衡体格表
+                # "身高|179.5cm  收缩压|121mmHg")—— 角色序列取**最小重复周期**分组, 每组各产
+                # 一行; 常规五列表周期=列数 → 单行, 行为不变。
+                ncol = len(roles_xs)
+                period = ncol if ncol else 1
+                for _p in range(1, ncol):
+                    if ncol % _p == 0 and all(roles_xs[i][0] == roles_xs[i % _p][0]
+                                              for i in range(ncol)):
+                        period = _p
+                        break
 
             def _col_index(c):
                 if not col_xs:
                     return None
                 col = min(range(len(col_xs)), key=lambda k: abs(c.x0 - col_xs[k]))
-                if len(col_xs) == len(roles_xs) and abs(c.x0 - col_xs[col]) <= 30.0:
+                # 2026-10-20: 仅当数据列 x 与同索引表头 x 也接近时才按索引对齐
+                # (爱康 p12 数据列 [70,128,197,253,384,464] 与表头 6 列等长但位置错开,
+                # 旧逻辑把缩写列 OB 当结果; 位置不一致时改用最近表头 x)。
+                if (len(col_xs) == len(roles_xs)
+                        and abs(c.x0 - col_xs[col]) <= 30.0
+                        and abs(col_xs[col] - roles_xs[col][1]) <= 30.0):
                     return col
                 if roles_xs:
                     # 2026-09-28: 数据左对齐、表头居中 → 表头中心 x0 恒 >= 数据左缘 x0。
@@ -2543,19 +2766,31 @@ def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None) -> list
                     if _qual:
                         result_txt = _qv
                     row["result"] = result_txt
-                    for rt in reversed(ref_parts):
-                        ru = _range_with_unit(rt)
-                        if ru:
-                            rlo, rhi, runit = ru
-                            row["ref_low"], row["ref_high"] = rlo, rhi
-                            if not row["unit"] and runit:
-                                row["unit"] = runit
+                    # 2026-10-21: 参考列折行("1.05--1." + "75"/"0.85--1." + "51")
+                    # 先拼接整组再解析; 中文单限("小于2.25"/"大于0.90")转符号。
+                    _ref_join = "".join(ref_parts).strip()
+                    _ref_join = _ref_join.replace("小于", "<").replace("大于", ">")
+                    _ref_candidates = [reversed(ref_parts)]
+                    if _ref_join:
+                        _ref_candidates.insert(0, iter([_ref_join]))
+                    _parsed_ref = False
+                    for _cand in _ref_candidates:
+                        for rt in _cand:
+                            if re.search(r"人群|风险等级|危险分层|为维生素|提示|说明|不足|过量|缺乏", rt):
+                                continue
+                            ru = _range_with_unit(rt)
+                            if ru:
+                                rlo, rhi, runit = ru
+                                row["ref_low"], row["ref_high"] = rlo, rhi
+                                if not row["unit"] and runit:
+                                    row["unit"] = runit
+                                _parsed_ref = True
+                                break
+                        if _parsed_ref:
                             break
-                    else:
+                    if not _parsed_ref:
                         for rt in ref_parts:
-                            # 2026-09-28: 风险分层目标值("中、高危人群:<2.6；", 董涛 低密度
-                            # 脂蛋白)不是本行通用参考 → 不落 ref(用户口径: 宁可不显示)
-                            if re.search(r"人群|风险等级|危险分层", rt):
+                            if re.search(r"人群|风险等级|危险分层|为维生素|提示|说明|不足|过量|缺乏", rt):
                                 continue
                             lo, hi = _parse_ref(rt)
                             if lo or hi:
@@ -2576,24 +2811,27 @@ def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None) -> list
             # 非化验叙述块(影像"检查所见"/体检须知编号/页眉元信息, 广西人民), 其
             # result 是长叙述; 只弃这些段, 保留化验/体格式表段(否则好段被连坐丢弃)。
             if seg_rows:
+                def _result_ok(res: str) -> bool:
+                    return bool(
+                        re.match(r"^[<>≤≥]?\s*[\d.]+", res)
+                        or re.match(r"^(阴性|阳性|弱阳性|正常|未见|未检出|无|未及|1\+|2\+|[1-5]\+)", res)
+                        or _norm_value_cell(res) is not None
+                        or _GRADE_VAL_RE.match(res)
+                        or _PLUS_ONLY_VAL_RE.match(res)
+                        or res in ("-", "–", "—"))
                 bad = 0
+                good_rows = []
                 for r in seg_rows:
                     res = str(r["result"]).strip()
-                    if not (re.match(r"^[<>≤≥]?\s*[\d.]+", res)
-                            or re.match(r"^(阴性|阳性|弱阳性|正常|未见|未检出|无|未及|1\+|2\+|[1-5]\+)", res)
-                            or _norm_value_cell(res) is not None
-                            # 2026-09-16: 等级值/纯加号/单破折号("-"=阴性简写, 行式
-                            # _QUAL_RE 同口径)也算合法结果形态 —— 否则白带常规类表
-                            # ("Ⅲ级/++/-"多) 整段被形态门丢弃(陈镜霓 阴道分泌物表)。
-                            or _GRADE_VAL_RE.match(res)
-                            or _PLUS_ONLY_VAL_RE.match(res)
-                            or res in ("-", "–", "—")):
-                        # 2026-09-28: 只把**长叙述**(影像描述/须知文本)计为坏; 短定性/
-                        # 颜色值("未提示"/"normal"/"清亮"/"稻黄色"/"+-")不算 —— 董涛
-                        # 血脂4行与尿常规同段, 短定性超 20% 曾整段被弃(低/高密度脂蛋白
-                        # 胆固醇绿区缺失)。
-                        if len(res) >= 8:
-                            bad += 1
+                    if _result_ok(res):
+                        good_rows.append(r)
+                    elif len(res) >= 8:
+                        bad += 1
                 if bad / len(seg_rows) <= 0.2:
                     out.extend(seg_rows)
+                elif infer_columns:
+                    # 2026-10-21: 无表头推断段(常海毅第13页)混入 1-2 条心电图/叙述行,
+                    # 旧逻辑按比例整段丢弃 → 25-羟基维生素D/铁蛋白等整页丢失。
+                    # 档案声明 infer_columns 时只丢坏行, 保留合法化验行。
+                    out.extend(good_rows)
     return out

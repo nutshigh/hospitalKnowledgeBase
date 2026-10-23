@@ -2506,3 +2506,207 @@ def test_unit_split_merge_prefers_full_unit():
     from app.modules.report.table_extractor import extract_indicator_rows
     rows = {r["item_name"]: r for r in extract_indicator_rows("总胆固醇\n5.78\nmmol/\nL\n2.33-5.18\n")}
     assert rows["总胆固醇"]["unit"] == "mmol/L", rows
+
+
+def test_compat_and_ref_interval_header_roles():
+    # 2026-10-20: 爱康文本层康熙部首("检查项⽬"/"提⽰") + "参考区间" 表头
+    # 旧实现 name/flag/ref 角色识别失败 → 整份指标表只出 11 行。
+    from app.modules.report.layout import cell_role
+    assert cell_role("检查项⽬") == "name"
+    assert cell_role("提⽰") == "flag"
+    assert cell_role("参考区间") == "ref"
+
+
+def test_infer_column_roles_headerless():
+    # 常海毅: 化验表无表头(逐列 dump), 按数据列内容推断角色; 3 个历史值列 → None
+    from types import SimpleNamespace
+    from app.modules.report.table_extractor import _infer_column_roles
+    cells = [
+        SimpleNamespace(x0=40.8, text="肌酐"),
+        SimpleNamespace(x0=210.0, text="107.3"),
+        SimpleNamespace(x0=436.9, text="57--97"),
+        SimpleNamespace(x0=519.8, text="μmol/L"),
+    ]
+    roles = _infer_column_roles([40.8, 210.0, 436.9, 519.8], cells)
+    assert roles == [("name", 40.8), ("result", 210.0),
+                     ("ref", 436.9), ("unit", 519.8)]
+    hist = [
+        SimpleNamespace(x0=40.8, text="肌酐"),
+        SimpleNamespace(x0=180.0, text="121.3"),
+        SimpleNamespace(x0=280.0, text="134.2"),
+        SimpleNamespace(x0=380.0, text="107.3"),
+        SimpleNamespace(x0=500.0, text="57--97"),
+    ]
+    assert _infer_column_roles([40.8, 180.0, 280.0, 380.0, 500.0], hist) is None
+
+
+def test_multi_value_history_page_detection():
+    # 无标题历年对比表(常海毅): 三值列+名称块尾 → 跳过; 常规两列不当历史
+    from app.modules.report.table_extractor import _is_multi_value_history_page
+    hist = []
+    for name, a, b, c in [("肌酐", "121.3", "134.2", "107.3"),
+                          ("尿酸", "488", "517", "437"),
+                          ("乳酸脱氢酶", "242", "273", "210")]:
+        hist += ["57--97", a, b, c, name]
+    assert _is_multi_value_history_page(hist)
+    assert not _is_multi_value_history_page(
+        ["肌酐", "107.3", "57--97", "尿酸", "437", "208.3--428.4"])
+
+
+def test_skip_name_compat_chars():
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("检查项⽬")
+    assert _skip_name("采样时间")
+
+
+def test_summary_marks_numbered_and_bracket_items():
+    # 常海毅【N】名称 / 姜兆龙 1、[名称] —— 旧实现只认【名称】导致整份标不到
+    from app.modules.report.table_extractor import mark_indicators_by_summary
+    inds = [{"item_name": "肌酸激酶", "result": "262.0", "signal_flag": 0},
+            {"item_name": "尿蛋白", "result": "弱阳性", "signal_flag": 0},
+            {"item_name": "总蛋白", "result": "70", "signal_flag": 0}]
+    sec = "\n".join(["【2】肌酸激酶偏高", "1、[尿蛋白：弱阳性]"])
+    mark_indicators_by_summary(inds, sec)
+    assert inds[0]["signal_flag"] == 3
+    assert inds[1]["signal_flag"] == 3
+    assert inds[2]["signal_flag"] == 0
+
+
+def test_extra_break_precedes_generic_page_skip():
+    # 常海毅: 档案断点行同时命中通用页码 skip; 旧顺序导致断点永不生效
+    import re
+    from app.modules.report.service import _locate_findings_sections
+    text = "\n".join(["【1】左侧额叶缺血灶", "内容A", "第7页（共26页）", "第7页明细"])
+    sec = _locate_findings_sections(
+        text, anchor_only=True,
+        extra_anchor_re=re.compile(r"^【1】左侧额叶缺血灶"),
+        extra_break_re=re.compile(r"^第7页（共26页）$"))
+    assert "内容A" in (sec or "")
+    assert "第7页明细" not in (sec or "")
+
+
+def test_lab_summary_marks_and_categories():
+    # 常海毅: 化验小结行("1.小圆细胞偏高：3.1"/"1.25-羟基维生素D不足：21.186")
+    from app.modules.report.table_extractor import mark_indicators_by_lab_summary
+    from app.core.indicator_groups import classify
+    inds = [{"item_name": "小圆细胞", "result": "3.1", "signal_flag": 0},
+            {"item_name": "尿白细胞", "result": "31.50", "signal_flag": 0},
+            {"item_name": "尿白细胞(高倍视野）", "result": "5.67", "signal_flag": 0},
+            {"item_name": "25-羟基维生素D", "result": "21.186", "signal_flag": 0}]
+    text = "\n".join(["1.小圆细胞偏高：3.1", "3.尿白细胞偏高：31.50",
+                      "2.尿白细胞(高倍视野）偏高：5.67",
+                      "1.25-羟基维生素D不足：21.186"])
+    mark_indicators_by_lab_summary(inds, text)
+    assert all(i["signal_flag"] == 3 for i in inds)
+    assert classify("小圆细胞", "/μl") == "尿常规"
+    assert classify("尿钙", "mmol/L") == "尿常规"
+    for n in ("便颜色", "便性状", "便红细胞", "便白细胞", "便常规其它"):
+        assert classify(n, "") == "大便常规"
+
+
+def test_skip_ecg_lead_garbage():
+    from app.modules.report.table_extractor import _skip_name
+    assert _skip_name("V1V2")
+
+
+def test_numbered_advice_and_repeat_collapse():
+    # 高亮: 01/02 序号归位到建议标题前; 龚文怡: 叠字折叠
+    import re
+    from app.modules.report.service import _format_numbered_advice, _collapse_repeated_text
+    sec = "\n".join([
+        "【1】Wellen综合征可能", "【2】主动脉瓣反流(轻度)；二尖瓣反流(轻度)",
+        "2.专家建议与指导", "Wellen综合征可能", "01 建议心内科就诊。",
+        "建议A。主动脉瓣反流(轻度)；二尖瓣反流(轻度)", "02 1、建议复查。",
+    ])
+    out = _format_numbered_advice(sec)
+    assert "01 Wellen综合征可能" in out
+    assert "02 主动脉瓣反流(轻度)；二尖瓣反流(轻度)" in out
+    assert "\n主动脉瓣反流" not in out
+    rep = "2 双侧乳腺低回声区（部分增生结节待排考虑BI-RADS 3类）"
+    rep = rep.replace("考虑BI-RADS", "考虑BI-RADS")
+    assert _collapse_repeated_text("乳腺增生乳腺增生") == "乳腺增生"
+    assert _collapse_repeated_text("考虑考虑BI-RADSBI-RADS 3类3类") == "考虑BI-RADS 3类"
+
+
+def test_leading_number_title_merge():
+    from app.modules.report.service import _attach_leading_numbers
+    sec = "\n".join(["阳性发现：", "1", "心动过缓", "[ICD-10:R00.100]",
+                     "2 双侧乳腺低回声区（部分增生结节待排", "考虑BI-RADS", "BI-RADS 3类）",
+                     "指导建议：", "随访。"])
+    out = _attach_leading_numbers(sec)
+    assert "1 心动过缓" in out
+    assert "2 双侧乳腺低回声区（部分增生结节待排考虑BI-RADSBI-RADS 3类）" in out
+
+
+def test_ast_radical_normalized_to_liver_panel():
+    # 高亮: "天⻔冬氨酸氨基转移酶" = AST, 康熙/部首补充区归一后应归肝功能
+    from app.core.term_normalizer import normalize_compat_chars
+    from app.core.indicator_groups import classify
+    assert normalize_compat_chars("天⻔冬氨酸氨基转移酶") == "天门冬氨酸氨基转移酶"
+    assert classify("天⻔冬氨酸氨基转移酶", "U/L") == "肝功能"
+
+
+def test_urgent_is_deterministic_not_llm_only():
+    # 高亮: MedGo 把"建议尽早到医院"判 urgent → 无确定性急症关键词时降级
+    from app.modules.report.service import _mark_urgent
+    items = [{"item_name": "普通随访", "suggestion": "建议定期复查",
+              "is_urgent": True},
+             {"item_name": "Wellen综合征", "suggestion": "建议尽早到医院心内科进一步诊治",
+              "is_urgent": False},
+             {"item_name": "真急症", "suggestion": "请立即就医", "is_urgent": False}]
+    out = {i["item_name"]: i["is_urgent"] for i in _mark_urgent(items)}
+    assert out["普通随访"] is False
+    assert out["Wellen综合征"] is True
+    assert out["真急症"] is True
+
+
+def test_clean_important_result_head():
+    from app.modules.report.service import _clean_important_result_head
+    s = "1.体检重要异常结果、复查建议及治疗建议01  便隐血阳性阳性结果和异常情况\n【1】X"
+    out = _clean_important_result_head(s)
+    assert out.startswith("1.体检重要异常结果、复查建议及治疗建议\n阳性结果和异常情况")
+    assert "01  便隐血" not in out
+
+
+def test_ninth_batch_categories_and_filters():
+    from app.core.indicator_groups import classify
+    from app.modules.report.table_extractor import _skip_name, apply_profile_indicator_fixes
+    # 104 刘振宇
+    assert classify("小红细胞", "") == "尿常规"
+    assert classify("大红细胞", "") == "尿常规"
+    assert classify("抗坏血酸", "") == "尿常规"
+    assert classify("铁", "") == "电解质"
+    # 105 宋文军
+    assert classify("血细胞比容", "") == "血常规"
+    # 106 宋玉枣
+    assert classify("腺苷脱氨酶", "U/L") == "肝功能"
+    assert classify("粪便红细胞", "/Hp") == "大便常规"
+    assert classify("粪便白细胞", "/Hp") == "大便常规"
+    # 108 周业潮
+    assert classify("MCV(RBC平均容积)", "fL") == "血常规"
+    assert classify("GRA%(粒细胞百分数)", "%") == "血常规"
+    assert classify("GRA(粒细胞总数)", "10^9/L") == "血常规"
+    assert classify("5’-核苷酸酶(5-NT)", "U/L") == "肝功能"
+    for x in ("操作：邵倩", "审核：叶升红", "周业潮男 ·"):
+        assert _skip_name(x)
+    rows = [{"item_name": "红细胞分布宽度SD值", "signal_flag": 2}]
+    apply_profile_indicator_fixes(rows, clear_flags=["红细胞分布宽度SD值"])
+    assert rows[0]["signal_flag"] == 0
+    rows = [{"item_name": "体质指数(BMI)", "unit": "↑kg/㎡", "signal_flag": 0}]
+    apply_profile_indicator_fixes(rows, strip_unit_flags=True)
+    assert rows[0]["unit"] == "kg/㎡" and rows[0]["signal_flag"] == 2
+
+
+def test_ninth_batch_breast_imaging_left_right():
+    from app.modules.report.imaging_items import build_imaging_items
+    items = {x["name"]: x["level"] for x in build_imaging_items("左乳结节", "女")}
+    assert items["彩超(乳腺)"] == "yellow"
+
+
+def test_songyuzao_urine_quant_and_exam_garbage():
+    from app.core.indicator_groups import classify
+    from app.modules.report.table_extractor import _junk_row_cell
+    assert classify("尿精子定量", "/μL") == "尿常规"
+    assert classify("尿杆菌定量", "/μL") == "尿常规"
+    assert _junk_row_cell("双侧锁骨下动脉", "", "1")
+    assert _junk_row_cell("泌尿系超声-男", "", "1")

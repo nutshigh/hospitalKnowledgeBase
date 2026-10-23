@@ -210,3 +210,23 @@ def test_collect_evidence_tags():
     ev = collect_evidence("6.甲状腺结节", [("甲状腺结节", "yellow")])
     assert any(x.startswith("[条目]") for x in ev["彩超(甲状腺)"])
     assert any(x.startswith("[原文]") for x in ev["彩超(甲状腺)"])
+
+
+def test_imaging_false_positive_filters_for_new_batch():
+    # 化验解释续行/肾内科解释/妇科查体字段不产生影像假黄
+    _one("胸部CT", "green",
+         "1.明显偏高多见于心肌梗死、风湿性心肌炎、多发性\n"
+         "皮肌炎、甲状腺功能减退、脑血管意外、脑膜炎、药物肌肉注射、中风惊厥、瘫痪等。")
+    _one("彩超(腹部+男泌尿系)", "green",
+         "1、肾脏受损、尿毒症期、慢性肾衰竭代偿、甲状腺功能亢进等。2、请您及时到肾内科诊治。")
+    _one("彩超(子宫附件)", "green",
+         "宫颈:表面光滑\n子宫位置:\n附件：未检")
+    _one("彩超(子宫附件)", "green", "21、宫颈防癌液基薄层细胞制片术：炎症反应性细胞改变")
+
+
+def test_timely_visit_and_importance_are_red_triggers():
+    # 用户 2026-10-21 口径: "及时就诊"/"重视"可作为红区触发词
+    text = "【1】左侧额叶缺血灶\n建议您结合既往病史及临床症状到神经科就诊，请您重视，及时就诊，定期复查。"
+    assert _levels(build_imaging_items(text, None))["头颅CT/核磁"] == "red"
+    text2 = "【1】急性脑梗死\n建议立即就医。"
+    assert _levels(build_imaging_items(text2, None))["头颅CT/核磁"] == "red"

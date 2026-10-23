@@ -289,4 +289,28 @@ SAMPLES = [
     dict(key="b8_chenxingfu", rel="0-第8批/陈行富284014.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
     # ^ 厦门大学附属心血管病医院: 扫描混合件(生产 hybrid OCR)
+
+    # === 2026-10-20: 第九批(10 份, 新地区) ===
+    # 文本件 9 份: 冒烟级; 精确结论 hash 待用户验收后由 reguard/DB 三件套冻结。
+    dict(key="b9_liuzhenyu", rel="1-第9批/刘振宇150493.pdf",
+         smoke=True, min_len=1000),   # 葫芦岛市第二人民医院: 体检结论与健康指导
+    dict(key="b9_zhouyechao", rel="1-第9批/周业潮151051.pdf",
+         smoke=True, min_len=1800),   # 江门五邑中医院: 总检建议与结论 + 异常解读
+    dict(key="b9_jiangzhaolong", rel="1-第9批/姜兆龙300517.pdf",
+         smoke=True, min_len=800),    # 三亚边检模板: [编号] 条目
+    dict(key="b9_songyuzao", rel="1-第9批/宋玉枣237556.pdf",
+         smoke=True, min_len=800),    # 保山市人民医院: 【体检结论和健康建议】
+    dict(key="b9_changhaiyi", rel="1-第9批/常海毅11031X.pdf",
+         visual=True, smoke=True, min_len=1800),   # 牡丹江医科大学附属红旗医院: 【N】摘要+次要问题
+    dict(key="b9_zhenyuan", rel="1-第9批/甄元08056X.pdf",
+         smoke=True, min_len=700),    # 山东阳光融和医院: 主检结论与建议
+    dict(key="b9_huyan", rel="1-第9批/胡艳120046.pdf",
+         smoke=True, min_len=1800),   # 武汉市中心医院后湖院区: 总检建议与结论+异常解读
+    dict(key="b9_gaoliang", rel="1-第9批/高亮097210.pdf",
+         smoke=True, min_len=2000),   # 爱康(康熙部首文本层, 档案 nfkc)
+    dict(key="b9_gongwenyi", rel="1-第9批/龚文怡101022.pdf",
+         visual=True, smoke=True, min_len=900),  # 同济医院: 疾病诊断/阳性发现表
+    # 纯扫描 1 份(生产 hybrid/VLM 链): 需 OCR 服务, 默认跳过
+    dict(key="b9_songwenjun_scan", rel="1-第9批/宋文军015015.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 ]

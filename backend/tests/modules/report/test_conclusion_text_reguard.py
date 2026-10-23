@@ -37,15 +37,21 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from app.modules.report.service import (  # noqa: E402
+    _attach_leading_numbers,
+    _clean_important_result_head,
+    _collapse_repeated_text,
     _compile_profile_re,
     _drop_review_block,
     _extract_pdf_text,
+    _format_numbered_advice,
     _load_report_profiles,
     _locate_findings_sections,
+    _numbered_advice_titles,
     _reflow_conclusion_lines,
     _reflow_table_conclusion,
     _strip_ocr_html,
 )
+from app.core.term_normalizer import normalize_compat_chars  # noqa: E402
 
 SAMPLES = "/home/wjyy2/hospitalKnowledgeBase/体检报告样例"
 GX = os.path.join(SAMPLES, "广西体检报告测试")
@@ -64,6 +70,8 @@ B6 = os.path.join(REPO, "体检报告样例", "0-第6批")
 B7 = os.path.join(REPO, "体检报告样例", "0-第7批")
 # 2026-10-19: 第八批样例目录(H004 88-92...)
 B8 = os.path.join(REPO, "体检报告样例", "0-第8批")
+# 2026-10-22: 第九批(1-第9批, H004 99-103)
+B9 = os.path.join(REPO, "体检报告样例", "1-第9批")
 BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 CASES = {
@@ -171,6 +179,18 @@ CASES = {
     ("h004", "96"): os.path.join(B8, "付本明160910无结论段.pdf"),
     ("h004", "97"): os.path.join(B8, "韩先锋_6762853_5.pdf"),
     ("h004", "98"): os.path.join(B8, "李承龙291816.pdf"),
+    # 第九批(2026-10-22 用户验收): 99 常海毅/100 高亮/101 龚文怡/102 胡艳/103 姜兆龙
+    ("h004", "99"): os.path.join(B9, "常海毅11031X.pdf"),
+    ("h004", "100"): os.path.join(B9, "高亮097210.pdf"),
+    ("h004", "101"): os.path.join(B9, "龚文怡101022.pdf"),
+    ("h004", "102"): os.path.join(B9, "胡艳120046.pdf"),
+    ("h004", "103"): os.path.join(B9, "姜兆龙300517.pdf"),
+    # 第九批后 5 份(2026-10-22 用户验收)
+    ("h004", "104"): os.path.join(B9, "刘振宇150493.pdf"),
+    ("h004", "105"): os.path.join(B9, "宋文军015015.pdf"),
+    ("h004", "106"): os.path.join(B9, "宋玉枣237556.pdf"),
+    ("h004", "107"): os.path.join(B9, "甄元08056X.pdf"),
+    ("h004", "108"): os.path.join(B9, "周业潮151051.pdf"),
 }
 
 # hash == 验收基线(2026-09-15 基线重生成后 24 份; 含原 PENDING 6 份与
@@ -201,6 +221,11 @@ MATCH = {
     ("h004", "88"), ("h004", "90"), ("h004", "91"), ("h004", "92"),
     # 第八批后 6 份(2026-10-20 验收): 94 陈阳/95 封猛/97 韩先锋(keep_bare_numbers)/98 李承龙
     ("h004", "94"), ("h004", "95"), ("h004", "97"), ("h004", "98"),
+    # 第九批前5份(2026-10-22 用户验收)
+    ("h004", "99"), ("h004", "100"), ("h004", "101"), ("h004", "102"),
+    ("h004", "103"),
+    # 第九批后5份(2026-10-22 用户验收): 105 纯扫描走 HYBRID 空产物锁
+    ("h004", "104"), ("h004", "106"), ("h004", "107"), ("h004", "108"),
 }
 
 # 离线链(hybrid=False)与生产链条不等价: 扫描/图片件(离线取不到段), 或生产链
@@ -254,6 +279,8 @@ HYBRID = {
     # 96 付本明(无结论段样本, 离线无段 → 空产物锁; 生产 conclusion_text 为 NULL)
     ("h004", "93"): "da39a3ee5e6b4b0d",
     ("h004", "96"): "da39a3ee5e6b4b0d",
+    # 第九批后5份: 105 宋文军纯扫描(生产 hybrid 探针提文) → 离线空产物锁
+    ("h004", "105"): "da39a3ee5e6b4b0d",
 }
 
 BASELINE = {
@@ -263,6 +290,12 @@ BASELINE = {
 }
 
 _PROFILES = None
+
+
+_REGUARD_SKIP_LINES = {
+    # 生产 process_task 传 parsed_name 作 skip_lines; 99 常海毅姓名页眉在结论段内
+    ("h004", "99"): {"常海毅"},
+}
 
 
 def _re_extract_text(key):
@@ -281,6 +314,8 @@ def _re_extract_text(key):
         # visual_lines(温州程永春两栏结论)按行级(y,x)重排
         text = _extract_pdf_text(pdf, visual_sort=True,
                                  visual_lines=bool(profile.get("visual_lines")))
+    if profile.get("nfkc"):
+        text = normalize_compat_chars(text)
     compiled = _compile_profile_re(profile) if profile else {}
     section = _locate_findings_sections(
         _strip_ocr_html(text),
@@ -290,12 +325,25 @@ def _re_extract_text(key):
         anchor_only=bool(compiled.get("anchor_only")),
         keep_post_sig=bool(compiled.get("keep_post_sig")),
         keep_normal_numbered=bool(compiled.get("keep_normal_numbered")),
-        keep_bare_numbers=bool(compiled.get("keep_bare_numbers")))
+        keep_bare_numbers=bool(compiled.get("keep_bare_numbers")),
+        skip_lines=_REGUARD_SKIP_LINES.get(key))
     if not (section and len(section) > 50):
         return None
     if profile and profile.get("table_conclusion"):
         return _reflow_table_conclusion(section)[:16000]
+    if profile and profile.get("clean_important_head"):
+        section = _clean_important_result_head(section)
+    _adv_titles = (_numbered_advice_titles(section)
+                   if profile and profile.get("numbered_advice") else None)
     section = _reflow_conclusion_lines(section)
+    if profile and profile.get("numbered_advice"):
+        section = _format_numbered_advice(section, titles=_adv_titles)
+    if profile and profile.get("collapse_repeats"):
+        section = _collapse_repeated_text(section)
+    if profile and profile.get("attach_leading_numbers"):
+        section = _attach_leading_numbers(section)
+        if profile.get("collapse_repeats"):
+            section = _collapse_repeated_text(section)
     if profile and profile.get("review_block"):
         section = _drop_review_block(section)
     return section[:16000]

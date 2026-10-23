@@ -24,6 +24,7 @@ from app.modules.report.service import (
     _compile_profile_re, _extract_abnormalities_async, _extract_conclusion_async,
     _extract_pdf_text, _load_report_profiles, _store_abnormalities,
 )
+from app.core.term_normalizer import normalize_compat_chars
 
 
 def run(pdf_path: str, hybrid: bool = False):
@@ -41,6 +42,8 @@ def run(pdf_path: str, hybrid: bool = False):
         if len(_ocr_text or "") > len(text):
             text = _ocr_text
             profile = match_profile(text)
+    if profile and profile.get("nfkc"):
+        text = normalize_compat_chars(text)
     conclusion = asyncio.run(_extract_conclusion_async(text, profile))
     if not conclusion:
         return None, None

@@ -271,7 +271,67 @@ def get_judgments_with_indicator_detail(db: Session, interpretation_id: int) -> 
             it["origin_line"] = (_matched_sentence(conc_lines[row], name)[:200]
                                  if row is not None else None)
 
+        # 2026-10-21: 影像红区 → 结论条目同步红, 且 origin_line 指向红色命中句。
+        # 只标"红色建议句前最近标题"对应的条目(常海毅 左侧额叶缺血灶 / 高亮 Wellen),
+        # 不把同一影像项下的所有条目都染红(高亮窦缓曾被误染)。
+        try:
+            from app.modules.report.imaging_items import _scan_conclusion_text
+            levels, evidence = _scan_conclusion_text(conc)
+            _trig = re.compile(r"(尽早|及时就诊|及时就医|及时复诊|重视|立即|尽快|急诊|危急|务必|不容忽视)")
+            _red_lines: list[str] = []
+            for _item, _lv in levels.items():
+                if _lv != "red":
+                    continue
+                for _ln in evidence.get(_item, []):
+                    if _trig.search(_ln) and _ln not in _red_lines:
+                        _red_lines.append(_ln)
+            _all = regular_items + kept
+            for _ln in _red_lines:
+                _row = next((i for i, l in enumerate(conc_lines) if l == _ln), None)
+                if _row is None:
+                    _row = next((i for i, l in enumerate(conc_lines) if _ln in l), None)
+                if _row is None:
+                    continue
+                _best = None
+                for _i, _it in enumerate(_all):
+                    if _it.get("source") != "conclusion":
+                        continue
+                    _nm = (_it.get("item_name") or "").strip()
+                    if len(_nm) < 2:
+                        continue
+                    for _k in range(_row, max(-1, _row - 20), -1):
+                        if _nm in conc_lines[_k]:
+                            _best = _i
+                            break
+                    if _best is not None:
+                        break
+                if _best is not None:
+                    _all[_best]["color_level"] = "red"
+                    _all[_best]["origin_line"] = _red_hit_sentence(_ln)[:200]
+            # 条目自身建议含急症词(Wellen"建议尽早…") → 红, 原文句指向建议行
+            for _it in _all:
+                if _it.get("source") != "conclusion" or _it.get("color_level") != "red":
+                    continue
+                _sug = (_it.get("suggestion") or "").strip()
+                if _sug and _trig.search(_sug) and _sug in conc:
+                    _ln = next((l for l in conc_lines if _sug in l), None)
+                    if _ln:
+                        _it["origin_line"] = _red_hit_sentence(_ln)[:200]
+        except Exception:
+            pass
+
     return regular_items + kept
+
+
+def _red_hit_sentence(line: str) -> str:
+    """红色命中句: 优先取含急症触发词的分句, 否则整行。"""
+    if not line:
+        return ""
+    trig = re.compile(r"(尽早|及时就诊|及时就医|及时复诊|重视|立即|尽快|急诊|危急|务必|不容忽视)")
+    for sent in re.split(r"(?<=[。！？；;])", line):
+        if trig.search(sent):
+            return sent.strip()
+    return line.strip()
 
 
 def _matched_sentence(line: str, name: str) -> str:

@@ -1,10 +1,41 @@
 import logging
 import re
+import unicodedata
 from typing import Optional, Dict, Callable
 
 from app.core.standard_catalog import STANDARD_NAMES
 
 logger = logging.getLogger(__name__)
+
+
+# CJK 部首补充区(U+2E80–2EFF)NFKC 不映射, 手工补常用简体部首
+_CJK_RADICAL_MAP = {
+    "⻅": "见", "⻔": "门", "⻝": "食", "⻓": "长", "⻮": "齿", "⻛": "风",
+    "⻩": "黄", "⻣": "骨", "⻥": "鱼", "⺠": "民", "⻬": "齐", "⻆": "角",
+    "⻢": "马", "⻉": "贝", "⻘": "青", "⻚": "页", "⻜": "飞", "⻋": "车",
+}
+
+
+def normalize_compat_chars(s):
+    """归一 CJK 兼容/康熙部首字符(⾎→血、⾼→高、⽬→目、⻔→门…)。
+
+    2026-10-20: 爱康报告文本层使用 Kangxi Radicals 区码点, 导致指标名/表头
+    与标准名不一致(⾎⼩板→血小板)。
+    2026-10-21: CJK 部首补充区(U+2E80–2EFF)NFKC 不映射(⻔/⻅/⻩), 用
+    _CJK_RADICAL_MAP 补齐; 康熙部首区(U+2F00–2FDF)仍走 NFKC。
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    out = []
+    for ch in s:
+        if ch in _CJK_RADICAL_MAP:
+            out.append(_CJK_RADICAL_MAP[ch])
+        elif 0x2E80 <= ord(ch) <= 0x2FDF:
+            out.append(unicodedata.normalize("NFKC", ch))
+        else:
+            out.append(ch)
+    return "".join(out)
+
 
 _RANGE_PATTERN = re.compile(r"([\d.]+)\s*[-~—到至]\s*([\d.]+)")
 
@@ -545,6 +576,9 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
     (item_name_standard 或 item_name, result) 去重,保留首次出现,顺序不变。
     """
     for ind in indicators:
+        for _fld in ("item_name", "result", "unit"):
+            if ind.get(_fld):
+                ind[_fld] = normalize_compat_chars(ind[_fld])
         name, code = normalize_item_name(ind.get("item_name", ""),
                                          ind.get("result", ""),
                                          ind.get("unit", ""))

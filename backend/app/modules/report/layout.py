@@ -89,6 +89,7 @@ def coverage_ratio(pdf_path: str, rows: List[VRow]) -> float:
 # 表行 = 同 y 聚簇出 ≥2 个单元格; 字段标签行("体检编号: xxx", 含冒号)排除;
 # 区域 = 连续表行段(y 间距 ≤ 3× 段内行距中位数)。
 import statistics
+import unicodedata
 from typing import List as _List, Tuple
 
 _HEADER_CELL_WORDS = (
@@ -222,7 +223,7 @@ _ROLE_WORDS = {
     # 2026-10-16: 6 列表(项目|单位|结果|参考值|上次|上上次2025-06-20, 陈坤铭) ——
     # 后两列是历史结果, 不入库(曾把"上上次"列值当本次结果/并进名称)
     "prev": ("上次结果", "历史结果", "上上次", "上次", "历次结果"),
-    "ref": ("参考值", "参考范围", "正常值", "提示参考范围"),
+    "ref": ("参考值", "参考范围", "参考区间", "正常值", "提示参考范围"),
     "unit": ("单位",),
     "flag": ("提示", "标志", "异常标识", "临床意义"),
 }
@@ -251,8 +252,11 @@ class ColSpec:
 def cell_role(t: str) -> Optional[str]:
     """单元格文本 → 角色(最长词优先子串匹配; "英文缩写    检查结果" → result)。
     2026-09-16: 词间空白先归一("单 位"/"参 考 值" 陈镜霓白带表, 此前 unit/ref 角色
-    识别为 None → 单位/参考列整列被丢弃, 组装行丢失 /HP 单位)。"""
-    t = "".join((t or "").split())
+    识别为 None → 单位/参考列整列被丢弃, 组装行丢失 /HP 单位)。
+    2026-10-20: NFKC 归一兼容汉字(Kangxi radical) —— 爱康报告表头 "检查项⽬"/"提⽰"
+    的 ⽬/⽰ 是兼容区码点, 旧实现 name/flag 角色识别为 None → 整份指标表只出 11 行;
+    仅用于角色匹配, 不改数据文本。"""
+    t = unicodedata.normalize("NFKC", "".join((t or "").split()))
     for w, role in sorted(_ROLE_FLAT.items(), key=lambda kv: -len(kv[0])):
         if w in t:
             return role
@@ -265,7 +269,8 @@ def header_roles(cells: List[VRow]) -> Optional[List[Optional[str]]]:
     roles = [cell_role(c.text.strip()) for c in cells]
     # 2026-10-19(韩先锋, 用户确认): "检测值|结果"双值表 —— 检测值=主结果(2+/
     # 阴性Hp(-)/25), 结果列=计数值/报告方标注(50, 任何非空=异常标记, flag2)。
-    _texts = ["".join((c.text or "").split()) for c in cells]
+    _texts = [unicodedata.normalize("NFKC", "".join((c.text or "").split()))
+              for c in cells]
     if any("检测值" in t for t in _texts):
         for _i, _t in enumerate(_texts):
             if "检测值" in _t:

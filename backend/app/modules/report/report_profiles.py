@@ -32,6 +32,27 @@ DEFAULT = {
     # 保守净度优先), 仅已验证存在"一行多发现"排版且需规则补漏的医院启用:
     # 池州(多方向行)/福建第二(编号行多发现)/广西人民(编号行多发现)
     "multi_findings": False,
+    # 2026-10-20: 无表头/表头合并的表格按数据列内容推断角色(常海毅/姜兆龙型)
+    "infer_columns": False,
+    # 2026-10-20: 文本层 Kangxi 部首/兼容汉字归一(爱康报告 "⾎"/"⾼")
+    "nfkc": False,
+    # 2026-10-20: 仅用坐标列路径(文本行式会产出历史列/垃圾行; 常海毅)
+    "layout_only": False,
+    # 2026-10-21: 化验小结行("1.小圆细胞偏高：3.1")给既有指标行标黄
+    "lab_summary_marks": False,
+    # 2026-10-21: 爱康建议标题 01/02/… 序号归位
+    "numbered_advice": False,
+    # 2026-10-21: 同济 PDF 同层叠字折叠 / 裸序号归位 / 肥胖→BMI 标黄
+    "collapse_repeats": False,
+    "attach_leading_numbers": False,
+    "bmi_marks": False,
+    # 2026-10-21: 爱康结论首行清理
+    "clean_important_head": False,
+    # 2026-10-22: summary_marks 从全文取(结论段只取建议段时, 前半摘要仍需标黄)
+    "summary_marks_from_text": False,
+    # 2026-10-22: 单位列误并 ↑↓ 标志 / VLM 误标项目清理
+    "strip_unit_flags": False,
+    "clear_flags": [],
 }
 
 PROFILES = [
@@ -365,6 +386,84 @@ PROFILES = [
          # 该页文本 135 字 > hybrid 阈值(100) 未 OCR → ocr_content 补 OCR
          ocr_content_pages=True),
 
+    # === 2026-10-20: 第九批(新地区) ===
+    # 葫芦岛市第二人民医院(刘振宇): 结论 = "体检结论与健康指导"下"本次体检总结"
+    # + "本次健康建议"两段; 通用锚点只命中后者会漏掉总结清单 → 专用锚点。
+    dict(keywords=["葫芦岛市第二人民医院"],
+         anchor_only=True,
+         extra_anchor=[r"^本次健康建议"]),
+    # 江门五邑中医院(周业潮): 结论 = "总检建议与结论" + "异常解读"; 段尾"检查详情"
+    # 起为分科明细, 明确断开。
+    dict(keywords=["江门五邑中医院"],
+         anchor_only=True,
+         extra_anchor=[r"^异常解读"],
+         extra_break=[r"^检查详情"]),
+    # 三亚边检模板(姜兆龙): PDF 无医院名, 仅有受检单位可作稳定标识; 该模板化验表
+    # 不带箭头/提示, 异常只在"总检结论与建议"列出 → summary_marks 给既有指标行标黄。
+    # 仅启用 summary_marks(不设 anchor/break), 误命中他院报告也只影响黄标、不改结论。
+    dict(keywords=["三亚出入境边防检查站"], summary_marks=True),
+    # 临沧市人民医院(宋文军, 纯扫描): VLM 误标 RDW-SD/MPV/MCV(无标志/提示) → 清标志;
+    # 其余 HBsAb/脂蛋白(a) 等真实异常保留。
+    dict(keywords=["临沧市人民医院"],
+         clear_flags=["红细胞分布宽度SD值", "平均血小板体积", "平均红细胞体积"]),
+    # 牡丹江医科大学附属红旗医院(常海毅): 化验表无表头(文本层逐列 dump), 需按数据
+    # 列内容推断角色; 结论从第二次"◆主要健康问题"的【N】摘要起, 到第 7 页明细前止。
+    dict(keywords=["牡丹江医科大学附属红旗医院"],
+         infer_columns=True,
+         layout_only=True,
+         summary_marks=True,
+         lab_summary_marks=True,
+         visual_sort=True,
+         anchor_only=True,
+         extra_anchor=[r"^◆主要健康问题"],
+         # 第 7 页起为身高/体重等"未做"明细(页首 cm); 医生签名/日期先跳过
+         extra_break=[r"^cm$"],
+         extra_skip=[r"^\d{4}-\d{2}-\d{2}$"]),
+    # 山东阳光融和医院(甄元): 结论标题"主检结论与建议"不在通用词表 → 专用锚点;
+    # 跨页重复表头/登记号行/引导句跳过, 汇总医生签名收口。
+    dict(keywords=["山东阳光融和医院"],
+         strip_unit_flags=True,
+         extra_anchor=[r"^主检结论与建议"],
+         extra_skip=[r"^\s*主检结论与建议\s+主检报告\s*$", r"^\s*登记号[:：]",
+                     r"^本次体检项目中"],
+         extra_break=[r"^汇总医生"]),
+    # 武汉市中心医院后湖院区(胡艳): 结论 = "总检建议与结论" + "异常解读";
+    # 段尾"检查详情"起为分科明细。
+    dict(keywords=["武汉市中心医院后湖院区"],
+         anchor_only=True,
+         extra_anchor=[r"^异常解读"],
+         extra_break=[r"^检查详情"]),
+    # 爱康国宾/爱康卓悦(高亮): 文本层为康熙部首兼容字("⾎"/"⾼"), 需 NFKC
+    # 归一; 用户口径(2026-10-21): 只取"2.专家建议与指导"段 —— 前半"1.体检重要
+    # 异常结果"里的 01 便隐血/结果说明 是错位摘要, 不提取。
+    dict(keywords=["爱康国宾", "爱康卓悦"],
+         nfkc=True,
+         layout_only=True,
+         summary_marks=True,
+         numbered_advice=True,
+         keep_bare_numbers=True,
+         bmi_marks=True,
+         summary_marks_from_text=True,
+         anchor_only=True,
+         extra_anchor=[r"^2\.专家建议与指导"],
+         extra_break=[r"^3\.健康体检结果"],
+         extra_skip=[r"^下载爱康APP$", r"^查看彩色报告$",
+                     r"^全国统一报告解读专线", r"^[0-9A-F ]{40,}$",
+                     r"^爱康卓悦", r"^司[）)]$",
+                     r"^\s*\d+\s*/\s*\d+\s*$"]),
+    # 同济医院健康管理中心(龚文怡): 疾病诊断/阳性发现两张表按行输出, 标题行
+    # "疾病诊断："与"阳性发现："不在通用词表 → 专用锚点 + 视觉重排(标题在内容前);
+    # 段尾"温馨提示"后是未完成项目/签名块。
+    dict(keywords=["同济医院健康管理中心"],
+         visual_sort=True,
+         anchor_only=True,
+         keep_bare_numbers=True,
+         collapse_repeats=True,
+         attach_leading_numbers=True,
+         extra_anchor=[r"^疾病诊断", r"^阳性发现"],
+         extra_skip=[r"^\d{5,}$"],
+         extra_break=[r"^温馨提示"]),
+
 ]
 
 
@@ -427,6 +526,31 @@ def match_profile(text: str) -> dict:
             merged["tail_before"] = prof["tail_before"]
         if prof.get("reversed_dump"):
             merged["reversed_dump"] = True
+        # 2026-10-20: 无表头表格列角色推断白名单
+        if prof.get("infer_columns"):
+            merged["infer_columns"] = True
+        if prof.get("nfkc"):
+            merged["nfkc"] = True
+        if prof.get("layout_only"):
+            merged["layout_only"] = True
+        if prof.get("lab_summary_marks"):
+            merged["lab_summary_marks"] = True
+        if prof.get("numbered_advice"):
+            merged["numbered_advice"] = True
+        if prof.get("collapse_repeats"):
+            merged["collapse_repeats"] = True
+        if prof.get("attach_leading_numbers"):
+            merged["attach_leading_numbers"] = True
+        if prof.get("bmi_marks"):
+            merged["bmi_marks"] = True
+        if prof.get("clean_important_head"):
+            merged["clean_important_head"] = True
+        if prof.get("summary_marks_from_text"):
+            merged["summary_marks_from_text"] = True
+        if prof.get("strip_unit_flags"):
+            merged["strip_unit_flags"] = True
+        if prof.get("clear_flags"):
+            merged.setdefault("clear_flags", []).extend(list(prof["clear_flags"]))
         for f in ("extra_break", "extra_skip", "extra_anchor"):
             if prof.get(f):
                 merged.setdefault(f, []).extend(list(prof[f]))

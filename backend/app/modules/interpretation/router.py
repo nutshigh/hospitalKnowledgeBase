@@ -74,11 +74,19 @@ def get_interpretation(report_id: int, db: Session = Depends(_get_db)):
     summaries = parse_summary_text(interp.summary_text)
     references = [CitationSchema(**r).model_dump() for r in (interp.summary_refs or [])]
     indicators = [IndicatorJudgmentSchema(**r) for r in grouped]
+    # 2026-10-21: 影像红区可级联结论条目红(response-level), 概览等级/计数按本次
+    # 返回条目重算, 避免"结论红但徽标仍黄/红计数 0"。
+    _cnt = {"red": 0, "yellow": 0, "green": 0}
+    for _it in indicators:
+        _cl = getattr(_it, "color_level", None)
+        if _cl in _cnt:
+            _cnt[_cl] += 1
+    _overall = "red" if _cnt["red"] else ("yellow" if _cnt["yellow"] else "green")
     return {
         "id": interp.id, "report_id": interp.report_id,
-        "overall_level": interp.overall_level,
-        "red_count": interp.red_count, "yellow_count": interp.yellow_count,
-        "green_count": interp.green_count,
+        "overall_level": _overall,
+        "red_count": _cnt["red"], "yellow_count": _cnt["yellow"],
+        "green_count": _cnt["green"],
         "status": interp.status,
         "summaries": summaries,
         "references": references,

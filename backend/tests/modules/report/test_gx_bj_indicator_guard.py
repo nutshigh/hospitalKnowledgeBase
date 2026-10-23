@@ -93,7 +93,10 @@ def _extract(pdf):
     rows = extract_indicator_rows(
         t2, reversed_dump=bool(comp.get("reversed_dump")),
         latin_wrap=bool(comp.get("latin_wrap")))
-    col_rows = col_rows_with_fallback(pdf, t2)
+    if comp.get("layout_only"):
+        rows = []
+    col_rows = col_rows_with_fallback(
+        pdf, t2, infer_columns=bool(comp.get("infer_columns")))
     signals = extract_abnormal_signals(
         pdf, skip_text=sec or "",
         red_marks=bool(comp.get("red_marks")),
@@ -198,9 +201,21 @@ def _extract(pdf):
                            "unit": r.get("unit", ""), "ref_low": r.get("ref_low"),
                            "ref_high": r.get("ref_high"), "signal_flag": sig})
     # 2026-10-19: 总结段异常项给既有行标黄(档案 summary_marks, 与 service 同构)
-    if comp.get("summary_marks") and sec:
-        from app.modules.report.table_extractor import mark_indicators_by_summary
-        mark_indicators_by_summary(indicators, sec)
+    if comp.get("summary_marks"):
+        _summ_src = t if comp.get("summary_marks_from_text") else sec
+        if _summ_src:
+            from app.modules.report.table_extractor import mark_indicators_by_summary
+            mark_indicators_by_summary(
+                indicators, _summ_src, bmi=bool(comp.get("bmi_marks")))
+    if comp.get("lab_summary_marks"):
+        from app.modules.report.table_extractor import mark_indicators_by_lab_summary
+        mark_indicators_by_lab_summary(indicators, t)
+    if comp.get("strip_unit_flags") or comp.get("clear_flags"):
+        from app.modules.report.table_extractor import apply_profile_indicator_fixes
+        apply_profile_indicator_fixes(
+            indicators,
+            strip_unit_flags=bool(comp.get("strip_unit_flags")),
+            clear_flags=comp.get("clear_flags") or [])
     # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(与 service 同构)
     _csrc_only = (
         {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
@@ -347,6 +362,11 @@ B8 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "0-第8批")
+# 2026-10-22: 第九批样例目录(H004 99-103)
+B9 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "1-第9批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -443,6 +463,19 @@ _BASELINE_CASES = {
     "付本明": ("h004", "96", os.path.join(B8, "付本明160910无结论段.pdf")),
     "韩先锋": ("h004", "97", os.path.join(B8, "韩先锋_6762853_5.pdf")),
     "李承龙": ("h004", "98", os.path.join(B8, "李承龙291816.pdf")),
+    # 2026-10-22: 第九批前 5 份(用户验收) —— 99 常海毅(无表头推断+化验小结标黄)、
+    # 100 高亮(全文摘要标黄/BMI)、101 龚文怡/102 胡艳/103 姜兆龙(规则链可复现)。
+    "常海毅": ("h004", "99", os.path.join(B9, "常海毅11031X.pdf")),
+    "高亮": ("h004", "100", os.path.join(B9, "高亮097210.pdf")),
+    "龚文怡": ("h004", "101", os.path.join(B9, "龚文怡101022.pdf")),
+    "胡艳": ("h004", "102", os.path.join(B9, "胡艳120046.pdf")),
+    "姜兆龙": ("h004", "103", os.path.join(B9, "姜兆龙300517.pdf")),
+    # 第九批后 5 份(2026-10-22 用户验收): 104/106/107/108 文本规则链可复现;
+    # 105 宋文军纯扫描(VLM 指标, 规则链无产物) → 不纳入, 由 DB 三件套与结论护栏守。
+    "刘振宇": ("h004", "104", os.path.join(B9, "刘振宇150493.pdf")),
+    "宋玉枣": ("h004", "106", os.path.join(B9, "宋玉枣237556.pdf")),
+    "甄元": ("h004", "107", os.path.join(B9, "甄元08056X.pdf")),
+    "周业潮": ("h004", "108", os.path.join(B9, "周业潮151051.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

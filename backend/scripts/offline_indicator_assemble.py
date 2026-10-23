@@ -29,7 +29,7 @@ from app.modules.report.table_extractor import (
     apply_redref_flags, col_rows_with_fallback, extract_abnormal_signals,
     extract_indicator_rows, extract_personal_info,
 )
-from app.core.term_normalizer import normalize_indicators
+from app.core.term_normalizer import normalize_compat_chars, normalize_indicators
 
 
 def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
@@ -52,19 +52,25 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
         if len(_ocr_text or "") > len(text):
             text = _ocr_text
             profile = match_profile(text)
+    if profile and profile.get("nfkc"):
+        text = normalize_compat_chars(text)
     # 挖结论段(与 process_task 一致)
     findings_sec = _locate_findings_sections(
         text,
         extra_break_re=compiled.get("extra_break_re"),
         extra_skip_re=compiled.get("extra_skip_re"),
         extra_anchor_re=compiled.get("extra_anchor_re"))
+    _raw_text = text
     if findings_sec and len(findings_sec) > 50:
         text = _remove_findings_section(text, findings_sec)
 
     rows = extract_indicator_rows(
         text, reversed_dump=bool(profile.get("reversed_dump")) if profile else False,
         latin_wrap=bool(profile.get("latin_wrap")) if profile else False)
-    col_rows = col_rows_with_fallback(pdf_path, text)
+    if profile and profile.get("layout_only"):
+        rows = []
+    col_rows = col_rows_with_fallback(
+        pdf_path, text, infer_columns=bool(profile.get("infer_columns")) if profile else False)
     signals = extract_abnormal_signals(
         pdf_path, skip_text=findings_sec or "",
         red_marks=bool(profile.get("red_marks")) if profile else False,
@@ -229,9 +235,21 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
         if "定性" in (_ind.get("item_name") or "") and str(_ind.get("result", "")).startswith("阳性"):
             _ind["signal_flag"] = 1
     # 2026-10-19: 总结段异常项给既有行标黄(档案 summary_marks, 与 service 同构)
-    if profile and profile.get("summary_marks") and findings_sec:
-        from app.modules.report.table_extractor import mark_indicators_by_summary
-        mark_indicators_by_summary(indicators, findings_sec)
+    if profile and profile.get("summary_marks"):
+        _summ_src = _raw_text if profile.get("summary_marks_from_text") else findings_sec
+        if _summ_src:
+            from app.modules.report.table_extractor import mark_indicators_by_summary
+            mark_indicators_by_summary(
+                indicators, _summ_src, bmi=bool(profile.get("bmi_marks")))
+    if profile and profile.get("lab_summary_marks"):
+        from app.modules.report.table_extractor import mark_indicators_by_lab_summary
+        mark_indicators_by_lab_summary(indicators, text)
+    if profile and (profile.get("strip_unit_flags") or profile.get("clear_flags")):
+        from app.modules.report.table_extractor import apply_profile_indicator_fixes
+        apply_profile_indicator_fixes(
+            indicators,
+            strip_unit_flags=bool(profile.get("strip_unit_flags")),
+            clear_flags=profile.get("clear_flags") or [])
     # 2026-09-23: 姓名同名行清理(与 service.process_task 同构; 曹嘉冰封面"曹嘉冰/44")
     from app.modules.report.table_extractor import (
         extract_personal_info as _epi, extract_name_from_layout as _enfl, _name_ok)
