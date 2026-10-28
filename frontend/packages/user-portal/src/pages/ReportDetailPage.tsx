@@ -13,7 +13,7 @@ import { useChatStore } from '../stores/chatStore';
 import { InterpretationReportCard } from '@hospital/shared';
 
 const COLOR_ORDER: Record<string, number> = { red: 0, yellow: 1, green: 2 };
-const CONCLUSION_TITLE_RE = /^(总检建议与结论|总检结论|医师建议|综合建议|健康指导|结论与建议)\s*\n*/;
+const CONCLUSION_TITLE_RE = /^(健康指导建议|健康指导与建议|总检结论与建议|总检建议与结论|总检结论|医师建议|综合建议|健康指导|结论与建议)\s*\n*/;
 
 function cleanConclusionText(text: string): string {
   return text.replace(CONCLUSION_TITLE_RE, '').trim();
@@ -32,6 +32,9 @@ const TITLE_NUM_RE = /^[（(]?\d{1,3}\s*[、.:：)）]/;
 function isFindingsTitle(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
+  // 2026-10-22: '*' 开头的发现标题行加粗; '(1)' 子项/建议不因编号被加粗
+  if (/^[*＊]/.test(t)) return true;
+  if (/^[（(]\d{1,3}[)）]/.test(t)) return false;
   // 编号+冒号结尾的长标题(可含逗号/顿号分隔的多个异常, 如"2. 血压增高…彩超提示左房大:")
   // 加粗; 其余编号行与普通行走同一通用分支(短、无句末标点 → 视为发现标题)
   if (TITLE_NUM_RE.test(t) && /[:：]\s*$/.test(t)) return true;

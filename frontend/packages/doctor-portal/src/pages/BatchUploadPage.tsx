@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Progress, Spin, Table, Tag, message } from 'antd';
+import { Alert, Button, Progress, Spin, Table, Tag, Tooltip, message } from 'antd';
 import { useDoctorStore } from '../stores/doctorStore';
 import DoctorLayout from '../components/DoctorLayout';
 import BatchUploader from '../components/BatchUploader';
 import BatchDetailPanel from '../components/BatchDetailPanel';
 import { useBatchTracker } from '../hooks/useBatchTracker';
 import type { BatchSummary } from '../types/batch';
-import { STATUS_COLOR } from '../types/batch';
+import { STATUS_COLOR, parsingCount } from '../types/batch';
 
 const PAGE_SIZE = 20;
 
@@ -82,7 +82,11 @@ export default function BatchUploadPage() {
       render: (v: string) => <span title={v} style={{ display: 'block' }}>{v}</span> },
     { title: '状态', dataIndex: 'status', key: 'status', width: 130,
       render: (s: string) => <Tag color={STATUS_COLOR[s]}>{s}</Tag> },
-    { title: '解析', dataIndex: 'parsed_ok', key: 'parsed_ok', width: 70 },
+    {
+      title: <Tooltip title="尚未完成 AI 解读且未失败（含排队、解析中、待解读）">解析</Tooltip>,
+      key: 'parsing', width: 70,
+      render: (_: unknown, b: BatchSummary) => parsingCount(b),
+    },
     { title: '解读', dataIndex: 'interp_ok', key: 'interp_ok', width: 70 },
     { title: '失败', dataIndex: 'failed', key: 'failed', width: 70,
       render: (v: number) => (v > 0 ? <span style={{ color: 'var(--color-red)' }}>{v}</span> : v) },
@@ -145,7 +149,7 @@ export default function BatchUploadPage() {
                     size="small" style={{ margin: '8px 0 4px', maxWidth: 520 }}
                   />
                   <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                    {done}/{b.total} 文件 · 解析 {b.parsed_ok} · 解读 {b.interp_ok} · 失败 {b.failed}
+                    {done}/{b.total} 文件 · 解析 {parsingCount(b)} · 解读 {b.interp_ok} · 失败 {b.failed}
                     {' · '}{fmtTime(b.created_at)}
                   </span>
                 </div>

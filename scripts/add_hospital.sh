@@ -14,7 +14,9 @@ set -euo pipefail
 # 环境变量(覆盖默认 docker 直连):
 #   MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASS(默认走 docker exec hospital-mysql)
 # 说明:
-#   - 幂等:重复执行只会确保建库建表 + 把 hospital_name/is_active 更新到位。
+#   - 幂等:重复执行会补齐增量列(parsed_name / dispatch_hospital / signal_flag /
+#     chat_session.name / user_id VARCHAR(16) 等)、创建 risk 表,并把
+#     hospital_name/is_active 更新到位 —— 也可用于修复旧脚本创建的不完整租户库。
 #   - 不建任何 platform_user / admin 账号(账号走 /auth/register 或 app-login 自动注册)。
 #   - 完成后无需重启 backend/worker;文件存储目录由代码自动创建。
 # ============================================================
@@ -53,8 +55,30 @@ mysql_val() { mysql_q -N -B -e "$1"; }
 # 交互可读输出
 mysql_out() { mysql_q -e "$1"; }
 
+# 幂等补列(MySQL 8 不支持 ADD COLUMN IF NOT EXISTS)
+ensure_column() {
+  local table="$1" column="$2" definition="$3" cnt
+  cnt=$(mysql_val "SELECT COUNT(*) FROM information_schema.COLUMNS \
+    WHERE TABLE_SCHEMA='$DB_NAME' AND TABLE_NAME='$table' AND COLUMN_NAME='$column'")
+  if [[ "$cnt" == "0" ]]; then
+    log "补列 $table.$column"
+    mysql_q -e "ALTER TABLE \`$DB_NAME\`.\`$table\` ADD COLUMN \`$column\` $definition"
+  fi
+}
+
+# 旧租户 user_id 可能是 BIGINT,批量上传按身份证后六位分发后应为 VARCHAR(16)
+ensure_user_id_varchar() {
+  local table="$1" typ
+  typ=$(mysql_val "SELECT COLUMN_TYPE FROM information_schema.COLUMNS \
+    WHERE TABLE_SCHEMA='$DB_NAME' AND TABLE_NAME='$table' AND COLUMN_NAME='user_id'")
+  if [[ -n "$typ" && "$typ" != "varchar(16)" ]]; then
+    log "规范化 $table.user_id: $typ -> varchar(16)"
+    mysql_q -e "ALTER TABLE \`$DB_NAME\`.\`$table\` MODIFY user_id VARCHAR(16) NOT NULL"
+  fi
+}
+
 usage() {
-  sed -n '4,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '4,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   echo
   echo "  $0 <orgId> [--name 医院名称]"
   exit "${1:-0}"
@@ -80,10 +104,6 @@ if ! [[ "$ORG_ID" =~ ^[A-Za-z0-9]{1,32}$ ]]; then
   err "orgId 必须为 1-32 位字母/数字(hospital_<orgId> 将作为库名): $ORG_ID"
   exit 1
 fi
-if [[ -z "$NAME" ]]; then
-  warn "未提供医院名称(可用 --name 指定),默认以 orgId 作为 hospital_name"
-fi
-
 DB_NAME="hospital_${ORG_ID}"
 
 # ── 连接健康检查 ─────────────────────────────────────────────
@@ -133,6 +153,7 @@ if [[ -z "$NAME" ]]; then
   if [[ -n "$existing_name" ]]; then
     NAME="$existing_name"
   else
+    warn "未提供医院名称(可用 --name 指定),默认以 orgId 作为 hospital_name"
     NAME="$ORG_ID"
   fi
 fi
@@ -140,6 +161,19 @@ fi
 # ── 建库建表(SP 内部全用 CREATE TABLE IF NOT EXISTS,可重复)──
 log "调用 create_hospital_database('$ORG_ID') 创建库 $DB_NAME 与全部业务表..."
 mysql_q -e "CALL hospital_template.create_hospital_database('$ORG_ID')"
+
+# ── 增量列对齐(CALL 内的 CREATE TABLE IF NOT EXISTS 不会改已存在的表)──
+log "对齐增量列(可重复执行)..."
+ensure_user_id_varchar report_task
+ensure_user_id_varchar report_info
+ensure_user_id_varchar chat_session
+ensure_column report_info parsed_name "VARCHAR(50) NULL"
+ensure_column report_indicator signal_flag "TINYINT NOT NULL DEFAULT 0"
+ensure_column chat_session name "VARCHAR(50) DEFAULT NULL"
+ensure_column batch_import_file dispatch_hospital "VARCHAR(24) DEFAULT NULL"
+ensure_column disease_mapping source "VARCHAR(20) DEFAULT 'LOCAL'"
+ensure_column disease_mapping match_level "VARCHAR(10) DEFAULT 'YELLOW'"
+ensure_column disease_mapping match_deviation "VARCHAR(10) DEFAULT NULL"
 
 # ── 登记 hospital_tenant(幂等 upsert)──────────────────────
 NAME_ESC="${NAME//\'/\'\'}"
@@ -152,25 +186,43 @@ mysql_q -e "INSERT INTO hospital_template.hospital_tenant \
     db_name=VALUES(db_name), \
     is_active=1"
 
-# ── 校验:与参考租户 hospital_H001 逐表对齐(剔除历史遗留 risk 表)──
-# disease_hit / disease_mapping / disease_rule 仅 H001 历史遗留,不随新租户创建,不算漂移。
+# ── 校验:与参考租户 hospital_H001 逐表/逐列对齐 ──────────────
 got=$(mysql_val "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DB_NAME'")
-missing=""
-while IFS= read -r t; do
-  [[ -z "$t" ]] && continue
-  case "$t" in
-    disease_hit|disease_mapping|disease_rule) continue ;;
-  esac
-  cnt=$(mysql_val "SELECT COUNT(*) FROM information_schema.TABLES \
-    WHERE TABLE_SCHEMA='$DB_NAME' AND TABLE_NAME='$t'")
-  if [[ "$cnt" == "0" ]]; then
-    missing+="$t "
+ref_tables=$(mysql_val "SELECT COUNT(*) FROM information_schema.TABLES \
+  WHERE TABLE_SCHEMA='hospital_H001'" || true)
+if [[ "${ref_tables:-0}" == "0" ]]; then
+  warn "参考租户 hospital_H001 不存在,跳过逐表/逐列校验"
+else
+  missing_tables=""
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    cnt=$(mysql_val "SELECT COUNT(*) FROM information_schema.TABLES \
+      WHERE TABLE_SCHEMA='$DB_NAME' AND TABLE_NAME='$t'" || true)
+    [[ "$cnt" == "0" ]] && missing_tables+="$t "
+  done < <(mysql_val "SELECT TABLE_NAME FROM information_schema.TABLES \
+    WHERE TABLE_SCHEMA='hospital_H001' ORDER BY TABLE_NAME" || true)
+
+  missing_columns=""
+  type_drift=""
+  while IFS=$'\t' read -r t c ctype; do
+    [[ -z "$t" ]] && continue
+    nt=$(mysql_val "SELECT COLUMN_TYPE FROM information_schema.COLUMNS \
+      WHERE TABLE_SCHEMA='$DB_NAME' AND TABLE_NAME='$t' AND COLUMN_NAME='$c'" || true)
+    if [[ -z "$nt" ]]; then
+      missing_columns+="$t.$c "
+    elif [[ "$nt" != "$ctype" ]]; then
+      type_drift+="$t.$c(H001=$ctype,new=$nt) "
+    fi
+  done < <(mysql_val "SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE FROM information_schema.COLUMNS \
+    WHERE TABLE_SCHEMA='hospital_H001' ORDER BY TABLE_NAME,ORDINAL_POSITION" || true)
+
+  if [[ -n "$missing_tables" || -n "$missing_columns" || -n "$type_drift" ]]; then
+    [[ -n "$missing_tables" ]] && err "新库缺表: $missing_tables"
+    [[ -n "$missing_columns" ]] && err "新库缺列: $missing_columns"
+    [[ -n "$type_drift" ]] && err "列类型漂移: $type_drift"
+    err "请把 start.sh DDL 块/01_template_db.sql 的最新结构同步进 02_hospital_created.sql 后重跑本脚本"
+    exit 1
   fi
-done < <(mysql_val "SELECT TABLE_NAME FROM information_schema.TABLES \
-  WHERE TABLE_SCHEMA='hospital_H001' ORDER BY TABLE_NAME" || true)
-if [[ -n "$missing" ]]; then
-  warn "新库缺以下应在的表: $missing"
-  warn "请把 start.sh DDL 块/01_template_db.sql 的最新表同步进 02_hospital_created.sql 后重跑本脚本"
 fi
 
 echo

@@ -52,7 +52,7 @@ BEGIN
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
     SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.report_task ('
-        'id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, '
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, '
         'original_file_path VARCHAR(500) NOT NULL, original_filename VARCHAR(200) NOT NULL, '
         'file_type VARCHAR(10) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, '
         'thumbnail_path VARCHAR(500) DEFAULT NULL, status VARCHAR(20) NOT NULL DEFAULT ''queued'', '
@@ -66,7 +66,8 @@ BEGIN
 
     SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.report_info ('
         'id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id BIGINT DEFAULT NULL, '
-        'user_id BIGINT NOT NULL, name VARCHAR(50), gender VARCHAR(5), age INT, '
+        'user_id VARCHAR(16) NOT NULL, name VARCHAR(50), parsed_name VARCHAR(50), '
+        'gender VARCHAR(5), age INT, '
         'report_date DATE, check_type VARCHAR(20), unit_name VARCHAR(100), '
         'conclusion_text TEXT DEFAULT NULL, '
         'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP'
@@ -79,7 +80,7 @@ BEGIN
         'item_code VARCHAR(50) DEFAULT NULL, result_value VARCHAR(50) DEFAULT NULL, '
         'unit VARCHAR(20) DEFAULT NULL, ref_range_low VARCHAR(50) DEFAULT NULL, '
         'ref_range_high VARCHAR(50) DEFAULT NULL, category VARCHAR(50) DEFAULT NULL, '
-        'raw_text TEXT DEFAULT NULL'
+        'raw_text TEXT DEFAULT NULL, signal_flag TINYINT NOT NULL DEFAULT 0'
         ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
@@ -150,7 +151,8 @@ BEGIN
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
     SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.chat_session ('
-        'id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, '
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(16) NOT NULL, '
+        'name VARCHAR(50) DEFAULT NULL, '
         'hospital_id VARCHAR(32) NOT NULL, report_id BIGINT DEFAULT NULL, '
         'title VARCHAR(200) DEFAULT NULL, '
         'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, '
@@ -184,7 +186,8 @@ BEGIN
         'id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, '
         'file_path VARCHAR(512) NOT NULL, file_size BIGINT NOT NULL DEFAULT 0, '
         'crc32 VARCHAR(8) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT ''queued'', '
-        'failed_stage VARCHAR(24) DEFAULT NULL, report_task_id BIGINT, '
+        'failed_stage VARCHAR(24) DEFAULT NULL, dispatch_hospital VARCHAR(24) DEFAULT NULL, '
+        'report_task_id BIGINT, '
         'error_message TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, '
         'UNIQUE KEY uq_batch_file (batch_id, crc32), KEY idx_bfile_status (status), '
         'CONSTRAINT fk_bfile_batch FOREIGN KEY (batch_id) '
@@ -231,9 +234,40 @@ BEGIN
         'disease_class VARCHAR(100) DEFAULT NULL, '
         'sort_code INT DEFAULT 200, '
         'enabled TINYINT DEFAULT 1, '
+        'source VARCHAR(20) DEFAULT ''LOCAL'', '
+        'match_level VARCHAR(10) DEFAULT ''YELLOW'', '
+        'match_deviation VARCHAR(10) DEFAULT NULL, '
         'create_time DATETIME DEFAULT CURRENT_TIMESTAMP, '
         'update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, '
         'UNIQUE KEY uk_item_name_std (item_name_standard)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.disease_rule ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, rule_code VARCHAR(50) NOT NULL, '
+        'disease_name VARCHAR(100) NOT NULL, '
+        'disease_category VARCHAR(20) DEFAULT ''CHRONIC'', '
+        'disease_class VARCHAR(100) DEFAULT NULL, member_items JSON DEFAULT NULL, '
+        'source VARCHAR(20) DEFAULT ''LOCAL'', enabled TINYINT DEFAULT 1, '
+        'sort_code INT DEFAULT 200, '
+        'create_time DATETIME DEFAULT CURRENT_TIMESTAMP, '
+        'update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, '
+        'UNIQUE KEY uk_rule_code (rule_code)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.disease_hit ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, '
+        'interpretation_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, '
+        'unit_name VARCHAR(100) DEFAULT NULL, report_date DATE DEFAULT NULL, '
+        'disease_name VARCHAR(100) NOT NULL, '
+        'disease_category VARCHAR(20) DEFAULT ''CHRONIC'', '
+        'disease_class VARCHAR(100) DEFAULT NULL, '
+        'hit_type VARCHAR(20) DEFAULT ''single'', mapping_id BIGINT DEFAULT NULL, '
+        'rule_id BIGINT DEFAULT NULL, hit_items JSON DEFAULT NULL, '
+        'created_at DATETIME DEFAULT CURRENT_TIMESTAMP, '
+        'UNIQUE KEY uk_report_disease (report_id, disease_name), '
+        'KEY idx_user_date (user_id, report_date), KEY idx_disease (disease_name)'
         ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 END//

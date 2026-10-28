@@ -104,7 +104,8 @@ def list_batches(page: int = Query(1, ge=1),
     return {
         "items": [{
             "id": b.id, "filename": b.filename, "status": b.status,
-            "total": b.total, "parsed_ok": b.parsed_ok, "interp_ok": b.interp_ok,
+            "total": b.total, "parsing": BatchService.parsing_count(b),
+            "parsed_ok": b.parsed_ok, "interp_ok": b.interp_ok,
             "failed": b.failed,
             "created_at": b.created_at.isoformat() if b.created_at else None,
             "completed_at": b.completed_at.isoformat() if b.completed_at else None,

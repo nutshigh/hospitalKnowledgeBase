@@ -177,7 +177,8 @@ def test_complete_archive_too_large_400(env):
 def test_T11_3_progress_with_failing_files(env):
     s = env["Session"]()
     b = BatchImport(id="b1", hospital_id="H001", user_id="1", filename="x.zip",
-                    archive_path="/x.zip", status="partial_failed", total=2, failed=1)
+                    archive_path="/x.zip", status="partial_failed", total=2,
+                    interp_ok=1, failed=1)
     f1 = BatchImportFile(id="f1", batch_id="b1", file_path="/f1.pdf",
                          file_size=1, crc32="abc12345", status="failed", error_message="boom")
     f2 = BatchImportFile(id="f2", batch_id="b1", file_path="/f2.pdf",
@@ -188,8 +189,28 @@ def test_T11_3_progress_with_failing_files(env):
     assert g.status_code == 200
     body = g.json()
     assert body["batch"]["status"] == "partial_failed"
+    batch = body["batch"]
+    assert batch["parsing"] == 0
+    assert batch["parsing"] + batch["interp_ok"] + batch["failed"] == batch["total"]
     failing_ids = [ff["id"] for ff in body["failing_files"]]
     assert failing_ids == ["f1"]
+
+
+def test_T11_progress_parsing_is_exclusive(env):
+    s = env["Session"]()
+    b = BatchImport(id="bpc", hospital_id="H001", user_id="1", filename="x.zip",
+                    archive_path="/x.zip", status="interpreting",
+                    total=5, parsed_ok=5, interp_ok=3, failed=1)
+    s.add(b); s.commit(); s.close()
+
+    batch = env["client"].get("/api/v1/reports/batches/bpc").json()["batch"]
+    assert batch["parsing"] == 1
+    assert batch["parsing"] + batch["interp_ok"] + batch["failed"] == batch["total"]
+
+    items = _list_batches(env["client"]).json()["items"]
+    item = next(x for x in items if x["id"] == "bpc")
+    assert item["parsing"] == 1
+    assert item["parsing"] + item["interp_ok"] + item["failed"] == item["total"]
 
 
 def test_T11_4_dead_letter(env):

@@ -231,6 +231,21 @@ def test_parsed_to_interp_ok_progression(db):
     assert b.status == "completed"
 
 
+def test_parsing_count_is_stage_remainder(db):
+    b = BatchImport(id="pc1", hospital_id="H", user_id="u", filename="x",
+                    archive_path="/x", total=5, parsed_ok=5,
+                    interp_ok=3, failed=1)
+    db.add(b); db.commit()
+    assert BatchService.parsing_count(b) == 1
+
+    # 计数异常时钳到 0，不展示负数
+    b2 = BatchImport(id="pc2", hospital_id="H", user_id="u", filename="x",
+                     archive_path="/x", total=1, parsed_ok=1,
+                     interp_ok=1, failed=1)
+    db.add(b2); db.commit()
+    assert BatchService.parsing_count(b2) == 0
+
+
 def test_retry_failed_skips_dispatch_unmatched_and_oversize(db):
     """retry_failed 对 oversize / dispatch_unmatched 两类 unretryable
     短路跳过,不计入 requeued,只在 skipped_unretryable 计数。

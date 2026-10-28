@@ -265,6 +265,15 @@ class BatchService:
                    b.id, old, b.status, b.total, b.interp_ok or 0, b.failed or 0)
 
     @staticmethod
+    def parsing_count(b: BatchImport) -> int:
+        """仍在解析阶段(尚未完成 AI 解读且未失败)的文件数。
+
+        parsed_ok 是累计解析成功数(含随后已解读/失败的文件)，
+        parsed_ok + interp_ok 会重复计数，不能直接作为页面“解析”列。
+        """
+        return max(0, (b.total or 0) - (b.interp_ok or 0) - (b.failed or 0))
+
+    @staticmethod
     def get_progress(db: Session, batch_id: str) -> dict:
         b = db.query(BatchImport).get(batch_id)
         if b is None:
@@ -274,7 +283,8 @@ class BatchService:
         return {
             "batch": {
                 "id": b.id, "filename": b.filename, "status": b.status,
-                "total": b.total, "parsed_ok": b.parsed_ok,
+                "total": b.total, "parsing": BatchService.parsing_count(b),
+                "parsed_ok": b.parsed_ok,
                 "interp_ok": b.interp_ok, "failed": b.failed,
                 "error_message": b.error_message,
                 "created_at": b.created_at.isoformat() if b.created_at else None,

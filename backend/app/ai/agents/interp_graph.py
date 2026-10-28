@@ -396,7 +396,7 @@ def build_interp_graph(hospital_id: str, db: Session):
         return _generate_report(state, db)
 
     def judge(state: InterpState) -> dict:
-        if not state.get("abnormal_indicators"):
+        if not settings.JUDGE_ENABLED or not state.get("abnormal_indicators"):
             return {"judge_result": {"passed": True, "issues": [], "suggestions": ""}}
         return {"judge_result": run_judge(state)}
 

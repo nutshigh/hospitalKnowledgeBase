@@ -33,6 +33,9 @@ const TITLE_NUM_RE = /^[（(]?\d{1,3}\s*[、.:：)）]/;
 function isFindingsTitle(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
+  // 2026-10-22: '*' 开头的发现标题行加粗; '(1)' 子项/建议不因编号被加粗
+  if (/^[*＊]/.test(t)) return true;
+  if (/^[（(]\d{1,3}[)）]/.test(t)) return false;
   // 编号+冒号结尾的长标题(可含逗号/顿号分隔的多个异常, 如"2. 血压增高…彩超提示左房大:")
   // 加粗; 其余编号行与普通行走同一通用分支(短、无句末标点 → 视为发现标题)
   if (TITLE_NUM_RE.test(t) && /[:：]\s*$/.test(t)) return true;
@@ -116,9 +119,11 @@ export default function ReportDetailPage() {
       // 2026-08-31: 单限参考范围也显示(<5.2 / >1.04), "无"视为无值
       render: (_: any, r: any) => {
         const ok = (v: any) => v !== undefined && v !== null && v !== '' && v !== '无';
+        // 2026-09-23: 值自带比较符时不重复加(OCR 报告 ref 存的是 "<3.40"/">0.25")
+        const withSign = (v: string, sign: string) => (/^[<>≤≥]/.test(v) ? v : `${sign}${v}`);
         if (ok(r.ref_range_low) && ok(r.ref_range_high)) return `${r.ref_range_low}-${r.ref_range_high}`;
-        if (ok(r.ref_range_high)) return `<${r.ref_range_high}`;
-        if (ok(r.ref_range_low)) return `>${r.ref_range_low}`;
+        if (ok(r.ref_range_high)) return withSign(r.ref_range_high, '<');
+        if (ok(r.ref_range_low)) return withSign(r.ref_range_low, ">");
         return '-';
       } },
     { title: '色级', dataIndex: 'color_level', key: 'color_level',

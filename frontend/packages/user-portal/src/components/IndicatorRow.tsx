@@ -14,11 +14,14 @@ export default function IndicatorRow({
   item_name, result_value, unit, ref_range_low, ref_range_high, color_level, is_conclusion,
 }: IndicatorRowProps) {
   // 2026-08-31: 单限参考范围也显示(总胆固醇仅上限 → "<5.2"; 仅下限 → ">1.04")
+  // 2026-09-23: 值自带比较符时不重复加(OCR 报告 ref 存的是 "<3.40"/">0.25",
+  // 旧逻辑再补一次符号 → "><3.40"/">>0.25")
   const valid = (v?: string) => v !== undefined && v !== null && v !== '' && v !== '无';
+  const withSign = (v: string, sign: string) => (/^[<>≤≥]/.test(v) ? v : `${sign}${v}`);
   const refRange = valid(ref_range_low) && valid(ref_range_high)
     ? `${ref_range_low}-${ref_range_high}`
-    : valid(ref_range_high) ? `<${ref_range_high}`
-    : valid(ref_range_low) ? `>${ref_range_low}`
+    : valid(ref_range_high) ? withSign(ref_range_high, '<')
+    : valid(ref_range_low) ? withSign(ref_range_low, '>')
     : '';
   const displayValue = is_conclusion ? '存在建议' : (result_value || '-');
   return (

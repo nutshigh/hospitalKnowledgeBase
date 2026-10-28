@@ -102,6 +102,7 @@ class Settings(BaseSettings):
 
     # Agent
     AGENT_MAX_ITERATIONS: int = 8              # 单轮最大工具调用轮数
+    JUDGE_ENABLED: bool = False                # False = 跳过 Judge LLM 审核(短路为通过); .env 设 true 可恢复
     JUDGE_MAX_RETRIES: int = 2                 # Judge 审核不通过的最大重试次数
 
     # JWT

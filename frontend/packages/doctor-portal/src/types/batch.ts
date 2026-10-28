@@ -6,11 +6,18 @@ export interface BatchSummary {
   filename: string;
   status: string;
   total: number;
+  parsing?: number;
   parsed_ok: number;
   interp_ok: number;
   failed: number;
   created_at?: string | null;
   completed_at?: string | null;
+}
+
+/** 解析列口径：仍在解析阶段(未完成解读且未失败)的文件数。 */
+export function parsingCount(b: BatchSummary): number {
+  if (typeof b.parsing === 'number') return b.parsing;
+  return Math.max(0, (b.total ?? 0) - (b.interp_ok ?? 0) - (b.failed ?? 0));
 }
 
 export interface FailingFile {

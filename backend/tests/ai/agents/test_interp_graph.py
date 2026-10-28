@@ -19,6 +19,41 @@ def test_build_interp_graph_returns_compiled():
         assert graph is not None
 
 
+def test_judge_enabled_defaults_to_false():
+    """JUDGE_ENABLED 默认关闭(跳过 Judge LLM), .env 设 true 可恢复"""
+    from app.config import Settings
+    assert Settings.model_fields["JUDGE_ENABLED"].default is False
+
+
+def test_judge_short_circuits_when_disabled(monkeypatch):
+    """JUDGE_ENABLED=False 时 judge 节点直接通过, 不调用 run_judge"""
+    from app.ai.agents import interp_graph as ig
+
+    monkeypatch.setattr(ig.settings, "JUDGE_ENABLED", False)
+    with patch("app.ai.agents.interp_graph.get_chat_model"), \
+            patch("app.ai.agents.interp_graph.run_judge") as mock_judge:
+        graph = ig.build_interp_graph("H001", MagicMock())
+        judge_node = graph.nodes["judge"].bound.func
+        result = judge_node({"abnormal_indicators": [{"item_name": "x"}], "judge_retry_count": 0})
+    assert result["judge_result"]["passed"] is True
+    mock_judge.assert_not_called()
+
+
+def test_judge_calls_llm_when_enabled(monkeypatch):
+    """JUDGE_ENABLED=True 时恢复调用 run_judge, 审核结果原样返回"""
+    from app.ai.agents import interp_graph as ig
+
+    monkeypatch.setattr(ig.settings, "JUDGE_ENABLED", True)
+    verdict = {"passed": False, "issues": ["缺引用"], "suggestions": "补充"}
+    with patch("app.ai.agents.interp_graph.get_chat_model"), \
+            patch("app.ai.agents.interp_graph.run_judge", return_value=verdict) as mock_judge:
+        graph = ig.build_interp_graph("H001", MagicMock())
+        judge_node = graph.nodes["judge"].bound.func
+        result = judge_node({"abnormal_indicators": [{"item_name": "x"}], "judge_retry_count": 0})
+    assert result["judge_result"] == verdict
+    mock_judge.assert_called_once()
+
+
 def test_report_interpretation_has_summary_refs_and_quality_note():
     """ReportInterpretation 模型含 summary_refs / quality_note 字段"""
     from app.modules.interpretation.models import ReportInterpretation
