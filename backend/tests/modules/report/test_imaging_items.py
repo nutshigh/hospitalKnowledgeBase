@@ -20,6 +20,7 @@ def _one(name, level, text="", gender=None, entries=None):
 
 def test_normal_statements_green():
     _one("心电图", "green", "2.正常心电图")
+    _one("心电图", "green", "心电图：正常")
     _one("彩超(心脏)", "green", "心脏彩超：房室大小及LVEF值正常范围")
     _one("心电图", "green", "1、窦性心律2、正常范围心电图")
     _one("彩超(心脏)", "green", "2.静息状态下左室整体收缩功能正常")

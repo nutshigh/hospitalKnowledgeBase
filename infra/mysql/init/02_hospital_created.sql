@@ -258,7 +258,7 @@ BEGIN
 
     SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.disease_hit ('
         'id BIGINT AUTO_INCREMENT PRIMARY KEY, report_id BIGINT NOT NULL, '
-        'interpretation_id BIGINT DEFAULT NULL, user_id BIGINT NOT NULL, '
+        'interpretation_id BIGINT DEFAULT NULL, user_id VARCHAR(64) NOT NULL, '
         'unit_name VARCHAR(100) DEFAULT NULL, report_date DATE DEFAULT NULL, '
         'disease_name VARCHAR(100) NOT NULL, '
         'disease_category VARCHAR(20) DEFAULT ''CHRONIC'', '

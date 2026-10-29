@@ -244,12 +244,30 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
     if profile and profile.get("lab_summary_marks"):
         from app.modules.report.table_extractor import mark_indicators_by_lab_summary
         mark_indicators_by_lab_summary(indicators, text)
-    if profile and (profile.get("strip_unit_flags") or profile.get("clear_flags")):
+    if profile and (profile.get("strip_unit_flags") or profile.get("clear_flags")
+                    or profile.get("positive_flags")
+                    or profile.get("drop_unref_duplicates")
+                    or profile.get("ref_compare")
+                    or profile.get("color_override")
+                    or profile.get("strip_result_marks")
+                    or profile.get("strip_name_prefixes")):
         from app.modules.report.table_extractor import apply_profile_indicator_fixes
         apply_profile_indicator_fixes(
             indicators,
             strip_unit_flags=bool(profile.get("strip_unit_flags")),
-            clear_flags=profile.get("clear_flags") or [])
+            clear_flags=profile.get("clear_flags") or [],
+            positive_flags=bool(profile.get("positive_flags")),
+            drop_unref_duplicates=bool(profile.get("drop_unref_duplicates")),
+            ref_compare=bool(profile.get("ref_compare")),
+            color_override=profile.get("color_override"),
+            strip_result_marks=bool(profile.get("strip_result_marks")),
+            strip_name_prefixes=profile.get("strip_name_prefixes"))
+    if profile and profile.get("prefer_layout_results"):
+        from app.modules.report.table_extractor import prefer_layout_results
+        prefer_layout_results(indicators, col_rows, fill_missing=True)
+    if profile and profile.get("recover_folded_units_refs"):
+        from app.modules.report.table_extractor import recover_folded_units_refs
+        recover_folded_units_refs(indicators, text)
     # 2026-09-23: 姓名同名行清理(与 service.process_task 同构; 曹嘉冰封面"曹嘉冰/44")
     from app.modules.report.table_extractor import (
         extract_personal_info as _epi, extract_name_from_layout as _enfl, _name_ok)

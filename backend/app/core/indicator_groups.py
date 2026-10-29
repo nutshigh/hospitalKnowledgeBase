@@ -152,6 +152,9 @@ def classify(item_name: str, unit: Optional[str] = None) -> Optional[str]:
         return None
     from app.core.term_normalizer import normalize_compat_chars
     name = _norm(normalize_compat_chars(item_name).translate(_CYR2LAT))
+    # 2026-10-23(才溢用户反馈): 尿沉渣红细胞分析项虽然含"红细胞", 不是血常规
+    if "红细胞信息" in name or "红细胞散射光强度" in name:
+        return "尿常规"
     # 2026-09-28: "红细胞/白细胞"裸名按单位消歧(毕惠丽"红细胞"51.34 /μl 曾误入血常规)
     # 2026-10-19(用户反馈): 扩展 —— 血常规**全名**("红细胞数"/"白细胞计数")带尿单位
     # (/μL、/HP…)也是尿检项(包强/陈佳漩 血尿同名误分); 血单位(10^9/10^12)恒判血常规。

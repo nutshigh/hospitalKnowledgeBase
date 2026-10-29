@@ -500,6 +500,20 @@ def test_multi_findings_profile_flags():
     assert match_profile("某不存在的医院").get("multi_findings") is False
 
 
+def test_kunming_profile_disables_hybrid_ocr():
+    """昆明医科大学第一附属医院: 结论/检验表在文本层, 尾部影像报告为扫描图,
+    通用 hybrid OCR 会白跑 1500+ 页 → 档案声明关闭 hybrid OCR。"""
+    from app.modules.report.report_profiles import match_profile
+    assert match_profile("昆明医科大学第一附属医院 体检报告").get("hybrid_ocr") is False
+    assert match_profile("某不存在的医院").get("hybrid_ocr") is True
+
+
+def test_xian_profile_disables_hybrid_ocr():
+    """西安交通大学第一附属医院: 报告 1 text-only 结论/指标与 hybrid 完全一致。"""
+    from app.modules.report.report_profiles import match_profile
+    assert match_profile("西安交通大学第一附属医院 体检报告").get("hybrid_ocr") is False
+
+
 # === 2026-09-28: 第五批档案锚点(盛京问候语 / 三亚专家建议) ===
 
 def test_batch5_profile_anchors():
@@ -748,6 +762,31 @@ def test_personal_info_bilingual_labels():
     assert info2.get("name") == "陈磊"
     assert info2.get("gender") == "男"
     assert info2.get("age") == "47"
+
+
+def test_imaging_report_text_detection():
+    """通用早停 marker: 影像模态 + "报告"(报告单/超声报告/影像报告)。"""
+    from app.modules.report.service import _is_imaging_report_text
+    assert _is_imaging_report_text("超声检查图文报告单\n超声诊断：脂肪肝") is True
+    assert _is_imaging_report_text("CT检查报告\nCT诊断：未见异常") is True
+    assert _is_imaging_report_text("影像报告\n检查所见：...") is True
+    assert _is_imaging_report_text("心电图检查报告单\n窦性心律") is True
+    assert _is_imaging_report_text(
+        "检验项目\n白细胞 6.0\n参考范围 3.5-9.5\n单位 10^9/L") is False
+    assert _is_imaging_report_text("腹部超声未见异常") is False  # 无"报告"
+    assert _is_imaging_report_text("本报告仅供临床参考") is False  # 无影像模态
+
+
+def test_personal_info_date_after_header_codes():
+    """昆明模板: "体检日期" 后紧跟流水号/姓名/单位, 日期在 200 字窗口内 ——
+    旧正则要求日期紧邻标签 → report_date 缺失, process_task 误触发全量 LLM
+    指标解析(每份 2-6 分钟)。"""
+    from app.modules.report.table_extractor import extract_personal_info
+    t = ("体检日期\n26042900533\n26042900533\n丁国鹏\n男\n"
+         "国家移民管理局常备力量第二总队\n13988093094\n2026-05-07\n"
+         "昆明医科大学第一附属医院健康管理中心")
+    info = extract_personal_info(t)
+    assert info.get("report_date") == "2026-05-07"
 
 
 def test_strip_ocr_html_restores_anchor():
@@ -1154,6 +1193,10 @@ def test_force_ocr_task_ids_parsing(monkeypatch):
     monkeypatch.setattr(_st, "FORCE_OCR_TASKS", "")
     monkeypatch.setenv("FORCE_OCR_TASKS", "39, 40 , x")
     assert _force_ocr_task_ids() == {39, 40}
+    # 2026-10-29: 支持医院级作用域 H004:89 —— 裸 task id 会跨租户误命中
+    # (hospital_283 task 89 李京学曾被 FORCE_OCR_TASKS=89 强制 OCR)。
+    monkeypatch.setenv("FORCE_OCR_TASKS", "H004:89, 39")
+    assert _force_ocr_task_ids() == {39, ("H004", "89")}
     monkeypatch.setenv("FORCE_OCR_TASKS", "")
     assert _force_ocr_task_ids() == set()
 
@@ -2710,3 +2753,38 @@ def test_songyuzao_urine_quant_and_exam_garbage():
     assert classify("尿杆菌定量", "/μL") == "尿常规"
     assert _junk_row_cell("双侧锁骨下动脉", "", "1")
     assert _junk_row_cell("泌尿系超声-男", "", "1")
+
+
+def test_tenth_batch_all_conclusions_titles_and_order():
+    from app.modules.report.service import _collect_all_conclusions
+    text = """
+项目名称
+检查日期: 2026.07.15
+医生签名
+测量检查
+结论: (1)体重指数:27.7 超重 (2)1级高血压
+检查日期: 2026.07.16
+项目名称
+检查者:
+生化检测
+结论: 低密度脂蛋白胆固醇(LDL-CH)偏高、谷丙转氨酶(ALT)偏高
+检查日期: 2026.07.16
+项目名称
+检查者:
+眼科
+结论: 正常
+"""
+    out = _collect_all_conclusions(text, reverse_short_pairs=True)
+    lines = out.splitlines()
+    assert lines[0].startswith("1.测量检查：")
+    assert lines[1] == "2.生化检测：谷丙转氨酶(ALT)偏高、低密度脂蛋白胆固醇(LDL-CH)偏高"
+    assert lines[2] == "3.眼科：正常"
+
+
+def test_tenth_batch_join_profile_fragments():
+    from app.modules.report.service import _join_profile_fragments
+    pairs = [(r"（胃窦大弯偏后壁$", r"^侧）"), (r"十二$", r"^指肠球炎")]
+    text = "（胃窦大弯偏后壁\n侧）粘膜\n十二\n指肠球炎是炎症"
+    out = _join_profile_fragments(text, pairs)
+    assert "（胃窦大弯偏后壁侧）粘膜" in out
+    assert "十二指肠球炎是炎症" in out

@@ -26,14 +26,21 @@ ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
 
 # 文件名约定: <姓名>_<身份证后六位>.<ext>  (后六位 = 5 位数字 + 末位数字或 X)
 _FILENAME_RE = re.compile(r"^([^_]+)_([0-9]{5}[0-9X])$")
+# 兼容无下划线形式 <姓名><后六位>.<ext>: 姓名限中文, 最后 6 位为后六位;
+# 姓名与后六位之间混入的多余数字忽略(如 王超1251011 -> 王超/251011)。
+_FILENAME_NO_SEP_RE = re.compile(r"^([\u4e00-\u9fff·]+)[0-9]*([0-9]{5}[0-9X])$")
 
 
 def _parse_filename(filename: str) -> Optional[tuple[str, str]]:
     """从 zip/tar 内文件名抽取 (姓名, 身份证后六位)。
+    支持 <姓名>_<后六位> 与 <姓名><后六位>(姓名限中文)。
     Returns (str, str) on match, None on mismatch。
     """
     base = os.path.splitext(os.path.basename(filename))[0]
     m = _FILENAME_RE.match(base)
+    if m:
+        return m.group(1), m.group(2)
+    m = _FILENAME_NO_SEP_RE.match(base)
     if m:
         return m.group(1), m.group(2)
     return None

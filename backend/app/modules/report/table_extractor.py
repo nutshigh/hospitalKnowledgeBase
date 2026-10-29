@@ -161,7 +161,7 @@ _SKIP_NAMES = re.compile(
     r"单位[:：]|单位$|部门[:：]|体检报告|健康体检报告|本体检报告|"
     r"体重超过标准体重|边缘|合适水平|升高|降低|提示|异常|现病史|既往史|家族史|"
     # 2026-09-23: 第四批反馈清理 —— 生活方式/超声描述碎片
-    r"吸烟史|饮酒史|最大|最小|"
+    r"吸烟史|饮酒史|最大|最小|左$|右$|数\(%\)$|深圳博英|"
     r"^(?:肾功|肝功|血脂|血常规|尿常规|尿沉渣|常规生化|乙肝|丙肝|甲功|甲胎|心肌酶)[一二三四五六七八九十\d]*项?$|^比$|"
     r"大小约|小约为|直径约|"
     r"常规心电图|彩超|B超|超声|X线|DR|CT|MR|TCD|碳13|幽门螺杆菌(?!I?gG?|抗体|抗原|HP)|门诊|瞬时弹性成像)"
@@ -190,15 +190,19 @@ _SKIP_SUB_RE = re.compile(
     # 2026-10-13: 机构名/驻点行(任晓光"南昌醫學院第一附屬医院"/"江西出入境边防检查总站")
     r"醫學院|医学院|附屬|附属医院|出入境|边防|体检中心$|健康管理中心$|"
     # 2026-09-23: 表头字段合并名(台州 48 "登记日期电话号码"/"健康号" 曾被当指标)
-    r"登记日期|电话号码|健康号|出生日期|打印时间|体检日期|"
+    r"登记日期|电话号码|健康号|出生日期|打印时间|体检日期|报告日期|联系电话|"
+    r"第\s*\d+\s*页|共\s*\d+\s*页|病案号|"
     # 2026-09-23: 医院联系信息行(常逢龙"总 院：021-…/浦东院区：021-…")
     r"院区|总\s*院|"
     # 2026-10-14: 表头"正常参考值"列与前一行并名("正常参考值身高", 纪卓武);
     # "小结"尾缀合并名("辨色力正常小结"/"正常心电图小结"); 报告单头合并名
     # ("尿液分析检验报告单条码号"/"敦煌康美综合医院报告单标本号")
+    r"结果所见|结果诊断|边检站|医师必须审阅|医生必须审阅|次/分|"
+    r"光学相干断层|见纸质报告|"
     r"正常参考值|小结$|报告单|条码号|标本号|诊断意见|上上次|上次|附属|预约号|注意事项|"
     r"检查项目|采样时间|报告解读专线|爱康|用[⼾户]ID|试验[）)]$|[0-9A-F]{20,}|V\d+V\d+|"
-    r"操作[:：]|审核[:：]|男\s*[·•]|不适感觉|您于\d{4})"
+    r"操作[:：]|审核[:：]|男\s*[·•]|不适感觉|您于\d{4}|把我们的关怀|结果说明[:：]?|末次月经|^月$|"
+    r"^(?:棕色|淡黄色|黄色|白色|红色|绿色|黑色|褐色|清亮|清澈|透明)$)"
 )
 
 
@@ -278,7 +282,7 @@ def _junk_row_cell(name: str, unit: str = "", result: str = "") -> bool:
         return True
     # 2026-09-28: 结果为字段标签残片("检查者凌延昭"/"报告时间2026-05-20", 单吉飞
     # 分科页眉"■内科常规检查"被拼成指标行)
-    if re.search(r"检查者|报告时间|检查日期|审核日期|检查医生|审核医师|检查结果|检查项目",
+    if re.search(r"检查者|报告时间|检查日期|审核日期|检查医生|审核医师|检验医生|检查结果|检查项目",
                  result or ""):
         return True
     # 2026-09-23: 括号未闭合的截断标题("右侧甲状腺小结节可能（TI-RADS" + 值3 + 单位"）")
@@ -1797,8 +1801,83 @@ def mark_indicators_by_lab_summary(indicators: list, text: str) -> None:
                     ind["signal_flag"] = 3
 
 
+def prefer_layout_results(indicators: list, layout_rows: list,
+                          fill_missing: bool = False) -> None:
+    """2026-10-23: 布局路径结果优先。
+
+    双栏/反序表常同时被行式/信号通道错误配值(粤东 HBsAg 阳性来自小结行)。
+    同名项若布局行有不同结果, 丢弃非布局行; 布局缺失的名称保留原行。
+    """
+    if not layout_rows:
+        return
+    layout = {}
+    for r in layout_rows:
+        n = re.sub(r"\s+", "", str(r.get("item_name") or "")).lower()
+        if n:
+            layout[n] = str(r.get("result") or "").strip()
+    drop = set()
+    for ind in indicators:
+        n = re.sub(r"\s+", "", str(ind.get("item_name") or "")).lower()
+        if n in layout and str(ind.get("result") or "").strip() != layout[n]:
+            drop.add(id(ind))
+    if drop:
+        indicators[:] = [i for i in indicators if id(i) not in drop]
+    if fill_missing:
+        existing = {re.sub(r"\s+", "", str(i.get("item_name") or "")).lower()
+                    for i in indicators}
+        for r in layout_rows:
+            n = re.sub(r"\s+", "", str(r.get("item_name") or "")).lower()
+            if n and n not in existing and str(r.get("result") or "").strip():
+                indicators.append(dict(r))
+                existing.add(n)
+
+
+def recover_folded_units_refs(indicators: list, text: str) -> None:
+    """2026-10-23: 开滦表两栏 dump 的单位/参考折行回收。
+
+    单位: "*10^9\n/L" → "*10^9/L"; "umol/\nL" → "umol/L"。
+    参考: "0.108-0.2\n82" → "0.108-0.282"(仅当高位小数位少于低位且拼接后有效)。
+    """
+    if not text or not indicators:
+        return
+    for ind in indicators:
+        u = str(ind.get("unit") or "").strip()
+        if u:
+            m = re.search(re.escape(u) + r"\s*\n\s*(/\s*(?:L|uL|ul|μL|mL|dL|HP|LP|hpf|lpf|u|g|s|min|h))",
+                          text)
+            if m:
+                ind["unit"] = u + m.group(1).strip()
+        lo, hi = ind.get("ref_low"), ind.get("ref_high")
+        if lo is None or hi is None:
+            continue
+        lo_s, hi_s = str(lo).strip(), str(hi).strip()
+        try:
+            lo_f, hi_f = float(lo_s), float(hi_s)
+            if "." not in hi_s:
+                continue
+            if (hi_f > lo_f
+                    and len(hi_s.split(".")[-1]) >= len(lo_s.split(".")[-1])):
+                continue
+            pat = re.escape(lo_s) + r"\s*[-~]\s*" + re.escape(hi_s) + r"\s*\n\s*(\d{1,3})"
+            m = re.search(pat, text)
+            if not m:
+                continue
+            cand = hi_s + m.group(1)
+            c_f = float(cand)
+            if c_f > lo_f and len(cand.split(".")[-1]) == len(lo_s.split(".")[-1]):
+                ind["ref_high"] = cand
+        except ValueError:
+            continue
+
+
 def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = False,
-                                    clear_flags: list | None = None) -> None:
+                                    clear_flags: list | None = None,
+                                    positive_flags: bool = False,
+                                    drop_unref_duplicates: bool = False,
+                                    ref_compare: bool = False,
+                                    color_override: tuple | None = None,
+                                    strip_result_marks: bool = False,
+                                    strip_name_prefixes: list | None = None) -> None:
     """2026-10-22: 档案级指标修整。
 
     - strip_unit_flags: 单位列误并标志("↑kg/㎡"/"↓%") → 单位去箭头, signal_flag=2
@@ -1806,10 +1885,72 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
     - clear_flags: 纯扫描 VLM 误标的项目(宋文军 RDW-SD/MPV/MCV 无标志) → 清 0。
     """
     _clear = {re.sub(r"\s+", "", x) for x in (clear_flags or []) if x}
+    if color_override:
+        _keep, _ref = color_override
+        _color_rows = [i for i in indicators
+                       if str(i.get("item_name") or "").strip() == "颜色"]
+        if _color_rows:
+            _chosen = next((i for i in _color_rows
+                            if str(i.get("result") or "").strip() == _keep),
+                           _color_rows[0])
+            _chosen["result"] = _keep
+            _chosen["signal_flag"] = max(3, int(_chosen.get("signal_flag") or 0))
+            _chosen["ref_low"] = None
+            _chosen["ref_high"] = None
+            _chosen["unit"] = ""
+            _ids = {id(i) for i in _color_rows if i is not _chosen}
+            indicators[:] = [i for i in indicators if id(i) not in _ids]
+    if drop_unref_duplicates:
+        _groups: dict = {}
+        for ind in indicators:
+            _groups.setdefault(re.sub(r"\s+", "", ind.get("item_name") or ""), []).append(ind)
+        _drop = set()
+        for _g in _groups.values():
+            if len(_g) < 2:
+                continue
+            _has_ref = any(x.get("ref_low") or x.get("ref_high") or x.get("unit") for x in _g)
+            if not _has_ref:
+                continue
+            for x in _g:
+                if not (x.get("ref_low") or x.get("ref_high") or x.get("unit")):
+                    _drop.add(id(x))
+        if _drop:
+            indicators[:] = [x for x in indicators if id(x) not in _drop]
+    _prefixes = [x for x in (strip_name_prefixes or []) if x]
     for ind in indicators:
+        if _prefixes:
+            _nm = str(ind.get("item_name") or "")
+            for _p in _prefixes:
+                if _nm.startswith(_p):
+                    _nm = _nm[len(_p):].strip()
+                    ind["item_name"] = _nm
+                    break
+        if strip_result_marks:
+            _rv = str(ind.get("result") or "")
+            _m = re.search(r"\s*[*＊↑↓]+\s*$", _rv)
+            if _m:
+                ind["result"] = _rv[:_m.start()].strip()
+                ind["signal_flag"] = max(3, int(ind.get("signal_flag") or 0))
         _n = re.sub(r"\s+", "", ind.get("item_name") or "")
         if _n in _clear:
             ind["signal_flag"] = 0
+        if positive_flags and not (ind.get("signal_flag") or 0):
+            _rv = str(ind.get("result") or "")
+            if re.search(r"阳性|弱阳性", _rv) and not re.search(r"阴性", _rv):
+                ind["signal_flag"] = 3
+        if ref_compare and not (ind.get("signal_flag") or 0):
+            _rv = str(ind.get("result") or "")
+            if re.search(r"阳性|弱阳性", _rv) and not re.search(r"阴性", _rv):
+                ind["signal_flag"] = 3
+            else:
+                try:
+                    _v = float(re.sub(r"[<>≤≥]","", _rv))
+                    _lo = float(str(ind.get("ref_low"))) if ind.get("ref_low") is not None else None
+                    _hi = float(str(ind.get("ref_high"))) if ind.get("ref_high") is not None else None
+                    if (_hi is not None and _v > _hi) or (_lo is not None and _v < _lo):
+                        ind["signal_flag"] = 2
+                except (TypeError, ValueError):
+                    pass
         if strip_unit_flags:
             for _fld in ("unit", "ref_low", "ref_high"):
                 _v = ind.get(_fld)
@@ -1876,6 +2017,15 @@ def extract_personal_info(text: str) -> dict:
     m = _re.search(r"(体检日期|检查日期|体检时间|登记日期|首检日期)(?:\([^)]*\))?\s*[:：]?\s*[_\s]*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
     if m:
         out["report_date"] = f"{m.group(2)}-{int(m.group(3)):02d}-{int(m.group(4)):02d}"
+    if not out.get("report_date"):
+        # 2026-10-29: 标签后紧跟流水号/姓名/单位等字段(昆明模板), 日期落在 200 字
+        # 窗口内 —— 旧正则要求日期紧邻标签 → report_date 缺失, process_task 误触发
+        # 全量 LLM 指标解析(每份 2-6 分钟)。仅在直接匹配失败时兜底。
+        m = _re.search(
+            r"(体检日期|检查日期|体检时间|登记日期|首检日期)(?:\([^)]*\))?"
+            r"[\s\S]{0,200}?(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", text)
+        if m:
+            out["report_date"] = f"{m.group(2)}-{int(m.group(3)):02d}-{int(m.group(4)):02d}"
     m = _re.search(r"单\s*位[:：]\s*([\u4e00-\u9fa5A-Za-z（）()]{2,30})", text)
     if m and not _re.search(r"(部门名称|单位名称|联系单位|检查单位)", m.group(1)) \
             and not _re.fullmatch(
@@ -2150,7 +2300,8 @@ def _pair_arrow_by_row(lines: list[str], meta: list[tuple], idx: int,
 
 def extract_abnormal_signals(pdf_path: str, skip_text: str = "",
                              red_marks: bool = False,
-                             red_ref: bool = False) -> list[dict]:
+                             red_ref: bool = False,
+                             skip_pages: Optional[set] = None) -> list[dict]:
     """异常信号提取: 红字行 + 箭头行 + 异常词行 → (名称, 结果) 候选。
 
     信号行在**全文行**中定位, 以便向上配对黑色名称行/向下找值行。
@@ -2193,8 +2344,9 @@ def extract_abnormal_signals(pdf_path: str, skip_text: str = "",
     all_lines: list[str] = []
     line_meta: list[tuple] = []  # (page_no, y0, x0) —— 同页同排(y)配对箭头用(高帅)
     signal_idx: list[tuple[int, str]] = []
+    _skip_pages = set(skip_pages or ())
     for page_no, page in enumerate(doc):
-        if page_no in _hist_pages:
+        if page_no in _hist_pages or (page_no + 1) in _skip_pages:
             continue  # 2026-10-19: 历次对比表(含跨页续表)不进信号通道
         d = page.get_text("dict")
         block_lines = []
@@ -2346,7 +2498,8 @@ def _pdf_text_layer_ok(pdf_path: str) -> bool:
 
 
 def col_rows_with_fallback(pdf_path: str, text: str,
-                           infer_columns: bool = False) -> list[dict]:
+                           infer_columns: bool = False,
+                           skip_pages: Optional[set] = None) -> list[dict]:
     # 2026-09-15: 坐标主路径已修(两联排表按角色最小重复周期分组, 高帅/白玮衡体格表
     # "身高|179.5cm 收缩压|121mmHg" 不再并成一名) → 重新优先启用; 空/异常回退文本列式。
     # 2026-10-14: 历年对比页(标题变体)页码 → 布局整页跳过(石硕)
@@ -2363,8 +2516,10 @@ def col_rows_with_fallback(pdf_path: str, text: str,
                 # 2026-10-16: 心脑血管病风险评估页(prose/等级/建议)整页跳过
                 _pages.add(_cur)
         _skip_pages = _pages or None
+        if skip_pages:
+            _skip_pages = (_skip_pages or set()) | set(skip_pages)
     except Exception:
-        _skip_pages = None
+        _skip_pages = set(skip_pages or ()) or None
     try:
         rows = col_rows_via_layout(pdf_path, skip_pages=_skip_pages,
                                    infer_columns=infer_columns)

@@ -331,6 +331,23 @@ def test_parse_filename_id_suffix_matches():
 
 
 # ---------------------------------------------------------------------------
+# T2.10b _parse_filename: 兼容无下划线 姓名+后六位(含姓名后混入多余数字)
+# ---------------------------------------------------------------------------
+def test_parse_filename_no_separator_matches():
+    from app.modules.report.extract_worker import _parse_filename
+    assert _parse_filename("王梅230040.pdf") == ("王梅", "230040")
+    assert _parse_filename("丁国鹏22001X.pdf") == ("丁国鹏", "22001X")
+    assert _parse_filename("颜琰琰01122X.pdf") == ("颜琰琰", "01122X")
+    assert _parse_filename("sub/dir/王梅230040.pdf") == ("王梅", "230040")
+    # 姓名与后六位之间混入 1 位多余数字: 按最后 6 位为身份证后六位解析
+    assert _parse_filename("王超1251011.pdf") == ("王超", "251011")
+    assert _parse_filename("赵永鹏2220610.pdf") == ("赵永鹏", "220610")
+    # 无下划线仅接受中文姓名, 避免吞掉旧 <姓名><医院编码><用户编号> 形态
+    assert _parse_filename("LiSi204800.pdf") is None
+    assert _parse_filename("张三H0011001.pdf") is None
+
+
+# ---------------------------------------------------------------------------
 # T2.11 _parse_filename: 反例不命中(返回 None)
 # ---------------------------------------------------------------------------
 def test_parse_filename_id_suffix_rejects():

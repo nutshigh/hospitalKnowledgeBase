@@ -32,6 +32,23 @@ def _compile_profile_re(profile: Optional[dict]) -> dict:
     _, compile_profile = _load_report_profiles()
     return compile_profile(profile)
 
+
+def _pre_scan_hybrid_decision(processed_path: str,
+                              force_ocr: bool = False) -> tuple[bool, str]:
+    """无 OCR 预扫文本层, 按医院档案决定是否走 hybrid 补充 OCR。
+
+    2026-10-29: 昆明医科大学第一附属医院结论/检验表都在文本层, 尾部影像页
+    (超声/心电图等)为扫描图且 OCR 结果不进入结论/指标 → 档案声明 hybrid_ocr=False。
+    force_ocr / 无文本层(纯扫描件) 无法预扫, 保持 hybrid 原行为。
+    返回 (use_hybrid, pre_text)。
+    """
+    if force_ocr or not _pdf_has_text(processed_path):
+        return True, ""
+    pre_text = _extract_pdf_text(processed_path, hybrid=False)
+    match_profile, _ = _load_report_profiles()
+    profile = match_profile(pre_text)
+    return profile.get("hybrid_ocr", True), pre_text
+
 _log = logging.getLogger("app.parse")
 
 
@@ -931,6 +948,122 @@ def _compress_letter_spaced(s: str, force: bool = False) -> str:
     return re.sub(rf"(?<={_cls}) +(?={_cls})", "", s)
 
 
+def _join_profile_fragments(section: str, pairs) -> str:
+    """2026-10-23: 档案声明的折行碎片拼接(开滦 才溢)。"""
+    if not pairs:
+        return section
+    lines = section.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i]
+        for left, right in pairs:
+            if i + 1 < len(lines) and re.search(left, cur) and re.search(right, lines[i + 1]):
+                cur += lines[i + 1]
+                i += 1
+                break
+        out.append(cur)
+        i += 1
+    return "\n".join(out)
+
+
+def _split_inline_numbered_findings(section: str) -> str:
+    """2026-10-23: 同一行内的编号发现按序号拆行(才溢 "…（LA-B）2、…")。"""
+    s = re.sub(r"(?<=[）)】])(?=\d{1,2}、)", "\n", section)
+    # 编号条目内的"伴糜烂（体、窦）"是同一句折行, 不另起段(仅本档案调用)。
+    lines = s.splitlines()
+    merged = []
+    for ln in lines:
+        if (merged and re.match(r"^\d{1,3}\s*[、.．)）]", merged[-1])
+                and re.match(r"^(?:伴|并|且|及|和)", ln)
+                and re.search(r"[）)]$", merged[-1])):
+            merged[-1] += ln
+        else:
+            merged.append(ln)
+    return "\n".join(merged)
+
+
+def _collect_all_conclusions(text: str, reverse_short_pairs: bool = False,
+                             reverse_titles: list | None = None) -> str:
+    """2026-10-23: 汇总全报告所有分科"结论:"块(汕头范永革), 按 1.2.3. 编号。
+
+    保留正常/阴性块; 每条前加科室标题(测量检查/生化检测...)。
+    """
+    lines = _strip_ocr_html(text or "").splitlines()
+    blocks: list[tuple[str, str]] = []
+    title = ""
+    take_title = False
+    cur: str | None = None
+    cur_title = ""
+    header_words = {"医生签名", "医生签名:", "医生签名：", "录入者", "导入者",
+                    "检查者:", "检查者：", "检查者"}
+    for raw in lines:
+        t = raw.strip()
+        if not t:
+            continue
+        if t == "项目名称":
+            title = ""
+            take_title = False
+            continue
+        if t in header_words:
+            take_title = True
+            continue
+        if take_title:
+            if t in {"检查者:", "检查者：", "检查者"} or t in header_words:
+                continue
+            title = t
+            take_title = False
+            continue
+        if t.startswith(("结论:", "结论：")):
+            if cur is not None:
+                blocks.append((cur_title, cur))
+            cur_title = title
+            cur = t.split(":", 1)[-1].split("：", 1)[-1].strip()
+            continue
+        if cur is None:
+            continue
+        if re.match(r"^(项目名称|检查日期[:：]|体检流水号|姓名[:：]|第\d+页|医生[:：]|报告日期)", t):
+            if cur:
+                blocks.append((cur_title, cur))
+            cur = None
+            continue
+        cur = (cur + " " + t).strip() if cur else t
+    if cur:
+        blocks.append((cur_title, cur))
+    out: list[str] = []
+    for i, (sec, b) in enumerate(blocks, 1):
+        b = re.sub(r"\s+", " ", b).strip()
+        if not b:
+            continue
+        if reverse_titles and sec in reverse_titles:
+            _parts = re.split(r"(?<=[。！？；])", b)
+            b = "".join(reversed([x for x in _parts if x])).strip()
+        if reverse_short_pairs and b.count("、") == 1 and "。" not in b and "；" not in b:
+            left, right = b.split("、", 1)
+            b = right + "、" + left
+        b = b.strip(" 。；;")
+        out.append(f"{i}.{sec or '结论'}：{b}")
+    return "\n".join(out)
+
+def _clean_ocr_conclusion(section: str) -> str:
+    """2026-10-23: 末页表 OCR 结论去重复标签/正常项(范永革)。"""
+    out = []
+    seen_title = False
+    for ln in section.splitlines():
+        t = ln.strip()
+        if t in {"体检流水号", "总检报告"} or re.match(r"^医生[:：]", t):
+            break
+        if t in {"结论:", "结论："}:
+            if not seen_title:
+                out.append("结论:")
+                seen_title = True
+            continue
+        if t in {"正常", "未见异常"}:
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _reflow_conclusion_lines(section: str, despace: bool = False) -> str:
     """展示规整: 消除 PDF 行内折行, 保留条目标题行结构。
 
@@ -1526,6 +1659,11 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
     """
     compiled = _compile_profile_re(profile)
     loc_text = _strip_ocr_html(text)
+    if profile and profile.get("all_conclusions"):
+        return _collect_all_conclusions(
+            loc_text,
+            reverse_short_pairs=bool(profile.get("reverse_short_pairs")),
+            reverse_titles=profile.get("reverse_titles"))[:16000]
     section = _locate_findings_sections(
         loc_text, extra_break_re=compiled["extra_break_re"], extra_skip_re=compiled["extra_skip_re"],
         extra_anchor_re=compiled["extra_anchor_re"],
@@ -1572,10 +1710,16 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
             return _reflow_table_conclusion(section)[:16000]
         if profile and profile.get("clean_important_head"):
             section = _clean_important_result_head(section)
+        if profile and profile.get("join_fragments"):
+            section = _join_profile_fragments(section, profile["join_fragments"])
+        if profile and profile.get("inline_numbered_split"):
+            section = _split_inline_numbered_findings(section)
         _adv_titles = (_numbered_advice_titles(section)
                        if profile and profile.get("numbered_advice") else None)
         section = _reflow_conclusion_lines(
             section, despace=bool(profile and profile.get("despace")))
+        if profile and profile.get("clean_ocr_conclusion"):
+            section = _clean_ocr_conclusion(section)
         if profile and profile.get("numbered_advice"):
             section = _format_numbered_advice(section, titles=_adv_titles)
         if profile and profile.get("collapse_repeats"):
@@ -1586,6 +1730,9 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
                 section = _collapse_repeated_text(section)
         # 2026-09-09: 中段剥离"检 查 综 述"★枚举页(茂名 25 —— 该页插在医生建议
         # 区中间, 条目与建议区重复, 且"前列腺增大并局部钙化"等组合名会污染条目)。
+        if profile and profile.get("pathology_explanation_split"):
+            section = re.sub(r"(?<=萎缩（-）)(?=[\u4e00-\u9fa5]{2,}、)", "\n", section)
+            section = re.sub(r"(?<=萎缩\(-\))(?=[\u4e00-\u9fa5]{2,}、)", "\n", section)
         if profile and profile.get("review_block"):
             section = _drop_review_block(section)
         return section[:16000]
@@ -1765,6 +1912,7 @@ _REF_NAME_PREFIX_RE = re.compile(
 def _clean_indicator_name(name: str) -> str:
     if not name:
         return name
+    name = re.sub(r"^[◆◇●○■□★☆*＊\s]+", "", name)
     return _REF_NAME_PREFIX_RE.sub("", name).strip() or name
 
 
@@ -4027,19 +4175,46 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         # 总检建议没提取到)。
         _pdf_text_probe = None
         # 2026-09-15: 方案a —— 文本层字体映射损坏的报告(如蔡超)强制逐页 OCR
-        _force_ocr = task_id in _force_ocr_task_ids()
+        # 2026-10-29: 支持医院级作用域(如 H004:89), 避免裸 task id 跨租户误命中
+        _force_ids = _force_ocr_task_ids()
+        _force_ocr = task_id in _force_ids or (hospital_id, str(task_id)) in _force_ids
+        # 2026-10-29: 影像报告页后默认停止后续 OCR; 少数"影像后还有检验表"的
+        # 报告用任务级 KEEP_OCR_TASKS 或医院档案 keep_ocr_after_imaging 例外。
+        _keep_ids = _keep_ocr_task_ids()
+        _keep_ocr_after_imaging = (
+            task_id in _keep_ids or (hospital_id, str(task_id)) in _keep_ids)
         if task.file_type == "pdf" and (not _pdf_has_text(processed_path) or _force_ocr):
             try:
-                _probe = _extract_pdf_text(processed_path, hybrid=True, force_ocr=_force_ocr)
+                _probe = _extract_pdf_text(
+                    processed_path, hybrid=True, force_ocr=_force_ocr,
+                    keep_ocr_after_imaging=_keep_ocr_after_imaging)
             except Exception as e:
                 _log.warning("scanned pdf hybrid probe failed task=%s: %s", task_id, e)
                 _probe = ""
             if len(_probe or "") > 200:
                 _pdf_text_probe = _probe
+        # 2026-10-29: 先无 OCR 预扫文本层, 按医院档案决定是否 hybrid 补充 OCR
+        # (昆明医科大学第一附属医院 hybrid_ocr=False: 结论/检验表在文本层)
+        _use_hybrid = True
+        _pre_text = ""
+        if task.file_type == "pdf" and not _pdf_text_probe:
+            _use_hybrid, _pre_text = _pre_scan_hybrid_decision(
+                processed_path, force_ocr=_force_ocr)
+            if _pre_text:
+                _mp, _ = _load_report_profiles()
+                if _mp(_pre_text).get("keep_ocr_after_imaging"):
+                    _keep_ocr_after_imaging = True
         # For text-based PDFs, use direct text extraction + LLM parsing
         if task.file_type == "pdf" and (_pdf_has_text(processed_path) or _pdf_text_probe):
             # 2026-09-03: hybrid —— 文本页直接取, 图片结论页走 OCR 补充
-            text = _pdf_text_probe if _pdf_text_probe else _extract_pdf_text(processed_path, hybrid=True)
+            if _pdf_text_probe:
+                text = _pdf_text_probe
+            elif not _use_hybrid and _pre_text:
+                text = _pre_text
+            else:
+                text = _extract_pdf_text(
+                    processed_path, hybrid=_use_hybrid,
+                    keep_ocr_after_imaging=_keep_ocr_after_imaging)
             report_raw_text = text
             # === 2026-09-03: 医院模板档案 —— visual_sort 模板(多栏混排)需按
             # 视觉坐标重排文本流, 否则默认流乱序(目录与详情交错)。
@@ -4066,6 +4241,10 @@ def process_task(db: Session, task_id: int, hospital_id: str,
             if profile.get("nfkc"):
                 text = normalize_compat_chars(text)
                 report_raw_text = text
+            _imaging_pages = None
+            if compiled.get("drop_imaging_pages"):
+                _imaging_pages = _imaging_report_page_numbers(text)
+                text = _drop_imaging_report_pages(text)
             # === 2026-08-25: 指标提取器开关 INDICATOR_EXTRACTOR=signal|llm ===
             # signal(默认): 规则提取(信号行标记 signal_flag=1, 绿区照常提取供解读参考)
             #   - 异常信号(红字/↑↓/异常词) → signal_flag=1, run_rules 强制黄/复核
@@ -4103,11 +4282,13 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 # 标志权威 —— 提示列异常标志 signal_flag=3 强制黄, 弃检不入库
                 col_rows = col_rows_with_fallback(
                     processed_path, text,
-                    infer_columns=bool(compiled.get("infer_columns")))
+                    infer_columns=bool(compiled.get("infer_columns")),
+                    skip_pages=_imaging_pages)
                 signals = extract_abnormal_signals(
                     processed_path, skip_text=findings_sec or "",
                     red_marks=bool(compiled.get("red_marks")),
-                    red_ref=bool(compiled.get("red_marks_ref")))
+                    red_ref=bool(compiled.get("red_marks_ref")),
+                    skip_pages=_imaging_pages)
                 # 2026-09-28: 信号通道误配折行名碎片(曾繁鲁"测定(HBsAb)"/"定(HBeAb)"/
                 # "酯(TG)") —— 信号名是列式/行式**全名真后缀**、结果相同、自身不是完整
                 # 指标名时改挂全名(标志保留), 碎片不再单独入库。
@@ -4658,12 +4839,30 @@ def process_task(db: Session, task_id: int, hospital_id: str,
         if compiled.get("lab_summary_marks"):
             from app.modules.report.table_extractor import mark_indicators_by_lab_summary
             mark_indicators_by_lab_summary(indicators, locals().get("text") or "")
-        if compiled.get("strip_unit_flags") or compiled.get("clear_flags"):
+        if (compiled.get("strip_unit_flags") or compiled.get("clear_flags")
+                or compiled.get("positive_flags")
+                or compiled.get("drop_unref_duplicates")
+                or compiled.get("ref_compare")
+                or compiled.get("color_override")
+                or compiled.get("strip_result_marks")
+                or compiled.get("strip_name_prefixes")):
             from app.modules.report.table_extractor import apply_profile_indicator_fixes
             apply_profile_indicator_fixes(
                 indicators,
                 strip_unit_flags=bool(compiled.get("strip_unit_flags")),
-                clear_flags=compiled.get("clear_flags") or [])
+                clear_flags=compiled.get("clear_flags") or [],
+                positive_flags=bool(compiled.get("positive_flags")),
+                drop_unref_duplicates=bool(compiled.get("drop_unref_duplicates")),
+                ref_compare=bool(compiled.get("ref_compare")),
+                color_override=compiled.get("color_override"),
+                strip_result_marks=bool(compiled.get("strip_result_marks")),
+                strip_name_prefixes=compiled.get("strip_name_prefixes"))
+        if compiled.get("prefer_layout_results"):
+            from app.modules.report.table_extractor import prefer_layout_results
+            prefer_layout_results(indicators, col_rows, fill_missing=True)
+        if compiled.get("recover_folded_units_refs"):
+            from app.modules.report.table_extractor import recover_folded_units_refs
+            recover_folded_units_refs(indicators, locals().get("text") or "")
 
         for ind in indicators:
             # 2026-09-23: 结果=表头标签/日期 的配对垃圾行(曾社健"癌胚抗原定量(CEA)|检查日期：
@@ -4747,10 +4946,45 @@ def _pdf_has_text(file_path: str) -> bool:
 def _force_ocr_task_ids() -> set:
     """2026-09-15: 按报告强制 OCR 的开关(方案 a) —— 文本层字体映射损坏的 PDF
     (如蔡超: ToUnicode 错位, 文本读成乱码)其 `_pdf_has_text` 仍为 True, 需显式
-    触发逐页 OCR。取值: 环境变量 `FORCE_OCR_TASKS`(逗号/空白分隔的 task id)。"""
+    触发逐页 OCR。取值: 环境变量 `FORCE_OCR_TASKS`(逗号/空白分隔)。
+    2026-10-29: 支持 `医院ID:task_id`(如 H004:89)限定租户 —— 裸 task id 会
+    跨租户误命中(hospital_283 task 89 曾被 H004 的 89 强制 OCR)。"""
     from app.config import settings as _settings
     raw = os.getenv("FORCE_OCR_TASKS", "") or getattr(_settings, "FORCE_OCR_TASKS", "")
-    return {int(x) for x in re.split(r"[,\s]+", raw or "") if x.strip().isdigit()}
+    out: set = set()
+    for x in re.split(r"[,\s]+", raw or ""):
+        x = x.strip()
+        if not x:
+            continue
+        if ":" in x:
+            hid, tid = x.split(":", 1)
+            if hid and tid.isdigit():
+                out.add((hid, tid))
+        elif x.isdigit():
+            out.add(int(x))
+    return out
+
+
+def _keep_ocr_task_ids() -> set:
+    """2026-10-29: 例外保持影像报告页之后继续 OCR 的报告开关。
+
+    取值: 环境变量 `KEEP_OCR_TASKS`(逗号/空白分隔), 支持 `医院ID:task_id`
+    限定租户; 裸 task id 跨租户匹配。默认空 = 命中影像标题即停止后续 OCR。
+    """
+    from app.config import settings as _settings
+    raw = os.getenv("KEEP_OCR_TASKS", "") or getattr(_settings, "KEEP_OCR_TASKS", "")
+    out: set = set()
+    for x in re.split(r"[,\s]+", raw or ""):
+        x = x.strip()
+        if not x:
+            continue
+        if ":" in x:
+            hid, tid = x.split(":", 1)
+            if hid and tid.isdigit():
+                out.add((hid, tid))
+        elif x.isdigit():
+            out.add(int(x))
+    return out
 
 
 def _page_content_strips(page) -> int:
@@ -4781,6 +5015,25 @@ def _text_looks_like_cell_dump(t: str) -> bool:
         return False
     _short = sum(1 for l in _ls if len(re.sub(r"\s", "", l)) <= 14)
     return _short >= 0.6 * len(_ls)
+
+
+_IMAGING_MODALITY_RE = re.compile(
+    r"(超声|彩超|B超|CT|心电图|心电|核磁|MRI|磁共振|X线|X光|DR|影像|放射)")
+_IMAGING_LAB_HINT_RE = re.compile(
+    r"(检验项目|项目名称|检查结果|参考范围|参考值|测定结果|单位)")
+
+
+def _is_imaging_report_text(t: str) -> bool:
+    """OCR 页是否为影像检查报告页(标题式组合词判定)。
+
+    2026-10-29 marker-only 早停: 影像报告页通常位于检验表之后, 识别到后跳过
+    后续页 OCR(昆明 217 份: 尾部 8 页超声/心电图扫描报告, 1,569 页 OCR 白跑)。
+    只认组合标题(超声/CT/心电图/影像 + 报告/报告单/检查报告等, 允许字间空格),
+    单独"报告"/"影像"、报告时间/报告医师、句子式文本不命中。
+    若出现"影像报告单在前、检验表在后"的提前停, 由档案/任务级
+    keep_ocr_after_imaging 例外保持全量 OCR。
+    """
+    return _is_imaging_report_title(t)
 
 
 def _page_has_large_content_image(page) -> bool:
@@ -4865,9 +5118,93 @@ def _dedup_double_layer(page) -> Optional[str]:
     return "\n".join(z[3] for z in _dl)
 
 
+_IMAGING_TITLE_RE = re.compile(
+    r"^(?:[#*\-•·\s]*)"
+    r"(?:[^\n]{0,40}?)"
+    r"(?:超声|彩超|[BＢ]超|(?<![A-Za-z])CT(?![A-Za-z])|心电图|心电|核磁|"
+    r"MRI|磁共振|X线|(?<![A-Za-z])DR(?![A-Za-z])|影像|放射)"
+    r"(?:检查|诊断|图文|多普勒|检测|测量|医学影像)*"
+    r"(?:报告单|检查报告|诊断报告|报告)"
+    r"$")
+_IMAGING_TITLE_EXCLUDE = re.compile(
+    r"报告时间|报告医师|报告者|报告日期|见纸质报告|报告查询|详见|建议|复查|"
+    r"提示|如果|若|妥善保管|仅供临床|辅助检查|签字|盖章|扫一扫|报告图像|本报告")
+_IMAGING_TITLE_PREFIX_EXCLUDE = re.compile(
+    r"^(?:请|详见|建议|复查|提示|如果|若|根据|结合|本次|本报告|"
+    r"报告时间|报告医师|报告者|报告日期|见纸质报告|报告查询)")
+
+
+def _is_imaging_report_title(text: str) -> bool:
+    """整行标题式影像报告判定(2026-10-29)。
+
+    只认组合词: 超声/彩超/B超/CT/心电图/… + 报告/报告单/检查报告等;
+    单独"报告"/"影像"、句子式"B超报告上出现…"、报告时间/报告医师等不命中。
+    去空白后匹配, 兼容 "CT 检查报告单"/"心 电 图 报 告" 等字间空格。
+    """
+    for raw in (text or "").splitlines():
+        ln = re.sub(r"<[^>]+>", "", raw)
+        ln = re.sub(r"\s+", "", ln).strip()
+        if not ln or len(ln) > 60:
+            continue
+        if _IMAGING_TITLE_PREFIX_EXCLUDE.match(ln):
+            continue
+        if _IMAGING_TITLE_EXCLUDE.search(ln):
+            continue
+        if _IMAGING_TITLE_RE.match(ln):
+            return True
+    return False
+
+
+_IMAGING_TITLE_LINE_RE = re.compile(
+    r"^(?:常规心电图|动态心电图|心超|心脏超声|彩色[ＢB]超检查报告单|CT检查报告单|"
+    r"骨密度检查报告单|多普勒血管超声检测报告单|双\(多\)能X线|"
+    r"动脉弹性检测)")
+_ECHO_MEAS_HINTS = (
+    "主动脉根部内径", "左室舒张末期内径", "左室收缩末期内径", "左房内径",
+    "室间隔厚度", "左室后壁厚度", "每搏量", "心输出量", "射血分数", "缩短分数",
+)
+
+
+def _page_is_imaging_report(part: str) -> bool:
+    lines = [re.sub(r"\s+", "", x) for x in part.splitlines()]
+    if any(len(x) <= 80 and _IMAGING_TITLE_LINE_RE.match(x) for x in lines):
+        return True
+    # 动态心电图的后几页只有"病人姓名/病例号/24小时数据图", 无报告标题
+    if "病人姓名:" in part and ("病例号:" in part or "24小时数据图" in part):
+        return True
+    if (re.search(r"常规心电图（含心电向量图）|双\(多\)能X线", part)
+            or "动脉弹性检测" in part):
+        return True
+    # 混排页(程永春第5页)同时有眼科/OCT/糖化/NSE —— 只将**短小纯影像页**判影像页
+    if "光学相干断层" in part and len(part.strip()) < 400:
+        return True
+    if sum(1 for x in _ECHO_MEAS_HINTS if x in part) >= 3:
+        return True
+    return False
+
+
+def _imaging_report_page_numbers(text: str) -> set[int]:
+    pages: set[int] = set()
+    for part in re.split(r"(?m)(?=^--- Page \d+ ---\s*$)", text or ""):
+        m = re.match(r"--- Page (\d+) ---", part.strip())
+        if m and _page_is_imaging_report(part):
+            pages.add(int(m.group(1)))
+    return pages
+
+
+def _drop_imaging_report_pages(text: str) -> str:
+    """2026-10-23: 指标提取前移除影像报告页(程永春 46)。
+
+    只按**页内标题行/影像专有测量值**判定, 不扫正文散文 —— 总检结论里的
+    "监测动态心电图"不能把结论页当影像页丢弃。结论提取仍使用完整 report_raw_text。
+    """
+    parts = re.split(r"(?m)(?=^--- Page \d+ ---\s*$)", text or "")
+    return "".join(part for part in parts if part and not _page_is_imaging_report(part))
+
 def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = False,
                       force_ocr: bool = False, visual_lines: bool = False,
-                      ocr_content: bool = False) -> str:
+                      ocr_content: bool = False,
+                      keep_ocr_after_imaging: bool = False) -> str:
     """Extract all text from a text-based PDF.
 
     2026-09-03: visual_sort=True 时按页视觉坐标(y,x)重排 —— 多栏混排模板
@@ -4889,6 +5226,7 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
     texts = []
     _ocr_attempted = 0
     _ocr_failed = 0
+    _stop_ocr = False
     for i, page in enumerate(doc):
         if visual_sort and not force_ocr:
             # 2026-10-07: 双文本层页(陈东海)先去重再按 y 排序 —— block 级排序保留双份
@@ -4910,10 +5248,11 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
         # 2026-09-12: 纯扫描页(几乎无文本 + 单张大图)此前因"≥2 图"条件被漏
         # (钦州中医整份扫描件 hybrid 提取 0 字, 结论段无法定位) → "多图"或
         # "文本 <10 字的单图页"均触发 OCR
-        if hybrid and (force_ocr or (len(t) < 100 and (
+        if hybrid and not _stop_ocr and (force_ocr or (len(t) < 100 and (
                 len(page.get_images()) >= 2 or len(t.strip()) < 10))
                 or (ocr_content and len(t) < 1000 and (
-                    _page_content_strips(page) >= 3
+                    ("总检报告" in t and "结论" in t)
+                    or _page_content_strips(page) >= 3
                     or _page_has_large_content_image(page)
                     # 2026-10-13: 小图题/值页(漳州市医院: 标题/值为小截图) —— 但**原文层
                     # 已是完整单元格转储**的页(化验/查体页: 每行一个单元格, 含单位列)
@@ -4947,6 +5286,15 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
                     ocr_t = re.sub(r"μ\s+mol", "μmol", ocr_t)
                     ocr_t = re.sub(r"\^\{(\d+)\}", r"^\1", ocr_t)
                     t = ocr_t
+                    # 2026-10-29: marker-only 早停 —— 影像报告页之后通常不再有检验表;
+                    # force_ocr/ocr_content 是强制补 OCR 路径, 不早停。
+                    if (not keep_ocr_after_imaging and not force_ocr
+                            and not ocr_content
+                            and _is_imaging_report_text(ocr_t)):
+                        _stop_ocr = True
+                        _log.info(
+                            "hybrid OCR stopped after imaging report page %d: %s",
+                            i + 1, ocr_t[:60].replace("\n", " "))
             except Exception as e:
                 _ocr_failed += 1
                 _log.warning("hybrid OCR page %d failed: %s", i + 1, e)

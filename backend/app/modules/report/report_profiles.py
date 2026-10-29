@@ -25,6 +25,11 @@ import re
 
 DEFAULT = {
     "visual_sort": False,
+    # 2026-10-29: 文本层已含完整结论+检验表时, 可关闭 hybrid 补充 OCR
+    # (昆明医科大学第一附属医院: 尾部影像页为扫描图, OCR 结果不进入结论/指标)
+    "hybrid_ocr": True,
+    # 2026-10-29: 少数"影像报告页之后还有检验表"的院/报告保持全量 OCR
+    "keep_ocr_after_imaging": False,
     "extra_break": [],
     "extra_skip": [],
     "extra_anchor": [],
@@ -53,6 +58,22 @@ DEFAULT = {
     # 2026-10-22: 单位列误并 ↑↓ 标志 / VLM 误标项目清理
     "strip_unit_flags": False,
     "clear_flags": [],
+    "positive_flags": False,
+    "pathology_explanation_split": False,
+    "drop_unref_duplicates": False,
+    "recover_folded_units_refs": False,
+    "ref_compare": False,
+    "color_override": None,
+    "prefer_layout_results": False,
+    "inline_numbered_split": False,
+    "clean_ocr_conclusion": False,
+    "strip_result_marks": False,
+    "all_conclusions": False,
+    "join_fragments": None,
+    "strip_name_prefixes": None,
+    "reverse_short_pairs": False,
+    "reverse_titles": None,
+    "drop_imaging_pages": False,
 }
 
 PROFILES = [
@@ -116,7 +137,8 @@ PROFILES = [
     # 温州医科大学附属第一医院: 结论页"发现(左栏)|建议(右栏)"同行两栏, 块级文本流
     # 把右栏建议排到左栏发现之前 → 声明 visual_lines(行级 y,x 重排)
     # (2026-09-23: 曾加 merge_wrapped 合并折行片段, 用户复验效果不好 → 已回滚)
-    dict(keywords=["温州医科大学附属第一医院"], visual_lines=True),
+    dict(keywords=["温州医科大学附属第一医院"], visual_lines=True,
+         drop_imaging_pages=True),
     # 2026-09-23: keyword 由裸"日照"改具体医院名 —— 薄楠报告结论含"增加日照"
 # (骨质疏松建议)误命中本档案(anchor_only+医学建议)导致结论整段丢失
     dict(keywords=["日照市人民医院"],
@@ -329,7 +351,14 @@ PROFILES = [
     dict(keywords=["昆明医科大学第一附属医院"], anchor_only=True,
          extra_anchor=[r"^体检阳性结果分析及建议"],
          # 总检医生/日期签名插在第 13/14 条之间; "主检医师温馨提示"是正文标题(非签名)
-         extra_skip=[r"^总检医生[:：]", r"^总检日期[:：]", r"^主检医师温馨提示"]),
+         extra_skip=[r"^总检医生[:：]", r"^总检日期[:：]", r"^主检医师温馨提示"],
+         # 2026-10-29: 结论(第 1-2 页)与检验表(第 3-16 页)均在文本层;
+         # 第 17-24 页超声/心电图扫描图 OCR 结果不进入结论/指标 → 关闭 hybrid OCR
+         hybrid_ocr=False),
+    # 西安交通大学第一附属医院(2026-10-29): 结论/检验表在文本层; 第 16-27 页
+    # 影像报告为扫描图, OCR 结果不进入结论/指标(报告 1 text-only 结论/指标与
+    # hybrid 完全一致) → 关闭 hybrid OCR。
+    dict(keywords=["西安交通大学第一附属医院"], hybrid_ocr=False),
     # 温州医科大学附属第二医院(包强): 结论 = "主要健康问题与建议/次要健康问题与建议"
     # (异常结果汇总表格与指标线重复, 不入结论); 段尾 = 体力活动问卷科普。
     # 2026-10-16 用户反馈: "8、总体力活动低"的说明(IPAQ 段)属于该条内容 → 不截断,
@@ -475,12 +504,39 @@ PROFILES = [
     dict(keywords=["上海市第一人民医院酒泉医院", "酒泉市人民医院"], anchor_only=True,
          extra_anchor=[r"^主检结论"],
          extra_break=[r"^汇总医生", r"^审核医生", r"^审核时间"]),
-    # 粤东医院体检中心(黄波大/小): 结论 = "体检综述" + "医生建议"; "医生建议"行
-    # 触发检查细节跳过 → 整段建议丢失, 跳行但保留后续内容。
+    # 第十批补充(2026-10-23 用户反馈)
+    # 丽江市人民医院(和洁): 结论段保留通用锚点; 页脚广告/字段标签跳过;
+    # 汇总段/尿检阳性结果无表头提示列 → 按阳性结果标黄。
+    dict(keywords=["丽江市人民医院"],
+         extra_skip=[r"^把我们的关怀送到您心中", r"^结果说明[:：]", r"^末次月经", r"^月$",
+                     r"^第\d+\s*页$"],
+         positive_flags=True,
+         drop_unref_duplicates=True,
+         strip_result_marks=True,
+         color_override=("棕色", "黄色")),
+    # 粤东医院(黄波大/小): 用户口径只取"医生建议"段; 指标表为双栏合并,
+    # 布局列路径比文本行式可靠 → layout_only 去除错位重复行。
     dict(keywords=["粤东医院体检中心"], anchor_only=True,
-         extra_anchor=[r"^体检综述"],
-         extra_skip=[r"^医生建议$"],
+         layout_only=True,
+         drop_unref_duplicates=True,
+         prefer_layout_results=True,
+         extra_anchor=[r"^医生建议"],
+         extra_skip=[r"^体检报告说明", r"^编号[:：]", r"^姓名[:：]", r"^黄波",
+                     r"^\d{4}-\d{2}-\d{2}$"],
          extra_break=[r"^总检日期", r"^总检医生", r"^审核医生"]),
+    # 开滦总医院(才溢): 病理/胃镜发现列表后接科普解释, 需在"萎缩（-）"后断行。
+    dict(keywords=["开滦总医院"], pathology_explanation_split=True,
+         recover_folded_units_refs=True, inline_numbered_split=True,
+         join_fragments=[(r"（胃窦大弯偏后壁$", r"^侧）"),
+                         (r"十二$", r"^指肠球炎"),
+                         (r"横结肠增生性$", r"^息肉")]),
+    # 汕头大学医学院第二附属医院(范永革): 结论在末页表格(OCR 可读); 无标志列,
+    # 按结果/参考比较 + 阳性词兜底标黄。
+    dict(keywords=["汕头大学医学院第二附属医院"],
+         all_conclusions=True,
+         hybrid_ocr=False,
+         ref_compare=True,
+         strip_name_prefixes=["刘波"]),
 ]
 
 
@@ -524,6 +580,12 @@ def match_profile(text: str) -> dict:
             merged["latin_wrap"] = True
         if prof.get("ocr_content_pages"):
             merged["ocr_content_pages"] = True
+        # 2026-10-29: 文本层已含结论/检验表 → 关闭 hybrid 补充 OCR(昆明)
+        if prof.get("hybrid_ocr") is False:
+            merged["hybrid_ocr"] = False
+        # 2026-10-29: 影像报告页后继续 OCR 的例外开关
+        if prof.get("keep_ocr_after_imaging"):
+            merged["keep_ocr_after_imaging"] = True
         # 2026-10-12: 字距空格结论压缩写回(恩施州中心医院)白名单
         if prof.get("despace"):
             merged["despace"] = True
@@ -568,6 +630,38 @@ def match_profile(text: str) -> dict:
             merged["strip_unit_flags"] = True
         if prof.get("clear_flags"):
             merged.setdefault("clear_flags", []).extend(list(prof["clear_flags"]))
+        if prof.get("positive_flags"):
+            merged["positive_flags"] = True
+        if prof.get("pathology_explanation_split"):
+            merged["pathology_explanation_split"] = True
+        if prof.get("drop_unref_duplicates"):
+            merged["drop_unref_duplicates"] = True
+        if prof.get("recover_folded_units_refs"):
+            merged["recover_folded_units_refs"] = True
+        if prof.get("ref_compare"):
+            merged["ref_compare"] = True
+        if prof.get("color_override"):
+            merged["color_override"] = tuple(prof["color_override"])
+        if prof.get("prefer_layout_results"):
+            merged["prefer_layout_results"] = True
+        if prof.get("inline_numbered_split"):
+            merged["inline_numbered_split"] = True
+        if prof.get("clean_ocr_conclusion"):
+            merged["clean_ocr_conclusion"] = True
+        if prof.get("strip_result_marks"):
+            merged["strip_result_marks"] = True
+        if prof.get("all_conclusions"):
+            merged["all_conclusions"] = True
+        if prof.get("join_fragments"):
+            merged["join_fragments"] = [tuple(x) for x in prof["join_fragments"]]
+        if prof.get("strip_name_prefixes"):
+            merged["strip_name_prefixes"] = list(prof["strip_name_prefixes"])
+        if prof.get("reverse_short_pairs"):
+            merged["reverse_short_pairs"] = True
+        if prof.get("reverse_titles"):
+            merged["reverse_titles"] = list(prof["reverse_titles"])
+        if prof.get("drop_imaging_pages"):
+            merged["drop_imaging_pages"] = True
         for f in ("extra_break", "extra_skip", "extra_anchor"):
             if prof.get(f):
                 merged.setdefault(f, []).extend(list(prof[f]))

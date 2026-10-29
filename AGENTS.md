@@ -161,7 +161,7 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 
 ## 批量上传文件名约定(2026-09-01 起)
 
-- 命名:`<姓名>_<身份证后六位>.<ext>`,后六位 = 5 位数字 + 末位数字或 X(校验位)。
+- 命名:`<姓名>_<身份证后六位>.<ext>`,后六位 = 5 位数字 + 末位数字或 X(校验位)。2026-10-28 起同时兼容无下划线 `<姓名><后六位>.<ext>`(姓名限中文;最后 6 位为后六位,姓名与后六位间多余数字忽略,如 `王超1251011` → `王超/251011`)。
 - 用户锚定 = **姓名 + 后六位(双锚定)**:`report_info.name` / `chat_session.name` 存 `name`(姓名,VARCHAR(50)),各表存 `user_id`(后六位字符串,VARCHAR(16));`report_task` 只有 `user_id`(无 `name` 列)。报告列表/档案/chat 一律按 **`user_id == 后六位 AND name == 姓名`** 双条件匹配。
 - **展示名与归属分离(2026-09-02)**:`report_info` 另有 `parsed_name` 列,存 PDF 解析出的**报告真实姓名**(仅展示)。`name` 存归属锚定名(批量=文件名姓名段;单份上传=登录账号锚定名 `current_user.name`,见 `report_router.upload_report`)。列表/详情的 `name` 字段返回 `parsed_name or name`(展示真实姓名),归属过滤仍按 `name` 双锚定不动。加字段/迁移需对**每个** tenant 库执行:`ALTER TABLE report_info ADD COLUMN parsed_name VARCHAR(50) NULL`(2026-09-02 已在 hospital_H001-H004/hospital_1 执行;新建 tenant 需在 DDL/存储过程补齐)。
 - `platform_user.id_card_suffix` / `platform_user.name` 存登录用户双锚定,登录后经 JWT 带出(CurrentUser 有 `id_card_suffix` / `name` 字段)。
@@ -171,8 +171,9 @@ git 已跟踪改动可直接 `git checkout -- start.sh backend/pyproject.toml ba
 - 外部接口:`EXTERNAL_RESOLVER_URL` 配置,契约见 `docs/superpowers/specs/2026-09-01-batch-upload-idcard-suffix-design.md §3`。
 - 旧 `<姓名>_<医院编号>_<用户编号>` 三段命名已废弃;存量数据 user_id 仍为旧数字 ID,不迁移(只影响新数据)。
 - 外部接口契约:`GET {EXTERNAL_RESOLVER_URL}?realName={姓名}&idCardLast6={后六位}` → baUser 信封
-  `{code,msg,data}`;data 数组按 `realName==姓名 AND idCardLast6==后六位` 精确过滤,唯一命中项
-  `str(orgId)` 即 hospital_id(orgId 与本地 hospital_tenant.hospital_id 一致)。
+  `{code,msg,data}`;data 数组按 `realName==姓名 AND idCardLast6==后六位` 精确过滤(后六位末位
+  X/x 大小写不敏感),唯一命中项 `str(orgId)` 即 hospital_id(orgId 与本地
+  hospital_tenant.hospital_id 一致)。
 
 ---
 
@@ -454,6 +455,24 @@ summary/指标层) + `smoke: True` 冒烟样本(弱断言: 能定位/够长/无�
 且含≥2图"的页自动调 PaddleOCR(端点 = `OCR_BASE_URL`,本 checkout 为 8001)补文本 —— 福建第二(文本化验页+图片结论页)
 从"0 字结论"恢复出主体条目(1-9 号异常, 2/3/5 号 OCR 偶漏)。`process_task` 文本
 分支已 hybrid=True。OCR 页失败不影响整份。
+
+**院级关闭 hybrid(2026-10-29)**: 昆明医科大学第一附属医院档案 `hybrid_ocr=False` ——
+该院结论(第 1-2 页)与检验表(第 3-16 页)都在文本层, 第 17-24 页超声/心电图扫描图的
+OCR 结果不进入结论/指标(2 总队 217 份实测: 1,569 页 OCR 白跑)。`process_task` 增加
+无 OCR 文本层预扫匹配档案; 纯扫描件/`force_ocr` 仍保持 hybrid 原行为。另
+`extract_personal_info` 体检日期支持"标签后 200 字窗口"(昆明"体检日期"后先跟流水号/
+姓名/单位再跟日期), 否则 `report_date` 缺失会让 `process_task` 误触发**全量 LLM 指标
+解析**(每份 2-6 分钟), 与 OCR 一起造成 217 份批次比 193 份慢一个数量级。
+
+**hybrid OCR 早停(2026-10-29, 标题式 + 例外开关)**: `_extract_pdf_text` 对 OCR 页调用
+`_is_imaging_report_text`(委托 `_is_imaging_report_title`) —— 只认**整行组合标题**
+(超声/彩超/B超/CT/心电图/心电/核磁/MRI/X线/DR/影像/放射 + 报告单/检查报告/诊断报告/报告;
+允许字间空格), 单独"报告"/"影像"、报告时间/报告医师、句子式("B超报告上出现…")不命中。
+命中后跳过**后续页** OCR(文本层仍提取); `force_ocr`/`ocr_content` 强制路径不早停。
+默认即停; 少数"影像报告页之后还有检验表"的报告用例外保持全量 OCR:
+医院档案 `keep_ocr_after_imaging=True`, 或 `.env KEEP_OCR_TASKS=H004:123`(逗号分隔,
+支持 `医院ID:task_id`; 裸 task id 跨租户)。13 份纯扫描模拟: 8 份有收益, 合计省 39/211 页
+(约 18.5%); 不再做"新医院必抽全量 OCR 对照"的固定验收步骤。
 
 **已知限制/待办**: 福建第二 OCR 偶漏
 条目; 齐鲁青岛等"OK"样本多为冒烟级(未逐字精修); visual_sort 仍人工标注。

@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     # 2026-10-16: 文本层字体映射损坏的报告强制逐页 OCR(逗号分隔 task id; 《体检报告
     # 样例》里陈宏宏即此形态)。.env 可配, _force_ocr_task_ids 优先读环境变量再回落本项。
     FORCE_OCR_TASKS: str = ""
+    # 2026-10-29: 例外保持"影像报告页后仍 OCR"(少数影像后又出现检验表的报告)。
+    # 逗号/空白分隔, 支持 `医院ID:task_id` 限定租户; 默认空 = 命中影像标题即停。
+    KEEP_OCR_TASKS: str = ""
     # OCR 客户端(2026-10-14): 单页请求失败重试 + 整体故障阈值(超阈值抛
     # OcrUnavailableError → parsing worker 记 failed_stage=ocr_failed 可重试)
     OCR_CLIENT_RETRIES: int = 2                 # 单页额外重试次数

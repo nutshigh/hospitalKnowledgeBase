@@ -186,3 +186,8 @@ def test_bare_glucose_urine_vs_blood_disambiguated():
     by_result = {r["result_value"]: r["group"] for r in rows}
     assert by_result["-"] == "尿常规"
     assert by_result["4.77"] == "空腹血糖"
+
+
+def test_caiyi_urine_redcell_analysis_items():
+    assert classify("红细胞信息") == "尿常规"
+    assert classify("70%红细胞散射光强度", "ch") == "尿常规"

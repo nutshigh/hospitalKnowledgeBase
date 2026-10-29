@@ -54,12 +54,13 @@ def _parse_response(resp: httpx.Response, name: str, id_suffix: str) -> Optional
     data = payload.get("data") or []
     if not isinstance(data, list):
         raise ResolverUnavailableError("resolver bad data shape")
+    want_suffix = id_suffix.upper()
     org_ids = {
         str(item["orgId"])
         for item in data
         if item.get("orgId")
         and item.get("realName") == name
-        and item.get("idCardLast6") == id_suffix
+        and str(item.get("idCardLast6") or "").upper() == want_suffix
     }
     if not org_ids:
         return None

@@ -31,6 +31,21 @@ def test_resolve_hospital_matches(monkeypatch):
     assert hospital_resolver.resolve_hospital("张三", "12345X") == "1000002"
 
 
+def test_resolve_hospital_id_suffix_x_case_insensitive(monkeypatch):
+    """身份证后六位末位 X/x 大小写不敏感(baUser 有存小写 x 的历史数据)。"""
+    monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "http://x")
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"code": 200, "msg": "ok",
+                    "data": [{"realName": "丁国鹏", "idCardLast6": "22001x", "orgId": 288}]}
+
+    monkeypatch.setattr(hospital_resolver.httpx, "Client",
+                        lambda **k: _StubClient(lambda url, params: FakeResp()))
+    assert hospital_resolver.resolve_hospital("丁国鹏", "22001X") == "288"
+
+
 def test_resolve_hospital_exact_filter_ignores_others(monkeypatch):
     monkeypatch.setattr(hospital_resolver.settings, "EXTERNAL_RESOLVER_URL", "http://x")
 

@@ -210,12 +210,30 @@ def _extract(pdf):
     if comp.get("lab_summary_marks"):
         from app.modules.report.table_extractor import mark_indicators_by_lab_summary
         mark_indicators_by_lab_summary(indicators, t)
-    if comp.get("strip_unit_flags") or comp.get("clear_flags"):
+    if (comp.get("strip_unit_flags") or comp.get("clear_flags")
+            or comp.get("positive_flags")
+            or comp.get("drop_unref_duplicates")
+            or comp.get("ref_compare")
+            or comp.get("color_override")
+            or comp.get("strip_result_marks")
+            or comp.get("strip_name_prefixes")):
         from app.modules.report.table_extractor import apply_profile_indicator_fixes
         apply_profile_indicator_fixes(
             indicators,
             strip_unit_flags=bool(comp.get("strip_unit_flags")),
-            clear_flags=comp.get("clear_flags") or [])
+            clear_flags=comp.get("clear_flags") or [],
+            positive_flags=bool(comp.get("positive_flags")),
+            drop_unref_duplicates=bool(comp.get("drop_unref_duplicates")),
+            ref_compare=bool(comp.get("ref_compare")),
+            color_override=comp.get("color_override"),
+            strip_result_marks=bool(comp.get("strip_result_marks")),
+            strip_name_prefixes=comp.get("strip_name_prefixes"))
+    if comp.get("prefer_layout_results"):
+        from app.modules.report.table_extractor import prefer_layout_results
+        prefer_layout_results(indicators, col_rows, fill_missing=True)
+    if comp.get("recover_folded_units_refs"):
+        from app.modules.report.table_extractor import recover_folded_units_refs
+        recover_folded_units_refs(indicators, t)
     # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(与 service 同构)
     _csrc_only = (
         {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
