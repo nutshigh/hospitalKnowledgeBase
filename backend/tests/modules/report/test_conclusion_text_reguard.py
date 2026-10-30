@@ -39,16 +39,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from app.modules.report.service import (  # noqa: E402
     _attach_leading_numbers,
     _clean_important_result_head,
+    _clean_ocr_conclusion,
     _collapse_repeated_text,
+    _collect_all_conclusions,
     _compile_profile_re,
     _drop_review_block,
     _extract_pdf_text,
     _format_numbered_advice,
+    _join_profile_fragments,
     _load_report_profiles,
     _locate_findings_sections,
     _numbered_advice_titles,
     _reflow_conclusion_lines,
     _reflow_table_conclusion,
+    _split_inline_numbered_findings,
     _strip_ocr_html,
 )
 from app.core.term_normalizer import normalize_compat_chars  # noqa: E402
@@ -72,6 +76,8 @@ B7 = os.path.join(REPO, "体检报告样例", "0-第7批")
 B8 = os.path.join(REPO, "体检报告样例", "0-第8批")
 # 2026-10-22: 第九批(1-第9批, H004 99-103)
 B9 = os.path.join(REPO, "体检报告样例", "1-第9批")
+# 2026-10-30: 第十批(1-第10批, H004 109-113)
+B10 = os.path.join(REPO, "体检报告样例", "1-第10批")
 BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 CASES = {
@@ -191,6 +197,18 @@ CASES = {
     ("h004", "106"): os.path.join(B9, "宋玉枣237556.pdf"),
     ("h004", "107"): os.path.join(B9, "甄元08056X.pdf"),
     ("h004", "108"): os.path.join(B9, "周业潮151051.pdf"),
+    # 第十批前 5 份(2026-10-30 用户验收)
+    ("h004", "109"): os.path.join(B10, "才溢140438.pdf"),
+    ("h004", "110"): os.path.join(B10, "范永革150016.PDF"),
+    ("h004", "111"): os.path.join(B10, "和洁+260022.pdf"),
+    ("h004", "112"): os.path.join(B10, "黄波（大）144595.pdf"),
+    ("h004", "113"): os.path.join(B10, "黄波（小）233590.pdf"),
+    # 第十批后 5 份(2026-10-30 用户验收)
+    ("h004", "114"): os.path.join(B10, "罗茹鹏242718.PDF"),
+    ("h004", "115"): os.path.join(B10, "张仁星+035339.pdf"),
+    ("h004", "116"): os.path.join(B10, "张万里147411.pdf"),
+    ("h004", "117"): os.path.join(B10, "赵瑞阳182678.pdf"),
+    ("h004", "118"): os.path.join(B10, "周均平243516.pdf"),
 }
 
 # hash == 验收基线(2026-09-15 基线重生成后 24 份; 含原 PENDING 6 份与
@@ -226,6 +244,10 @@ MATCH = {
     ("h004", "103"),
     # 第九批后5份(2026-10-22 用户验收): 105 纯扫描走 HYBRID 空产物锁
     ("h004", "104"), ("h004", "106"), ("h004", "107"), ("h004", "108"),
+    # 第十批前 5 份(2026-10-30 用户验收)
+    ("h004", "109"), ("h004", "110"), ("h004", "112"), ("h004", "113"),
+    # 第十批后 5 份(2026-10-30 用户验收): 116/117 结论视觉重排; 118 健康指导段
+    ("h004", "116"), ("h004", "117"), ("h004", "118"),
 }
 
 # 离线链(hybrid=False)与生产链条不等价: 扫描/图片件(离线取不到段), 或生产链
@@ -281,6 +303,12 @@ HYBRID = {
     ("h004", "96"): "da39a3ee5e6b4b0d",
     # 第九批后5份: 105 宋文军纯扫描(生产 hybrid 探针提文) → 离线空产物锁
     ("h004", "105"): "da39a3ee5e6b4b0d",
+    # 第十批 111 和洁: 生产结论文本含重复建议句(前端展示态), 离线链去重后较短;
+    # 生产 conclusion_text 由 DB 三件套守 → 离线锁当前产物防漂移。
+    ("h004", "111"): "d98961dffd6ecbb4",
+    # 第十批后 5 份: 114/115 纯扫描(生产 OCR/VLM) → 离线空产物锁
+    ("h004", "114"): "da39a3ee5e6b4b0d",
+    ("h004", "115"): "da39a3ee5e6b4b0d",
 }
 
 BASELINE = {
@@ -295,6 +323,9 @@ _PROFILES = None
 _REGUARD_SKIP_LINES = {
     # 生产 process_task 传 parsed_name 作 skip_lines; 99 常海毅姓名页眉在结论段内
     ("h004", "99"): {"常海毅"},
+    ("h004", "116"): {"张万里"},
+    ("h004", "117"): {"赵瑞阳"},
+    ("h004", "118"): {"周均平"},
 }
 
 
@@ -309,13 +340,20 @@ def _re_extract_text(key):
     match_profile, _ = _PROFILES
     text = _extract_pdf_text(pdf, hybrid=False)
     profile = match_profile(text)
-    if profile.get("visual_sort") or profile.get("visual_lines"):
+    if (profile.get("visual_sort") or profile.get("visual_lines")
+            or profile.get("conclusion_visual_sort")):
         # 与生产 process_task 一致: 多栏混排模板(防城港中/莆田)按视觉坐标重排后再切段;
-        # visual_lines(温州程永春两栏结论)按行级(y,x)重排
+        # visual_lines(温州程永春两栏结论)按行级(y,x)重排; conclusion_visual_sort
+        # (张万里/赵瑞阳)仅结论走视觉重排
         text = _extract_pdf_text(pdf, visual_sort=True,
                                  visual_lines=bool(profile.get("visual_lines")))
     if profile.get("nfkc"):
         text = normalize_compat_chars(text)
+    if profile.get("all_conclusions"):
+        return _collect_all_conclusions(
+            _strip_ocr_html(text),
+            reverse_short_pairs=bool(profile.get("reverse_short_pairs")),
+            reverse_titles=profile.get("reverse_titles"))[:16000]
     compiled = _compile_profile_re(profile) if profile else {}
     section = _locate_findings_sections(
         _strip_ocr_html(text),
@@ -333,9 +371,30 @@ def _re_extract_text(key):
         return _reflow_table_conclusion(section)[:16000]
     if profile and profile.get("clean_important_head"):
         section = _clean_important_result_head(section)
+    if profile and profile.get("join_fragments"):
+        section = _join_profile_fragments(section, profile["join_fragments"])
+    if profile and profile.get("inline_numbered_split"):
+        section = _split_inline_numbered_findings(section)
     _adv_titles = (_numbered_advice_titles(section)
                    if profile and profile.get("numbered_advice") else None)
-    section = _reflow_conclusion_lines(section)
+    _standalone_lines = None
+    if profile.get("indent_titles"):
+        _standalone_lines = {
+            _ln.strip() for _ln in text.splitlines()
+            if _ln[:1].isspace() and _ln.strip()}
+    section = _reflow_conclusion_lines(
+        section,
+        explanation_labels=bool(profile.get("explanation_labels")),
+        drop_redundant_heading_labels=bool(
+            profile.get("drop_redundant_heading_labels")),
+        standalone_lines=_standalone_lines)
+    if profile.get("strip_first_line_colon"):
+        _ls = section.split("\n")
+        if _ls:
+            _ls[0] = re.sub(r"[:：]\s*$", "", _ls[0])
+            section = "\n".join(_ls)
+    if profile and profile.get("clean_ocr_conclusion"):
+        section = _clean_ocr_conclusion(section)
     if profile and profile.get("numbered_advice"):
         section = _format_numbered_advice(section, titles=_adv_titles)
     if profile and profile.get("collapse_repeats"):

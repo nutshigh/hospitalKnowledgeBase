@@ -27,7 +27,7 @@ from app.modules.report.service import (
 )
 from app.modules.report.table_extractor import (
     apply_redref_flags, col_rows_with_fallback, extract_abnormal_signals,
-    extract_indicator_rows, extract_personal_info,
+    extract_indicator_rows, extract_personal_info, extract_two_col_table_rows,
 )
 from app.core.term_normalizer import normalize_compat_chars, normalize_indicators
 
@@ -71,10 +71,36 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
         rows = []
     col_rows = col_rows_with_fallback(
         pdf_path, text, infer_columns=bool(profile.get("infer_columns")) if profile else False)
+    _two_col_rows = (extract_two_col_table_rows(pdf_path)
+                     if profile and profile.get("two_col_tables") else [])
     signals = extract_abnormal_signals(
         pdf_path, skip_text=findings_sec or "",
         red_marks=bool(profile.get("red_marks")) if profile else False,
         red_ref=bool(profile.get("red_marks_ref")) if profile else False)
+    if _two_col_rows:
+        def _norm2c(_s: str) -> str:
+            return re.sub(r"\s+", "", _s or "")
+        _two_map: dict = {}
+        for _r2 in _two_col_rows:
+            _two_map.setdefault(_norm2c(_r2["item_name"]), set()).add(
+                re.sub(r"[↑↓*＊]+$", "", str(_r2.get("result") or "")).strip())
+        def _covered_by_two(_name: str, _result: str = "") -> bool:
+            _n = _norm2c(_name)
+            _rv = re.sub(r"[↑↓*＊]+$", "", str(_result or "")).strip()
+            for _t, _rs in _two_map.items():
+                if _n == _t:
+                    return True
+                if (len(_n) >= 1 and (_t.startswith(_n) or _t.endswith(_n))
+                        and _rv and _rv in _rs):
+                    return True
+            return False
+        rows = [r for r in rows
+                if not _covered_by_two(r["item_name"], r.get("result"))]
+        col_rows = [r for r in col_rows
+                    if not _covered_by_two(r["item_name"], r.get("result"))]
+        signals = [s for s in signals
+                   if not _covered_by_two(s["item_name"], s.get("result"))]
+        col_rows = _two_col_rows + col_rows
     # 2026-09-28: 信号通道误配折行名碎片(与 service.process_task 同构)
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
@@ -250,7 +276,13 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
                     or profile.get("ref_compare")
                     or profile.get("color_override")
                     or profile.get("strip_result_marks")
-                    or profile.get("strip_name_prefixes")):
+                    or profile.get("strip_name_prefixes")
+                    or profile.get("drop_indicator_names")
+                    or profile.get("clear_refs")
+                    or profile.get("split_lymph_thyroid")
+                    or profile.get("collapse_name_spaces")
+                    or profile.get("drop_result_patterns")
+                    or profile.get("force_flags")):
         from app.modules.report.table_extractor import apply_profile_indicator_fixes
         apply_profile_indicator_fixes(
             indicators,
@@ -261,7 +293,13 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
             ref_compare=bool(profile.get("ref_compare")),
             color_override=profile.get("color_override"),
             strip_result_marks=bool(profile.get("strip_result_marks")),
-            strip_name_prefixes=profile.get("strip_name_prefixes"))
+            strip_name_prefixes=profile.get("strip_name_prefixes"),
+            drop_name_patterns=profile.get("drop_indicator_names"),
+            clear_refs=profile.get("clear_refs"),
+            split_lymph_thyroid=bool(profile.get("split_lymph_thyroid")),
+            collapse_name_spaces=bool(profile.get("collapse_name_spaces")),
+            drop_result_patterns=profile.get("drop_result_patterns"),
+            force_flags=profile.get("force_flags"))
     if profile and profile.get("prefer_layout_results"):
         from app.modules.report.table_extractor import prefer_layout_results
         prefer_layout_results(indicators, col_rows, fill_missing=True)
@@ -326,6 +364,9 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
     indicators = normalize_indicators(indicators)
     # 2026-10-19: 红字+超参考 → f1(望京, 与 service 同构)
     apply_redref_flags(indicators, signals)
+    from app.modules.report.service import _clean_indicator_name
+    for ind in indicators:
+        ind["item_name"] = _clean_indicator_name(ind.get("item_name", ""))
     return indicators
 
 

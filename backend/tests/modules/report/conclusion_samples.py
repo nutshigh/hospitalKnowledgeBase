@@ -313,4 +313,28 @@ SAMPLES = [
     # 纯扫描 1 份(生产 hybrid/VLM 链): 需 OCR 服务, 默认跳过
     dict(key="b9_songwenjun_scan", rel="1-第9批/宋文军015015.pdf", ocr=True,
          must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+
+    # === 2026-10-30: 第十批前 5 份(用户验收) ===
+    dict(key="b10_caiyi", rel="1-第10批/才溢140438.pdf",
+         smoke=True, min_len=1800),   # 开滦总医院: 阳性结果汇总/胃镜病理
+    dict(key="b10_fanyongge", rel="1-第10批/范永革150016.PDF",
+         smoke=True, min_len=800),    # 汕头大学医学院第二附属医院: 全报告分科结论块
+    dict(key="b10_hejie", rel="1-第10批/和洁+260022.pdf",
+         smoke=True, min_len=1200),   # 丽江市人民医院: 总检结论与建议
+    dict(key="b10_huangbodada", rel="1-第10批/黄波（大）144595.pdf",
+         smoke=True, min_len=1800),   # 粤东医院: 医生建议段
+    dict(key="b10_huangboxiaoxiao", rel="1-第10批/黄波（小）233590.pdf",
+         smoke=True, min_len=800),    # 粤东医院: 医生建议段
+
+    # === 2026-10-30: 第十批后 5 份(用户验收) ===
+    dict(key="b10_luorupeng_scan", rel="1-第10批/罗茹鹏242718.PDF", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="b10_zhangrenxing_scan", rel="1-第10批/张仁星+035339.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="b10_zhangwanli", rel="1-第10批/张万里147411.pdf",
+         smoke=True, min_len=600),    # 湖南省人民医院: 健康指导段
+    dict(key="b10_zhaoruiyang", rel="1-第10批/赵瑞阳182678.pdf",
+         smoke=True, min_len=550),    # 酒泉市人民医院: 主检结论(视觉重排)
+    dict(key="b10_zhoujunping", rel="1-第10批/周均平243516.pdf",
+         smoke=True, min_len=4000),   # 莱州市中医医院: 健康指导建议(解释标签逐条)
 ]

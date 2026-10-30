@@ -320,6 +320,11 @@ _FINDINGS_STOP_SKIP_RE2 = re.compile(
 # 2026-10-19: 裸数字行(页码/条目序号歧义)默认仍跳过; 档案声明 keep_bare_numbers
 # (开滦"1/2/3…"条目序号)保留
 _BARE_NUM_LINE_RE = re.compile(r"^\s*\d{1,10}\s*$")
+# 2026-10-30: 科普条目内重复出现的字段标题(张仁星每条均有) —— 不按页眉去重
+_REPEATED_FIELD_LABEL_RE = re.compile(
+    r"^(?:【(?:医学解释|常见原因|健康指导)】|"
+    r"医学解释|医学注释|常见原因|常见原因及临床表现|临床表现|"
+    r"医生建议|医学名词解释|临床特点)$")
 # 2026-09-03: VLM/OCR 产出的 HTML 表格行(<table>/<tr>) 与图片标签整行跳过,
 # 表格数值不是发现段内容(钦州中图片报告 OCR 混入各科表格)。
 _FINDINGS_HTML_RE = re.compile(r"^<(?:table|tr|td|div|img|p|br)")
@@ -720,6 +725,7 @@ def _locate_findings_sections(text: str, extra_break_re=None,
                 # 2026-10-07: **建议/提示句**豁免 —— 各条目建议常逐字重复(安周 13 条
                 # "建议：定期复查。" 与第 11 条相同被吞 → 用户反馈"第13点漏建议")。
                 if not re.match(r"^\d{1,3}\s*[、.．)）]", s) and len(s) >= 4 \
+                        and not _REPEATED_FIELD_LABEL_RE.match(s) \
                         and not re.match(
                             r"^(?:建议|请|注意|如有|若|定期|随访|必要时|复查)", s):
                     continue
@@ -1064,7 +1070,15 @@ def _clean_ocr_conclusion(section: str) -> str:
     return "\n".join(out)
 
 
-def _reflow_conclusion_lines(section: str, despace: bool = False) -> str:
+_HEALTH_ADVICE_START_RE = re.compile(
+    r"^(?:注意|避免|建议|请|定期|适量|保持|戒烟|限酒|控制|多饮水|加强|减少|"
+    r"低盐|低脂|多食|少食|食用|服用|坚持|监测|复查|随诊|就诊|治疗|手术|戒酒)")
+
+
+def _reflow_conclusion_lines(section: str, despace: bool = False,
+                              explanation_labels: bool = False,
+                              drop_redundant_heading_labels: bool = False,
+                              standalone_lines: set | None = None) -> str:
     """展示规整: 消除 PDF 行内折行, 保留条目标题行结构。
 
     段头行(【】标题/阿拉伯序号/星号圆点行)与小结标题(汉字序号"五、【甲状腺彩超】")
@@ -1174,6 +1188,15 @@ def _reflow_conclusion_lines(section: str, despace: bool = False) -> str:
             summary_title_idx = len(out) - 1
             prev = "summary"
             continue
+        # 2026-10-30: 医学解释/常见原因/医生建议等字段标签独立成行(周均平)
+        if explanation_labels and re.fullmatch(
+                r"(医学解释|医学注释|常见原因|常见原因及临床表现|临床表现|"
+                r"医生建议|医学名词解释)[:：]?", s):
+            flush()
+            out.append(s)
+            summary_title_idx = len(out) - 1
+            prev = "summary"
+            continue
         # 2026-09-15: 独立序号行的下一行(发现名)直接拼回 —— 即使它是"…："式标题,
         # 也要拼成"1. 发现名："(不能另开段)。
         if prev == "number":
@@ -1204,6 +1227,15 @@ def _reflow_conclusion_lines(section: str, despace: bool = False) -> str:
             # 标题行之后的第一行正文另起一段(不与标题行黏连)
             buf = [s]
             prev = "open"
+            continue
+        # 2026-10-30: 数值/单位折行("收缩压≥" + "140mmHg…")属于同一句,
+        # 不是新编号条目(周均平); 优先于 item_head 的"数字+字母"判断。
+        if (explanation_labels and out
+                and not re.search(r"[。！？；;：:）)】\]]$", out[-1])
+                and re.match(r"^\d", s)
+                and not re.match(r"^\d{1,3}\s*[、.．)）]", s)):
+            out[-1] += s
+            prev = "summary"
             continue
         if item_head.match(s_judge):
             in_num_body = False
@@ -1259,6 +1291,19 @@ def _reflow_conclusion_lines(section: str, despace: bool = False) -> str:
             # 2026-09-15: 标题下首行独立成行; 其后无句末标点的折行续接(白玮衡"防治建议"
             # 每条科普跨行被拆 → 半句变短行, 前端误当标题加粗; 修好折行即恢复)
             if len(out) == summary_title_idx + 1:
+                out.append(s)
+            elif (explanation_labels and out
+                  and not re.search(r"[。！？；;：:）)】\]]$", out[-1])
+                  and re.match(r"^\d", s)
+                  and not re.match(r"^\d{1,3}\s*[、.．)）]", s)):
+                # 2026-10-30: 数值/单位折行("收缩压≥" + "140mmHg…")属于同一句,
+                # 不是新编号条目(周均平)。
+                out[-1] += s
+            elif (explanation_labels and standalone_lines
+                  and s in standalone_lines):
+                # 2026-10-30: 健康指导段内原文**缩进**的条目标题(周均平"甲状腺
+                # 右侧叶结节 TI-RADS 3类"/"近视"/"动脉粥样硬化")独立成行; 其余
+                # 无标点行是 PDF 折行, 继续拼接(避免"平/均值"、"随/诊"断句)。
                 out.append(s)
             elif (out and out[-1] and len(out[-1]) >= 20
                   and not re.search(r"[。！？；;：:）)】\]]$", out[-1])):
@@ -1371,7 +1416,35 @@ def _reflow_conclusion_lines(section: str, despace: bool = False) -> str:
         cleaned.append(p)
     if _pending_date:
         cleaned.append(_pending_date)
-    return "\n".join(cleaned)
+    text = "\n".join(cleaned)
+    if drop_redundant_heading_labels:
+        text = _drop_redundant_bracket_labels(text)
+    return text
+
+
+def _drop_redundant_bracket_labels(text: str) -> str:
+    """2026-10-30: 视觉重排后【标题】紧跟同名标签行(赵瑞阳) → 删除重复标签行。
+
+    源版面是"【同型半胱氨酸偏高】"标题 + "同型半胱氨酸偏高：正文"; 文本流/视觉
+    重排可能把标题与标签拆成两行。标签行是标题的重复, 正文由后续行承担。
+    """
+    out: list[str] = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if out:
+            m = re.fullmatch(r"【(.{2,40})】", out[-1].strip())
+            if m:
+                label = re.escape(m.group(1)) + r"\s*[:：]"
+                if re.fullmatch(label, s):
+                    continue
+                mm = re.match(label, s)
+                if mm:
+                    rest = s[mm.end():].strip()
+                    if rest:
+                        out.append(rest)
+                    continue
+        out.append(ln)
+    return "\n".join(out)
 
 
 def _split_label_explanation(seg: str) -> list[str]:
@@ -1716,8 +1789,17 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
             section = _split_inline_numbered_findings(section)
         _adv_titles = (_numbered_advice_titles(section)
                        if profile and profile.get("numbered_advice") else None)
+        _standalone_lines = None
+        if profile and profile.get("indent_titles"):
+            _standalone_lines = {
+                _ln.strip() for _ln in loc_text.splitlines()
+                if _ln[:1].isspace() and _ln.strip()}
         section = _reflow_conclusion_lines(
-            section, despace=bool(profile and profile.get("despace")))
+            section, despace=bool(profile and profile.get("despace")),
+            explanation_labels=bool(profile and profile.get("explanation_labels")),
+            drop_redundant_heading_labels=bool(
+                profile and profile.get("drop_redundant_heading_labels")),
+            standalone_lines=_standalone_lines)
         if profile and profile.get("clean_ocr_conclusion"):
             section = _clean_ocr_conclusion(section)
         if profile and profile.get("numbered_advice"):
@@ -1735,6 +1817,11 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
             section = re.sub(r"(?<=萎缩\(-\))(?=[\u4e00-\u9fa5]{2,}、)", "\n", section)
         if profile and profile.get("review_block"):
             section = _drop_review_block(section)
+        if profile and profile.get("strip_first_line_colon"):
+            _ls = section.split("\n")
+            if _ls:
+                _ls[0] = re.sub(r"[:：]\s*$", "", _ls[0])
+                section = "\n".join(_ls)
         return section[:16000]
     from app.ai.llm import get_chat_model, _guarded
 
@@ -4163,6 +4250,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
             processed_path = task.original_file_path
 
         report_raw_text = None
+        _conclusion_src = None
         images_b64 = None  # for VLM conclusion extraction on image-based reports
         # 2026-10-20: 纯图片分支不进入文本链, profile/compiled 未赋值 —
         # 后续 summary_marks/终末过滤引用时 UnboundLocalError(测试暴露)
@@ -4231,19 +4319,39 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     report_raw_text = text
                     profile = match_profile(text)
                     compiled = _compile_profile_re(profile)
+            # 2026-10-30: 扫描件档案声明的 OCR 渲染倍率(普洱风湿二项 "*" 在 2.2x
+            # 偶被 OCR 丢弃, 2.8x 稳定识别) —— 仅声明院生效, 重提取后重匹配档案。
+            if profile.get("ocr_scale") and (_pdf_text_probe or _use_hybrid):
+                try:
+                    _scaled = _extract_pdf_text(
+                        processed_path, hybrid=True,
+                        keep_ocr_after_imaging=_keep_ocr_after_imaging,
+                        ocr_scale=float(profile.get("ocr_scale") or 2.2))
+                    if len(_scaled or "") > len(text):
+                        text = _scaled
+                        report_raw_text = text
+                        profile = match_profile(text)
+                        compiled = _compile_profile_re(profile)
+                except Exception as _e_scale:
+                    _log.warning("scaled OCR failed task=%s: %s", task_id, _e_scale)
             if profile.get("visual_sort") or profile.get("visual_lines"):
                 # 2026-09-22: visual_lines(行级重排, 温州程永春)优先级高于块级 visual_sort
                 text = _extract_pdf_text(
                     processed_path, visual_sort=True,
                     visual_lines=bool(profile.get("visual_lines")))
                 report_raw_text = text
+            # 2026-10-30: 仅结论用视觉重排(标题/正文跨栏乱序), 指标链保持线性文本
+            if profile.get("conclusion_visual_sort") and not _pdf_text_probe:
+                _vt = _extract_pdf_text(processed_path, visual_sort=True)
+                if _vt:
+                    _conclusion_src = _vt
             # 2026-10-20: Kangxi 部首文本层(爱康) → 兼容汉字归一后再做结论/指标
             if profile.get("nfkc"):
                 text = normalize_compat_chars(text)
                 report_raw_text = text
-            _imaging_pages = None
-            if compiled.get("drop_imaging_pages"):
-                _imaging_pages = _imaging_report_page_numbers(text)
+            # 2026-10-30: 影像页过滤通用化(纯影像页页级剔除; 混合页保留检验表)
+            _imaging_pages = _imaging_report_page_numbers(text)
+            if _imaging_pages:
                 text = _drop_imaging_report_pages(text)
             # === 2026-08-25: 指标提取器开关 INDICATOR_EXTRACTOR=signal|llm ===
             # signal(默认): 规则提取(信号行标记 signal_flag=1, 绿区照常提取供解读参考)
@@ -4257,6 +4365,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     extract_abnormal_signals,
                     col_rows_with_fallback,
                     extract_personal_info,
+                    extract_two_col_table_rows,
                 )
                 # 2026-08-31: 指标解析前挖掉结论段(体检结果综述/总检建议/异常结果汇总),
                 # 防止结论条目被误提取进指标线 —— 崇左"甲状腺结节/右肾囊肿/谷丙转氨酶偏高"、
@@ -4284,11 +4393,39 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     processed_path, text,
                     infer_columns=bool(compiled.get("infer_columns")),
                     skip_pages=_imaging_pages)
+                _two_col_rows = (extract_two_col_table_rows(processed_path)
+                                 if compiled.get("two_col_tables") else [])
                 signals = extract_abnormal_signals(
                     processed_path, skip_text=findings_sec or "",
                     red_marks=bool(compiled.get("red_marks")),
                     red_ref=bool(compiled.get("red_marks_ref")),
                     skip_pages=_imaging_pages)
+                # 2026-10-30: 双栏化验表专用解析为权威行 —— 同名/截断名的行式、
+                # 布局、信号通道候选全部剔除(周均平 碱性磷酸酶/白球比假黄)
+                if _two_col_rows:
+                    def _norm2c(_s: str) -> str:
+                        return re.sub(r"\s+", "", _s or "")
+                    _two_map: dict = {}
+                    for _r2 in _two_col_rows:
+                        _two_map.setdefault(_norm2c(_r2["item_name"]), set()).add(
+                            re.sub(r"[↑↓*＊]+$", "", str(_r2.get("result") or "")).strip())
+                    def _covered_by_two(_name: str, _result: str = "") -> bool:
+                        _n = _norm2c(_name)
+                        _rv = re.sub(r"[↑↓*＊]+$", "", str(_result or "")).strip()
+                        for _t, _rs in _two_map.items():
+                            if _n == _t:
+                                return True
+                            if (len(_n) >= 1 and (_t.startswith(_n) or _t.endswith(_n))
+                                    and _rv and _rv in _rs):
+                                return True
+                        return False
+                    rows = [r for r in rows
+                            if not _covered_by_two(r["item_name"], r.get("result"))]
+                    col_rows = [r for r in col_rows
+                                if not _covered_by_two(r["item_name"], r.get("result"))]
+                    signals = [s for s in signals
+                               if not _covered_by_two(s["item_name"], s.get("result"))]
+                    col_rows = _two_col_rows + col_rows
                 # 2026-09-28: 信号通道误配折行名碎片(曾繁鲁"测定(HBsAb)"/"定(HBeAb)"/
                 # "酯(TG)") —— 信号名是列式/行式**全名真后缀**、结果相同、自身不是完整
                 # 指标名时改挂全名(标志保留), 碎片不再单独入库。
@@ -4589,6 +4726,9 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 try:
                     from app.core.vlm_client import _parse_markdown_table as _pmt_ocr
                     _ocr_tbl_inds = normalize_indicators(_pmt_ocr(text))
+                    if compiled.get("ocr_two_col_tables"):
+                        from app.core.vlm_client import _parse_two_col_tables
+                        _ocr_tbl_inds += normalize_indicators(_parse_two_col_tables(text))
                 except Exception as _e2:
                     _log.warning("ocr html table parse failed task=%s: %s", task_id, _e2)
                     _ocr_tbl_inds = []
@@ -4816,7 +4956,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
             # Text-based PDF: use LLM on extracted full text
             try:
                 conclusion = run_async(_extract_conclusion_async(
-                    report_raw_text, compiled,
+                    _conclusion_src or report_raw_text, compiled,
                     skip_lines={x for x in (report.parsed_name, report.name) if x}))
                 if conclusion:
                     report.conclusion_text = conclusion
@@ -4845,7 +4985,13 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 or compiled.get("ref_compare")
                 or compiled.get("color_override")
                 or compiled.get("strip_result_marks")
-                or compiled.get("strip_name_prefixes")):
+                or compiled.get("strip_name_prefixes")
+                or compiled.get("drop_indicator_names")
+                or compiled.get("clear_refs")
+                or compiled.get("split_lymph_thyroid")
+                or compiled.get("collapse_name_spaces")
+                or compiled.get("drop_result_patterns")
+                or compiled.get("force_flags")):
             from app.modules.report.table_extractor import apply_profile_indicator_fixes
             apply_profile_indicator_fixes(
                 indicators,
@@ -4856,7 +5002,13 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 ref_compare=bool(compiled.get("ref_compare")),
                 color_override=compiled.get("color_override"),
                 strip_result_marks=bool(compiled.get("strip_result_marks")),
-                strip_name_prefixes=compiled.get("strip_name_prefixes"))
+                strip_name_prefixes=compiled.get("strip_name_prefixes"),
+                drop_name_patterns=compiled.get("drop_indicator_names"),
+                clear_refs=compiled.get("clear_refs"),
+                split_lymph_thyroid=bool(compiled.get("split_lymph_thyroid")),
+                collapse_name_spaces=bool(compiled.get("collapse_name_spaces")),
+                drop_result_patterns=compiled.get("drop_result_patterns"),
+                force_flags=compiled.get("force_flags"))
         if compiled.get("prefer_layout_results"):
             from app.modules.report.table_extractor import prefer_layout_results
             prefer_layout_results(indicators, col_rows, fill_missing=True)
@@ -5166,22 +5318,26 @@ _ECHO_MEAS_HINTS = (
 
 
 def _page_is_imaging_report(part: str) -> bool:
-    lines = [re.sub(r"\s+", "", x) for x in part.splitlines()]
-    if any(len(x) <= 80 and _IMAGING_TITLE_LINE_RE.match(x) for x in lines):
-        return True
-    # 动态心电图的后几页只有"病人姓名/病例号/24小时数据图", 无报告标题
-    if "病人姓名:" in part and ("病例号:" in part or "24小时数据图" in part):
-        return True
-    if (re.search(r"常规心电图（含心电向量图）|双\(多\)能X线", part)
-            or "动脉弹性检测" in part):
-        return True
-    # 混排页(程永春第5页)同时有眼科/OCT/糖化/NSE —— 只将**短小纯影像页**判影像页
-    if "光学相干断层" in part and len(part.strip()) < 400:
-        return True
-    if sum(1 for x in _ECHO_MEAS_HINTS if x in part) >= 3:
-        return True
-    return False
+    """纯影像页判定(2026-10-30 通用化): 有影像标题/测量项且没有检验表参考列。
 
+    混合页(程永春第5页: OCT + 糖化/NSE 在同一页)含"参考值"检验表 → 不整页剔除,
+    由名称黑名单只去掉 OTC/影像残片, 保留同页检验项。
+    """
+    lines = [re.sub(r"\s+", "", x) for x in part.splitlines()]
+    has_title = any(len(x) <= 80 and _IMAGING_TITLE_LINE_RE.match(x) for x in lines)
+    has_title = has_title or ("病人姓名:" in part
+                               and ("病例号:" in part or "24小时数据图" in part))
+    has_title = has_title or bool(re.search(
+        r"常规心电图（含心电向量图）|双\(多\)能X线", part))
+    has_title = has_title or ("光学相干断层" in part and len(part.strip()) < 400)
+    has_title = has_title or ("动脉弹性检测" in part)
+    has_title = has_title or sum(1 for x in _ECHO_MEAS_HINTS if x in part) >= 3
+    if not has_title:
+        return False
+    # 检验表参考列 = 混合页, 保留; 纯影像页没有"参考值/参考范围"
+    if re.search(r"参考值|参考范围|参考区间", part) and re.search(r"检查项目|检验项目|项目名称", part):
+        return False
+    return True
 
 def _imaging_report_page_numbers(text: str) -> set[int]:
     pages: set[int] = set()
@@ -5204,7 +5360,8 @@ def _drop_imaging_report_pages(text: str) -> str:
 def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = False,
                       force_ocr: bool = False, visual_lines: bool = False,
                       ocr_content: bool = False,
-                      keep_ocr_after_imaging: bool = False) -> str:
+                      keep_ocr_after_imaging: bool = False,
+                      ocr_scale: float = 2.2) -> str:
     """Extract all text from a text-based PDF.
 
     2026-09-03: visual_sort=True 时按页视觉坐标(y,x)重排 —— 多栏混排模板
@@ -5260,7 +5417,8 @@ def _extract_pdf_text(file_path: str, visual_sort: bool = False, hybrid: bool = 
                     or (len(page.get_images()) >= 8
                         and not _text_looks_like_cell_dump(t))))):
             try:
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.2, 2.2))
+                _scale = float(ocr_scale or 2.2)
+                pix = page.get_pixmap(matrix=fitz.Matrix(_scale, _scale))
                 img = base64.b64encode(pix.tobytes("png")).decode()
                 _ocr_attempted += 1
                 r = vlm_client.extract_from_image(img)

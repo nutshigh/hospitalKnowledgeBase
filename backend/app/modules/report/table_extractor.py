@@ -77,6 +77,9 @@ def _norm_value_cell(ln: str) -> Optional[str]:
     m = re.match(r"^[<>≤≥]?\s*[\d.]+\s*[（(][+\-±]{2}[)）]$", ln.strip())
     if m:
         return ln.strip()
+    if _QUAL_RE.match(ln.strip()):
+        # 2026-10-30: "弱阳性±" 等定性+±后缀(赵瑞阳尿蛋白)
+        return ln.strip()
     m = _QUAL_SUFFIX_VAL_RE.match(ln.strip())
     if m:
         return m.group(1).strip()
@@ -98,7 +101,7 @@ def _norm_value_cell(ln: str) -> Optional[str]:
 _VALUE_RE = re.compile(
     r"^([\d.]+)((?:\s+(?=[\u4e00-\u9fa5])[\u4e00-\u9fa5a-zA-Z%‰/·×^μ]+)|\s*[a-zA-Z%‰/·×^μ]*)$"
 )
-_QUAL_RE = re.compile(rf"^({_QUALITATIVE_WORDS})\s*[+\-]?$")
+_QUAL_RE = re.compile(rf"^({_QUALITATIVE_WORDS})\s*[+\-±]?$")
 # 2026-09-14: 定性值带括号注释("阳性( DOB:10.30)" 华山 C13 呼气试验, "阳性(234.27)")
 # → 视作结果单元格; 仅限 阳性/阴性/弱阳性, 避免吞并其它定性词的说明性括号。
 _QUAL_ANNOT_RE = re.compile(
@@ -121,7 +124,7 @@ def _split_qual_tail(t: str) -> tuple:
 _NAME_RE = re.compile(
     # 2026-09-28: 允许 "[HR]" 等方括号前缀(曾繁鲁检验表名称列统一"[HR]xxx") ——
     # 否则首段名不被认作名称, 折行续行"测定(HBsAg)"被当独立指标
-    r"^(?:\[[A-Za-z0-9]{1,6}\]\s?)?[▲△★*＊]{0,2}\s?[A-Za-z0-9α-ωΑ-Ωγ#\-.()（）%％\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A]*\s?[\u4e00-\u9fa5]"
+    r"^(?:\[[A-Za-z0-9]{1,6}\]\s?)?[▲△★*＊]{0,2}\s?[A-Za-z0-9α-ωΑ-Ωγ#\-.()（）%％\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A]*[ \t]{0,4}[\u4e00-\u9fa5]"
     r"[\u4e00-\u9fa5A-Za-z0-9()（）%·#\-/α-ωΑ-Ωγ\[\]\. \uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A]{0,24}$"
     # 2026-09-28: 单位尾段补 min("ml/min", 单吉飞肾小球过滤率) —— 否则被当 ASCII 斜杠名称
     r"|^(?i:(?!.*\/(?:mmol|umol|mg|ug|ng|pg|g|ml|dl|l|iu|u|fl|min)\s*$)"
@@ -198,6 +201,7 @@ _SKIP_SUB_RE = re.compile(
     # "小结"尾缀合并名("辨色力正常小结"/"正常心电图小结"); 报告单头合并名
     # ("尿液分析检验报告单条码号"/"敦煌康美综合医院报告单标本号")
     r"结果所见|结果诊断|边检站|医师必须审阅|医生必须审阅|次/分|"
+    r"检验科目|检验医生[:：]?|C-TIRADS|肝上界|^部\s*门$|"
     r"光学相干断层|见纸质报告|"
     r"正常参考值|小结$|报告单|条码号|标本号|诊断意见|上上次|上次|附属|预约号|注意事项|"
     r"检查项目|采样时间|报告解读专线|爱康|用[⼾户]ID|试验[）)]$|[0-9A-F]{20,}|V\d+V\d+|"
@@ -1877,7 +1881,13 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
                                     ref_compare: bool = False,
                                     color_override: tuple | None = None,
                                     strip_result_marks: bool = False,
-                                    strip_name_prefixes: list | None = None) -> None:
+                                    strip_name_prefixes: list | None = None,
+                                    drop_name_patterns: list | None = None,
+                                    clear_refs: list | None = None,
+                                    split_lymph_thyroid: bool = False,
+                                    collapse_name_spaces: bool = False,
+                                    drop_result_patterns: list | None = None,
+                                    force_flags: list | None = None) -> None:
     """2026-10-22: 档案级指标修整。
 
     - strip_unit_flags: 单位列误并标志("↑kg/㎡"/"↓%") → 单位去箭头, signal_flag=2
@@ -1917,7 +1927,43 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
         if _drop:
             indicators[:] = [x for x in indicators if id(x) not in _drop]
     _prefixes = [x for x in (strip_name_prefixes or []) if x]
+    _clear_refs = {re.sub(r"\s+", "", x) for x in (clear_refs or []) if x}
+    if split_lymph_thyroid:
+        _add = []
+        for _ind in list(indicators):
+            _nm = re.sub(r"\s+", "", str(_ind.get("item_name") or ""))
+            if _nm.startswith("颌下淋巴结可扪及") and _nm.endswith("甲状腺"):
+                _old = str(_ind.get("item_name") or "")
+                _ind["item_name"] = "甲状腺"
+                _add.append({"item_name": "浅表淋巴结",
+                             "result": _old.replace("甲状腺", "") or _old,
+                             "unit": "", "ref_low": None, "ref_high": None,
+                             "signal_flag": 0})
+        indicators.extend(_add)
+    _drop_res = [re.compile(x) for x in (drop_name_patterns or []) if x]
+    _drop_result_res = [re.compile(x) for x in (drop_result_patterns or []) if x]
+    if _drop_result_res:
+        indicators[:] = [
+            i for i in indicators
+            if not any(x.match(str(i.get("result") or "").strip())
+                       for x in _drop_result_res)
+        ]
+    if _drop_res:
+        indicators[:] = [
+            i for i in indicators
+            if not any(x.search(str(i.get("item_name") or "")) for x in _drop_res)
+        ]
+    _force_res = [re.compile(x) for x in (force_flags or []) if x]
     for ind in indicators:
+        if _force_res and any(x.search(str(ind.get("item_name") or ""))
+                              for x in _force_res):
+            ind["signal_flag"] = 3
+        if collapse_name_spaces:
+            ind["item_name"] = re.sub(r"\s{2,}", " ",
+                                      str(ind.get("item_name") or "")).strip()
+        if _clear_refs and re.sub(r"\s+", "", str(ind.get("item_name") or "")) in _clear_refs:
+            ind["ref_low"] = None
+            ind["ref_high"] = None
         if _prefixes:
             _nm = str(ind.get("item_name") or "")
             for _p in _prefixes:
@@ -1942,6 +1988,9 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
             _rv = str(ind.get("result") or "")
             if re.search(r"阳性|弱阳性", _rv) and not re.search(r"阴性", _rv):
                 ind["signal_flag"] = 3
+            elif re.fullmatch(r"(?:\d*\+|\d*\+\s*[-－]|[+＋]\s*[-－]|±)", _rv.strip()):
+                # 2026-10-30: 半定量阳性("1+"/"+-")无箭头时按结果判黄(赵瑞阳 维生素C)
+                ind["signal_flag"] = 3
             else:
                 try:
                     _v = float(re.sub(r"[<>≤≥]","", _rv))
@@ -1960,6 +2009,26 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
                         ind["signal_flag"] = 2
 
 
+_NAME_FIELD_SUFFIXES = ("胃幽门", "幽门螺杆菌", "幽门", "螺旋杆菌", "碳13", "碳14",
+                        "光学相干", "常规心电图", "心电图", "动脉弹性", "双(多)能",
+                        "检查报告", "检查")
+
+
+def _trim_name_field_suffix(cand: str) -> str:
+    """2026-10-30: 姓名标签与下一检查项粘连("姓名:程永春胃幽门螺旋杆菌")。"""
+    changed = True
+    while changed:
+        changed = False
+        for suf in _NAME_FIELD_SUFFIXES:
+            if cand.endswith(suf):
+                pre = cand[:-len(suf)].strip()
+                if len(pre) >= 2 and _name_ok(pre):
+                    cand = pre
+                    changed = True
+                    break
+    return cand
+
+
 def extract_personal_info(text: str) -> dict:
     import re as _re
     out: dict = {}
@@ -1974,9 +2043,10 @@ def extract_personal_info(text: str) -> dict:
     if _m_hon and _name_ok(_m_hon.group(1)):
         out["name"] = _m_hon.group(1).strip()
     for m in [] if out.get("name") else _re.finditer(
-            r"姓\s*名(?:\([^)]*\))?[:：\s_]*([\u4e00-\u9fa5·]{2,6})", text):
-        if _name_ok(m.group(1)):
-            out["name"] = m.group(1).strip()
+            r"姓\s*名(?:\([^)]*\))?[:：\s_]*([\u4e00-\u9fa5·]{2,10})", text):
+        cand = _trim_name_field_suffix(m.group(1).strip())
+        if _name_ok(cand):
+            out["name"] = cand
             break
     # 兜底0: "尊敬的XXX先生/女士"(陈诚"尊敬的\n陈诚  男士，您好！")
     if not out.get("name"):
@@ -2261,11 +2331,22 @@ def _pair_arrow_by_row(lines: list[str], meta: list[tuple], idx: int,
         return []
     name = None
     name_x = None
-    for _i, _x, t in sorted(same, key=lambda z: z[1]):
-        if _NAME_RE.match(t) and not _skip_name(t) and not _is_value_line(t):
-            name = t.lstrip("★*＊▲△").strip()
-            name_x = _x
-            break
+    _cands = [(_i, _x, t) for _i, _x, t in sorted(same, key=lambda z: z[1])
+              if _NAME_RE.match(t) and not _skip_name(t) and not _is_value_line(t)]
+    # 2026-10-30: 双栏同排(周均平) —— 取箭头**左侧最近**的名称, 不能取最左名称
+    # (右侧 "3.86↑" 曾配给左栏 碱性磷酸酶 → 假黄)。
+    _left = [c for c in _cands if c[1] <= ax]
+    if _left:
+        # 优先 y 最近(同排错位), y 相同再取 x 最近(双栏左右两名称)
+        _i, _x, t = min(
+            _left,
+            key=lambda z: (round(abs(meta[z[0]][1] - y0), 1), abs(z[1] - ax)))
+        name = t.lstrip("★*＊▲△").strip()
+        name_x = _x
+    elif _cands:
+        _i, _x, t = min(_cands, key=lambda z: z[1])
+        name = t.lstrip("★*＊▲△").strip()
+        name_x = _x
     if not name:
         return []
     if result_hint:
@@ -2631,6 +2712,157 @@ def _infer_column_roles(col_xs: List[float], cells_flat: List) -> Optional[List[
         if _r == "result" and _i < ni:
             roles[_i] = None
     return [(roles[i], col_xs[i]) for i in range(len(col_xs))]
+
+
+def extract_two_col_table_rows(pdf_path: str) -> list[dict]:
+    """2026-10-30: 双栏化验表专用解析(周均平 莱州市中医医院)。
+
+    表头 = 名称|结果|参考范围|单位 × 2(左右栏), 每个物理行左右两套指标并排;
+    文本流按单元格顺序拉平会左右错配, 右侧 "3.86↑" 曾被配给左栏上一项。
+    本函数按坐标读视觉行, 左右半栏独立配对; 名称/单位折行(下一行同 x 续行)
+    回接到所属记录。仅用于档案 two_col_tables=True 的报告。
+    """
+    from app.modules.report import layout as L
+
+    out: list[dict] = []
+    seen: set = set()
+    by_page: dict = {}
+    for r in L.extract_visual_rows(pdf_path):
+        by_page.setdefault(r.page, []).append(r)
+
+    def _emit(rec: dict) -> None:
+        name = "".join(rec.get("name_parts") or []).strip()
+        name = re.sub(r"^[★*＊▲△\s]+", "", name).strip()
+        if not name or _skip_name(name) or re.search(
+                r"姓名[:：]|性别[:：]|年龄[:：]|编号[:：]|科室[:：]|日期[:：]", name):
+            return
+        result = "".join(rec.get("result_parts") or []).strip()
+        if not result:
+            return
+        flag = 0
+        mflag = re.search(r"[↑↓*＊]+$", result)
+        if mflag:
+            flag = 3
+            result = result[:mflag.start()].strip()
+        # 半定量/定性结果保留 "+-" 形态; "*" 仅作标志
+        result = result.replace("＋", "+").replace("－", "-").strip()
+        unit = " ".join(x for x in (rec.get("unit_parts") or []) if x).strip()
+        ref_txt = "".join(rec.get("ref_parts") or []).strip()
+        ref_low = ref_high = None
+        if ref_txt:
+            ru = _range_with_unit(ref_txt)
+            if ru:
+                ref_low, ref_high, runit = ru
+                if not unit and runit:
+                    unit = runit
+            else:
+                lo, hi = _parse_ref(ref_txt)
+                if lo or hi:
+                    ref_low, ref_high = lo, hi
+        if not result:
+            return
+        if _junk_row_cell(name, unit, result):
+            return
+        key = (re.sub(r"\s+", "", name), result)
+        if key in seen:
+            return
+        seen.add(key)
+        row = {"item_name": name, "result": result, "unit": unit,
+               "ref_low": ref_low, "ref_high": ref_high,
+               "signal_flag": flag, "__auth": True}
+        out.append(row)
+
+    for page in sorted(by_page):
+        page_rows = by_page[page]
+        lines: list[list] = []
+        for r in sorted(page_rows, key=lambda x: (x.y0, x.x0)):
+            if lines and abs(r.y0 - lines[-1][0].y0) <= 1.5:
+                lines[-1].append(r)
+            else:
+                lines.append([r])
+        for cells in lines:
+            cells.sort(key=lambda c: c.x0)
+
+        headers: list[int] = []
+        for idx, cells in enumerate(lines):
+            if len(cells) < 8:
+                continue
+            roles = [L.cell_role(c.text.strip()) for c in cells]
+            if (roles.count("name") >= 2 and roles.count("result") >= 2
+                    and roles.count("ref") >= 2):
+                headers.append(idx)
+        if not headers:
+            continue
+
+        for hi, start in enumerate(headers):
+            end = headers[hi + 1] if hi + 1 < len(headers) else len(lines)
+            hcells = lines[start]
+            hroles = [L.cell_role(c.text.strip()) for c in hcells]
+            if len(hroles) != 8 or any(hroles[i] != hroles[i % 4]
+                                      for i in range(8)):
+                continue
+            xcols = [c.x0 for c in hcells]
+            current = [None, None]
+
+            def _flush() -> None:
+                for half in (0, 1):
+                    if current[half]:
+                        _emit(current[half])
+                        current[half] = None
+
+            for cells in lines[start + 1:end]:
+                texts = [c.text.strip() for c in cells if c.text.strip()]
+                if not texts:
+                    continue
+                # 装饰分隔行("丙丙丙…")不是数据/续行
+                if len(texts) == 1 and (
+                        _REPEAT_CHAR_JUNK_RE.match(texts[0])
+                        or re.search(r"(.)\1{4,}", texts[0])):
+                    continue
+                assigned = []
+                for c in cells:
+                    t = c.text.strip()
+                    if not t:
+                        continue
+                    k = min(range(8), key=lambda i: abs(c.x0 - xcols[i]))
+                    if abs(c.x0 - xcols[k]) <= 35.0:
+                        assigned.append((k, t))
+                if not assigned:
+                    continue
+                has_result = any(hroles[k] == "result" for k, _ in assigned)
+                has_ref = any(hroles[k] == "ref" for k, _ in assigned)
+                if not has_result and not has_ref:
+                    # 名称/单位折行续行 → 回接当前记录
+                    for k, t in assigned:
+                        half, role = k // 4, hroles[k]
+                        rec = current[half]
+                        if rec is None:
+                            continue
+                        if role == "name":
+                            rec["name_parts"].append(t)
+                        elif role == "unit":
+                            rec["unit_parts"].append(t)
+                        elif role == "ref":
+                            rec["ref_parts"].append(t)
+                    continue
+                _flush()
+                halves = {k // 4 for k, _ in assigned}
+                for half in halves:
+                    current[half] = {"name_parts": [], "result_parts": [],
+                                     "ref_parts": [], "unit_parts": []}
+                for k, t in assigned:
+                    half, role = k // 4, hroles[k]
+                    rec = current[half]
+                    if role == "name":
+                        rec["name_parts"].append(t)
+                    elif role == "result":
+                        rec["result_parts"].append(t)
+                    elif role == "ref":
+                        rec["ref_parts"].append(t)
+                    elif role == "unit":
+                        rec["unit_parts"].append(t)
+            _flush()
+    return out
 
 
 def col_rows_via_layout(pdf_path: str, skip_pages: Optional[set] = None,

@@ -2788,3 +2788,251 @@ def test_tenth_batch_join_profile_fragments():
     out = _join_profile_fragments(text, pairs)
     assert "（胃窦大弯偏后壁侧）粘膜" in out
     assert "十二指肠球炎是炎症" in out
+
+
+def test_drop_imaging_pages_keeps_mixed_and_conclusion_pages():
+    from app.modules.report.service import _drop_imaging_report_pages
+    text = """--- Page 3 ---
+体检结论
+2.监测动态心电图1.窦性心律
+--- Page 10 ---
+常规心电图（含心电向量图）
+心电图
+正常范围心电图
+--- Page 31 ---
+两对半检测
+HBsAg
+阴性
+"""
+    out = _drop_imaging_report_pages(text)
+    assert "--- Page 3 ---" in out and "监测动态心电图" in out
+    assert "--- Page 10 ---" not in out
+    assert "--- Page 31 ---" in out and "HBsAg" in out
+
+
+def test_name_not_merged_with_next_exam_field():
+    from app.modules.report.table_extractor import extract_personal_info
+    assert extract_personal_info("姓名:程永春胃幽门螺旋杆菌(碳13)")["name"] == "程永春"
+
+
+# === 第十批后 5 份(2026-10-30 用户反馈) ===
+
+def test_parse_markdown_table_inherits_header_across_group_tables():
+    # 张仁星(普洱, 纯扫描): 【医学检验科】分组后多个表共用 5 列表头; 后续 4 列表
+    # (OCR 省略空标志列)曾因"组标题行"被误选为表头而整表不解析 → 应继承真正的
+    # 5 列检验表头, 并把 4 列数据按 名称/结果/参考/单位 对齐。
+    from app.core.vlm_client import _parse_markdown_table
+    html = (
+        "<table><tr><td>【医学检验科】</td><td colspan='4'>检验结果</td></tr>"
+        "<tr><td>检验项目</td><td>结果</td><td>标志</td><td>参考值</td><td>单位</td></tr>"
+        "<tr><td>C反应蛋白</td><td>2.51</td><td></td><td>0-6.00</td><td>mg/L</td></tr></table>"
+        "<table><tr><td>肌酐</td><td>75.00</td><td>68-108</td><td>μmol/L</td></tr>"
+        "<tr><td>尿酸</td><td>427.00</td><td>208-428</td><td>μmol/L</td></tr></table>"
+        "<table><tr><td>嗜碱性粒细胞计数</td><td>0.07</td><td></td><td>0.00-0.06</td>"
+        "<td>10^9/L</td></tr></table>"
+    )
+    rows = {r["item_name"]: r for r in _parse_markdown_table(html)}
+    assert rows["C反应蛋白"]["result"] == "2.51"
+    assert rows["肌酐"]["result"] == "75.00"
+    assert rows["肌酐"]["ref_low"] == "68" and rows["肌酐"]["ref_high"] == "108"
+    assert rows["肌酐"]["unit"] == "μmol/L"
+    assert rows["尿酸"]["result"] == "427.00"
+    assert rows["嗜碱性粒细胞计数"]["result"] == "0.07"
+    assert rows["嗜碱性粒细胞计数"]["unit"] == "10^9/L"
+
+
+def test_locate_findings_keeps_repeated_field_labels():
+    # 张仁星: 每条科普都有【医学解释】【常见原因】【健康指导】—— 同名重复行曾被
+    # 当作页眉去重, 第 2 条起字段标题全丢。
+    from app.modules.report.service import _locate_findings_sections
+    text = """第三部分 异常结果
+1. 白细胞增多
+2. 血脂异常
+第四部分 异常结果相关知识科普
+1. 白细胞增多
+【医学解释】
+解释一
+【常见原因】
+原因一
+【健康指导】
+指导一
+2. 血脂异常
+【医学解释】
+解释二
+【常见原因】
+原因二
+【健康指导】
+指导二
+"""
+    import re
+    sec = _locate_findings_sections(
+        text, anchor_only=True,
+        extra_anchor_re=re.compile(r"^第四部分\s*异常结果相关知识科普"))
+    assert sec.count("【医学解释】") == 2
+    assert sec.count("【常见原因】") == 2
+    assert sec.count("【健康指导】") == 2
+    assert "解释二" in sec and "指导二" in sec
+
+
+def test_name_re_allows_multiple_spaces_before_cjk():
+    # 赵瑞阳: "9-HR  尿蛋白"(两个空格) 曾被 _NAME_RE 判为非名称 → 整行漏提。
+    from app.modules.report.table_extractor import _NAME_RE
+    assert _NAME_RE.match("9-HR  尿蛋白")
+    assert _NAME_RE.match("9-HR 尿蛋白")
+
+
+def test_qual_re_accepts_weak_positive_plus_minus():
+    # 赵瑞阳: 尿蛋白结果 "弱阳性±" 不是值行 → 漏提; ± 应作为半定量后缀。
+    from app.modules.report.table_extractor import _is_value_line, _norm_value_cell
+    assert _is_value_line("弱阳性±")
+    assert _norm_value_cell("弱阳性±") == "弱阳性±"
+
+
+def test_ref_compare_marks_qualitative_and_semiquant_abnormal():
+    # 赵瑞阳: 无箭头时按"本次结果 vs 参考"判黄 —— 尿蛋白弱阳性/维生素C 1+。
+    from app.modules.report.table_extractor import apply_profile_indicator_fixes
+    inds = [
+        {"item_name": "9-HR 尿蛋白", "result": "弱阳性±", "unit": "",
+         "ref_low": None, "ref_high": None, "signal_flag": 0},
+        {"item_name": "维生素C", "result": "1+", "unit": "",
+         "ref_low": None, "ref_high": None, "signal_flag": 0},
+        {"item_name": "9-HR 尿潜血", "result": "阴性", "unit": "",
+         "ref_low": None, "ref_high": None, "signal_flag": 0},
+    ]
+    apply_profile_indicator_fixes(inds, ref_compare=True)
+    assert inds[0]["signal_flag"] == 3
+    assert inds[1]["signal_flag"] == 3
+    assert not inds[2]["signal_flag"]
+
+
+def test_reflow_drops_duplicate_bracket_label():
+    # 赵瑞阳: 视觉重排后【同型半胱氨酸偏高】与同名标签行 "同型半胱氨酸偏高：" 相邻,
+    # 标签行是重复项(正文另起)。
+    from app.modules.report.service import _reflow_conclusion_lines
+    txt = "【同型半胱氨酸偏高】\n同型半胱氨酸偏高：\n同型半胱氨酸是危险因素。"
+    out = _reflow_conclusion_lines(txt, drop_redundant_heading_labels=True)
+    assert out.count("同型半胱氨酸偏高") == 1
+    assert "同型半胱氨酸是危险因素" in out
+
+
+def test_arrow_signal_uses_nearest_left_name_in_two_col_row():
+    # 周均平: 右侧 "3.86↑" 与左侧 碱性磷酸酶 同排, 旧实现取最左名称 → 碱性磷酸酶假黄;
+    # 应取箭头左侧最近的名称(低密度脂蛋白)。
+    from app.modules.report.table_extractor import _pair_arrow_by_row
+    lines = ["碱性磷酸酶", "108", "45～125", "U/L", "低密度脂蛋白", "3.86↑"]
+    meta = [(1, 190.0, 31.0), (1, 190.0, 123.0), (1, 190.0, 173.0),
+            (1, 190.0, 244.0), (1, 190.0, 301.0), (1, 190.0, 393.0)]
+    rows = _pair_arrow_by_row(lines, meta, 5, result_hint="3.86")
+    assert rows and rows[0]["item_name"] == "低密度脂蛋白"
+    assert rows[0]["result"] == "3.86"
+
+
+def test_two_col_table_parser_zhoujunping_sample():
+    # 周均平(莱州中医): 双栏化验表按左右栏配对 + 名称折行拼接 + 结果右侧标志。
+    from app.modules.report.table_extractor import extract_two_col_table_rows
+    rows = extract_two_col_table_rows("../体检报告样例/1-第10批/周均平243516.pdf")
+    by_name = {r["item_name"]: r for r in rows}
+    assert by_name["低密度脂蛋白"]["result"] == "3.86"
+    assert by_name["低密度脂蛋白"].get("signal_flag") == 3
+    assert by_name["碱性磷酸酶"]["result"] == "108"
+    assert not by_name["碱性磷酸酶"].get("signal_flag")
+    assert by_name["白球比"]["result"] == "1.72"
+    assert not by_name["白球比"].get("signal_flag")
+    assert by_name["门冬氨酸氨基转移酶"]["result"] == "32"
+    assert by_name["丙氨酸氨基转移酶"]["result"] == "68"
+    assert by_name["丙氨酸氨基转移酶"].get("signal_flag") == 3
+    assert by_name["乙肝表面抗体(抗-HBs)"]["result"] == "340.105"
+    assert by_name["乙肝表面抗体(抗-HBs)"].get("signal_flag") == 3
+    assert by_name["尿隐血"]["result"] == "+-"
+    assert by_name["尿隐血"].get("signal_flag") == 3
+
+
+def _conclusion_for_sample(path: str, visual: bool = False):
+    import asyncio
+    from app.modules.report.service import (
+        _extract_conclusion_async, _extract_pdf_text, _load_report_profiles)
+    text = _extract_pdf_text(path, visual_sort=visual)
+    match_profile, _ = _load_report_profiles()
+    prof = match_profile(text)
+    return asyncio.run(_extract_conclusion_async(text, prof))
+
+
+def test_zhangwanli_conclusion_uses_health_guidance_section():
+    # 张万里: 文本流把两栏"主检建议"排在"健康指导"正文之前; 仅结论走视觉重排后
+    # 应取真正的健康指导解释段, 并跨页补全"如果再进一步"续句。
+    out = _conclusion_for_sample(
+        "../体检报告样例/1-第10批/张万里147411.pdf", visual=True)
+    assert out.startswith("健康指导\n")
+    assert "建议二周左右健康管理中心体重管理门诊就诊" not in out
+    assert "如果再进一步发展，就会形成肾结石。" in out
+    assert "8.前列腺多发钙化灶" in out
+
+
+def test_zhazuiyang_conclusion_visual_order_and_no_duplicate_label():
+    # 赵瑞阳: PDF 文本流标题/正文错位; 视觉重排后标题在前、正文对应, 且重复的
+    # "同型半胱氨酸偏高："标签行被删除。
+    out = _conclusion_for_sample(
+        "../体检报告样例/1-第10批/赵瑞阳182678.pdf", visual=True)
+    assert out.startswith("主检结论：\n【同型半胱氨酸偏高】")
+    assert "【同型半胱氨酸偏高】\n同型半胱氨酸是动脉粥样硬化" in out
+    assert "【甘油三酯(TG)增高】\n提示高甘油三酯血症" in out
+    assert out.count("同型半胱氨酸偏高") == 1
+
+
+def test_zhoujunping_conclusion_breaks_explanation_labels():
+    # 周均平: 文本层把"高血压医学解释医学注释"挤在一起 → 字段标签应独立成行。
+    out = _conclusion_for_sample(
+        "../体检报告样例/1-第10批/周均平243516.pdf")
+    assert out.startswith("健康指导建议（健康提示）\n高血压\n医学解释\n医学注释：")
+    assert "高血压医学解释" not in out
+    assert "\n医生建议\n" in out
+    # 2026-10-30: 健康指导段内独立条目/建议行必须前后换行
+    assert ("注意饮食，适当锻炼\n甲状腺右侧叶结节  TI-RADS 3类\n"
+            "医生建议\n避免熬夜、焦虑、高碘饮食，适量活动，6-12月复查\n"
+            "近视\n医学解释\n近视是屈光不正") in out
+    # 2026-10-30: PDF 折行不得拆断句子
+    assert "重复血压测定所得的平均值为依据" in out
+    assert "血压高的原因分为原发性和继发性" in out
+    assert "继发性高血压一旦被明确诊断" in out
+    assert "一般不需处理，可随诊观察" in out
+
+
+def test_zhoujunping_imaging_thyroid_ultrasound_yellow():
+    # 周均平: 结论换行修复后, 原文扫描能命中"甲状腺右侧叶结节" → 彩超(甲状腺)黄。
+    from app.modules.report.imaging_items import build_imaging_items
+    out = _conclusion_for_sample(
+        "../体检报告样例/1-第10批/周均平243516.pdf")
+    levels = {x["name"]: x["level"] for x in build_imaging_items(out, "男", [])}
+    assert levels["彩超(甲状腺)"] == "yellow"
+
+
+def test_parse_markdown_table_keeps_star_flag_column():
+    # 张仁星: 风湿二项表头有"标志"列, 类风湿因子结果 <10 但报告方标 "*" → 判黄。
+    from app.core.vlm_client import _parse_markdown_table
+    html = (
+        "<table><tr><td>检验项目</td><td>结果</td><td>标志</td><td>参考值</td><td>单位</td></tr>"
+        "<tr><td>类风湿因子</td><td>&lt;10</td><td>*</td><td>0-14.0</td><td>IU/ml</td></tr></table>"
+    )
+    rows = {r["item_name"]: r for r in _parse_markdown_table(html)}
+    assert rows["类风湿因子"]["result"] == "<10"
+    assert rows["类风湿因子"]["ref_low"] == "0"
+    assert rows["类风湿因子"]["ref_high"] == "14.0"
+    assert rows["类风湿因子"].get("signal_flag") == 3
+
+
+def test_force_flags_marks_named_rows_yellow():
+    # 张仁星: OCR 偶丢风湿二项标志列的 "*"(2.2x 渲染) → 档案声明 force_flags 兜底。
+    from app.modules.report.table_extractor import apply_profile_indicator_fixes
+    inds = [{"item_name": "类风湿因子", "result": "<10", "unit": "IU/ml",
+             "ref_low": "0", "ref_high": "14.0", "signal_flag": 0},
+            {"item_name": "抗0", "result": "141.00", "unit": "IU/mL",
+             "ref_low": "0", "ref_high": "200", "signal_flag": 0}]
+    apply_profile_indicator_fixes(inds, force_flags=[r"^类风湿因子$"])
+    assert inds[0]["signal_flag"] == 3
+    assert not inds[1]["signal_flag"]
+
+
+def test_zhoujunping_profile_keeps_ocr_after_imaging():
+    # 莱州中医: 检验表在"超声骨密度检测报告"影像页之后 → 关闭早停, 防后续扫描页漏检。
+    from app.modules.report.report_profiles import match_profile
+    assert match_profile("莱州市中医医院").get("keep_ocr_after_imaging") is True

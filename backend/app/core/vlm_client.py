@@ -232,12 +232,14 @@ def _parse_markdown_table(text: str) -> list[dict]:
             # 2026-10-13: 跨页续表补表头 —— OCR 在页边界把一张表拆成两段时, 后段
             # 无表头行(胡月 白带常规+BV 跨页: 后段"清洁度 III度↑"行整表被
             # _rows_to_indicators 丢弃) → 无表头段沿用上一段表头再解析。
-            _has_head = any(_match_header_columns(r or []) for r in rows[:2])
-            if _has_head:
-                _last_header = next(
-                    (r for r in rows[:2] if _match_header_columns(r or [])), [])
-            elif _last_header and rows:
-                rows = [list(_last_header)] + rows
+            _picked = _pick_header_row(rows[:2])
+            if _picked is not None:
+                _last_header = _picked[1]
+            elif _last_header and rows and _looks_like_lab_data(rows):
+                _width = max((len(r) for r in rows if len(r) >= 2), default=0)
+                _adapted = _adapt_inherited_header(_last_header, _width)
+                if _adapted:
+                    rows = [_adapted] + rows
             _parsed = _rows_to_indicators(rows)
             if _ctx in ("urine", "stool"):
                 for _p in _parsed:
@@ -263,6 +265,27 @@ def _parse_markdown_table(text: str) -> list[dict]:
     return out
 
 
+def _parse_two_col_tables(text: str) -> list[dict]:
+    """2026-10-30: 无表头 2 列 OCR HTML 表(张仁星 健管中心一般检查室)兜底。"""
+    out = []
+    for b in re.findall(r"<table[^>]*>(.*?)</table>", text or "", re.S):
+        rows = _html_table_rows(b)
+        if not rows or any(len(r) >= 3 for r in rows):
+            continue
+        for r in rows:
+            if len(r) < 2:
+                continue
+            name = (r[0] or "").strip()
+            val = (r[1] or "").strip()
+            if not name or not val or len(name) > 40:
+                continue
+            if re.search(r"姓名|性别|年龄|检查|项目|结果|科室|医院|申请|床号|日期", name):
+                continue
+            out.append({"item_name": name, "result": val, "unit": "",
+                        "ref_low": None, "ref_high": None})
+    return out
+
+
 def _is_history_table(table_rows: list) -> bool:
     """2026-09-24: 历年对比表判定 —— 表头(前两行)含 ≥2 个日期列。
 
@@ -281,6 +304,65 @@ def _is_history_table(table_rows: list) -> bool:
     return False
 
 
+def _pick_header_row(rows: list[list[str]]) -> tuple[int, list[str], dict] | None:
+    """2026-10-30: 选择真正的表头行(名称+结果), 跳过分组标题/收费项目等部分映射行。
+
+    普洱张仁星第一表首行 "【医学检验科】|检验结果" 只映射出 result, 旧逻辑取首行
+    当表头 → 后续无表头表继承 2 列角色, 整批检验项漏提。
+    """
+    best = None
+    best_score = -1
+    for i, row in enumerate(rows):
+        cmap = _match_header_columns(row or [])
+        roles = set(cmap.values())
+        if "item_name" not in roles or "result" not in roles:
+            continue
+        score = len(cmap)
+        if "unit" in roles:
+            score += 1
+        if "ref_low" in roles or "ref_high" in roles:
+            score += 1
+        if score > best_score:
+            best = (i, list(row), cmap)
+            best_score = score
+    return best
+
+
+def _adapt_inherited_header(header: list[str], width: int) -> list[str] | None:
+    """跨表继承的表头宽度适配(OCR 省略空标志列时 5 列 → 4 列)。"""
+    if not header or width < 2:
+        return None
+    if len(header) == width:
+        return list(header)
+    cmap = _match_header_columns(header)
+    roles = [cmap.get(i) for i in range(len(header))]
+    idxs = list(range(len(header)))
+    while len(idxs) > width:
+        flag_idx = next((k for k in reversed(idxs) if roles[k] == "flag"), None)
+        if flag_idx is None:
+            return None
+        idxs.remove(flag_idx)
+    if len(idxs) != width:
+        return None
+    return [header[k] for k in idxs]
+
+
+def _looks_like_lab_data(rows: list[list[str]]) -> bool:
+    """无表头表是否像检验数据(名称 + 数值/定性结果), 防把临床 2 列表套用检验表头。"""
+    good = 0
+    for row in rows:
+        if len(row) < 3:
+            continue
+        name = str(row[0] or "").strip()
+        val = str(row[1] or "").strip()
+        if not name or re.search(r"[:：]", name):
+            continue
+        if re.match(r"^[<>≤≥]?\s*[\d.]+", val) or re.search(
+                r"阴性|阳性|弱阳性|正常|阴性（-）|neg", val, re.I):
+            good += 1
+    return good >= 1
+
+
 def _rows_to_indicators(table_rows: list) -> list[dict]:
     """单表行集 → 指标列表(表头检测 + 列映射 + 小结行兜底)。"""
     if len(table_rows) < 2:
@@ -288,11 +370,8 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
 
     # 2026-08-26: 表头行不一定是第一行(钦州等报告的"模块标题行"先出现)
     # 找第一个能映射出字段的表头行; 其后的"检查人员/审核时间"类行跳过
-    header_idx = None
-    for i, row in enumerate(table_rows):
-        if _match_header_columns(row):
-            header_idx = i
-            break
+    _picked = _pick_header_row(table_rows)
+    header_idx = _picked[0] if _picked else None
     if header_idx is None:
         return []
 
@@ -464,9 +543,9 @@ def _apply_summary_row_flags(indicators: list, table_rows: list) -> None:
 def _match_header_columns(headers: list[str]) -> dict:
     """Match Chinese header keywords to standard field names."""
     keywords = {
-        "item_name": ["项目名称", "检验项目", "项目", "指标名称", "检查项目", "测定项目"],
+        "item_name": ["项目名称", "检验项目", "项目", "指标名称", "检查项目", "测定项目", "名称"],
         "item_code": ["缩写", "英文简称", "代码", "代号", "缩写符号"],
-        "result": ["结果", "测定值", "检验结果", "实测值", "检测结果", "数值"],
+        "result": ["结果", "本次结果", "测定值", "检验结果", "实测值", "检测结果", "数值"],
         "unit": ["单位", "计量单位"],
         "ref_low": ["参考范围低", "参考低", "下限"],
         "ref_high": ["参考范围高", "参考高", "上限"],

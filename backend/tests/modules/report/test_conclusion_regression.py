@@ -63,6 +63,14 @@ def _polish(sample: dict) -> str:
     anchor_only / table_conclusion 一并支持)。"""
     full = _extract_sample_text(sample)
     prof = compile_profile(match_profile(full))
+    if prof.get("all_conclusions"):
+        from app.modules.report.service import _collect_all_conclusions, _strip_ocr_html
+        return _collect_all_conclusions(_strip_ocr_html(full))
+    if prof.get("conclusion_visual_sort"):
+        # 2026-10-30: 与生产 process_task 同构 —— 仅结论用视觉重排(张万里/赵瑞阳)
+        from app.modules.report.service import _extract_pdf_text
+        full = _extract_pdf_text(str(SAMPLES_ROOT / sample["rel"]),
+                                 visual_sort=True)
     section = _locate_findings_sections(
         full, extra_break_re=prof["extra_break_re"], extra_skip_re=prof["extra_skip_re"],
         extra_anchor_re=prof["extra_anchor_re"], anchor_only=bool(prof.get("anchor_only")))
@@ -70,7 +78,17 @@ def _polish(sample: dict) -> str:
     if prof.get("table_conclusion"):
         from app.modules.report.service import _reflow_table_conclusion
         return _reflow_table_conclusion(section)
-    return _reflow_conclusion_lines(section)
+    _standalone_lines = None
+    if prof.get("indent_titles"):
+        _standalone_lines = {
+            _ln.strip() for _ln in full.splitlines()
+            if _ln[:1].isspace() and _ln.strip()}
+    return _reflow_conclusion_lines(
+        section,
+        explanation_labels=bool(prof.get("explanation_labels")),
+        drop_redundant_heading_labels=bool(
+            prof.get("drop_redundant_heading_labels")),
+        standalone_lines=_standalone_lines)
 
 
 # 冒烟级通用脏词(页眉/分检/签名) —— smoke 样本不做逐份 forbidden 定制

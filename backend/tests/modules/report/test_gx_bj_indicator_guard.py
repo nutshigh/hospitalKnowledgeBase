@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from app.modules.report.service import (  # noqa: E402
+    _clean_indicator_name,
     _compile_profile_re,
     _extract_pdf_text,
     _load_report_profiles,
@@ -30,6 +31,7 @@ from app.modules.report.table_extractor import (  # noqa: E402
     col_rows_with_fallback,
     extract_abnormal_signals,
     extract_indicator_rows,
+    extract_two_col_table_rows,
 )
 from app.modules.interpretation.rules_engine import RulesEngine  # noqa: E402
 from app.core.term_normalizer import normalize_indicators  # noqa: E402
@@ -97,10 +99,35 @@ def _extract(pdf):
         rows = []
     col_rows = col_rows_with_fallback(
         pdf, t2, infer_columns=bool(comp.get("infer_columns")))
+    _two_col_rows = (extract_two_col_table_rows(pdf)
+                     if comp.get("two_col_tables") else [])
     signals = extract_abnormal_signals(
         pdf, skip_text=sec or "",
         red_marks=bool(comp.get("red_marks")),
         red_ref=bool(comp.get("red_marks_ref")))
+    if _two_col_rows:
+        def _norm2c(_s: str) -> str:
+            return re.sub(r"\s+", "", _s or "")
+        _two_map: dict = {}
+        for _r2 in _two_col_rows:
+            _two_map.setdefault(_norm2c(_r2["item_name"]), set()).add(
+                re.sub(r"[↑↓*＊]+$", "", str(_r2.get("result") or "")).strip())
+        def _covered_by_two(_name: str, _result: str = "") -> bool:
+            _n = _norm2c(_name)
+            _rv = re.sub(r"[↑↓*＊]+$", "", str(_result or "")).strip()
+            for _t, _rs in _two_map.items():
+                if _n == _t:
+                    return True
+                if (len(_n) >= 1 and (_t.startswith(_n) or _t.endswith(_n))
+                        and _rv and _rv in _rs):
+                    return True
+            return False
+        rows = [r for r in rows if not _covered_by_two(r["item_name"], r.get("result"))]
+        col_rows = [r for r in col_rows
+                    if not _covered_by_two(r["item_name"], r.get("result"))]
+        signals = [s for s in signals
+                   if not _covered_by_two(s["item_name"], s.get("result"))]
+        col_rows = _two_col_rows + col_rows
     _name_pool = {(r["item_name"], (r["result"] or "").strip()) for r in col_rows}
     _name_pool |= {(r["item_name"], (r["result"] or "").strip()) for r in rows}
     _full_by_result: dict = {}
@@ -216,7 +243,13 @@ def _extract(pdf):
             or comp.get("ref_compare")
             or comp.get("color_override")
             or comp.get("strip_result_marks")
-            or comp.get("strip_name_prefixes")):
+            or comp.get("strip_name_prefixes")
+            or comp.get("drop_indicator_names")
+            or comp.get("clear_refs")
+            or comp.get("split_lymph_thyroid")
+            or comp.get("collapse_name_spaces")
+            or comp.get("drop_result_patterns")
+            or comp.get("force_flags")):
         from app.modules.report.table_extractor import apply_profile_indicator_fixes
         apply_profile_indicator_fixes(
             indicators,
@@ -227,13 +260,13 @@ def _extract(pdf):
             ref_compare=bool(comp.get("ref_compare")),
             color_override=comp.get("color_override"),
             strip_result_marks=bool(comp.get("strip_result_marks")),
-            strip_name_prefixes=comp.get("strip_name_prefixes"))
-    if comp.get("prefer_layout_results"):
-        from app.modules.report.table_extractor import prefer_layout_results
-        prefer_layout_results(indicators, col_rows, fill_missing=True)
-    if comp.get("recover_folded_units_refs"):
-        from app.modules.report.table_extractor import recover_folded_units_refs
-        recover_folded_units_refs(indicators, t)
+            strip_name_prefixes=comp.get("strip_name_prefixes"),
+            drop_name_patterns=comp.get("drop_indicator_names"),
+            clear_refs=comp.get("clear_refs"),
+            split_lymph_thyroid=bool(comp.get("split_lymph_thyroid")),
+            collapse_name_spaces=bool(comp.get("collapse_name_spaces")),
+            drop_result_patterns=comp.get("drop_result_patterns"),
+            force_flags=comp.get("force_flags"))
     # 2026-10-07: 结论段来源信号只标黄既有行, 不新建行(与 service 同构)
     _csrc_only = (
         {(s["item_name"], s["result"]) for s in signals if s.get("_conclusion_src")}
@@ -268,6 +301,15 @@ def _extract(pdf):
     indicators = normalize_indicators(indicators)
     # 2026-10-19: 红字+超参考 → f1(望京, 与 service 同构)
     apply_redref_flags(indicators, signals)
+    # 与生产 process_task 终末顺序一致: 布局结果优先/折行参考回收在信号行全部并入后
+    if comp.get("prefer_layout_results"):
+        from app.modules.report.table_extractor import prefer_layout_results
+        prefer_layout_results(indicators, col_rows, fill_missing=True)
+    if comp.get("recover_folded_units_refs"):
+        from app.modules.report.table_extractor import recover_folded_units_refs
+        recover_folded_units_refs(indicators, t)
+    for ind in indicators:
+        ind["item_name"] = _clean_indicator_name(ind.get("item_name", ""))
     return indicators
 
 
@@ -385,6 +427,10 @@ B9 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "1-第9批")
+B10 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "1-第10批")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -488,12 +534,25 @@ _BASELINE_CASES = {
     "龚文怡": ("h004", "101", os.path.join(B9, "龚文怡101022.pdf")),
     "胡艳": ("h004", "102", os.path.join(B9, "胡艳120046.pdf")),
     "姜兆龙": ("h004", "103", os.path.join(B9, "姜兆龙300517.pdf")),
+    # 2026-10-30: 第十批前 5 份(用户验收) —— 109 才溢/110 范永革/111 和洁/
+    # 112 黄波大/113 黄波小 均文本规则链可复现。
+    "才溢": ("h004", "109", os.path.join(B10, "才溢140438.pdf")),
+    "范永革": ("h004", "110", os.path.join(B10, "范永革150016.PDF")),
+    "和洁": ("h004", "111", os.path.join(B10, "和洁+260022.pdf")),
+    "黄波大": ("h004", "112", os.path.join(B10, "黄波（大）144595.pdf")),
+    "黄波小": ("h004", "113", os.path.join(B10, "黄波（小）233590.pdf")),
     # 第九批后 5 份(2026-10-22 用户验收): 104/106/107/108 文本规则链可复现;
     # 105 宋文军纯扫描(VLM 指标, 规则链无产物) → 不纳入, 由 DB 三件套与结论护栏守。
     "刘振宇": ("h004", "104", os.path.join(B9, "刘振宇150493.pdf")),
     "宋玉枣": ("h004", "106", os.path.join(B9, "宋玉枣237556.pdf")),
     "甄元": ("h004", "107", os.path.join(B9, "甄元08056X.pdf")),
     "周业潮": ("h004", "108", os.path.join(B9, "周业潮151051.pdf")),
+    # 2026-10-30: 第十批后 5 份(用户验收) —— 116 张万里/117 赵瑞阳/118 周均平
+    # 文本规则链可复现(118 双栏专用解析/force_flags/drop_result_patterns 已同步);
+    # 114 罗茹鹏/115 张仁星纯扫描(VLM 指标) → 不纳入, 由 DB 三件套与结论护栏守。
+    "张万里": ("h004", "116", os.path.join(B10, "张万里147411.pdf")),
+    "赵瑞阳": ("h004", "117", os.path.join(B10, "赵瑞阳182678.pdf")),
+    "周均平": ("h004", "118", os.path.join(B10, "周均平243516.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

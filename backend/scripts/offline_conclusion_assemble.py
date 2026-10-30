@@ -36,6 +36,9 @@ def run(pdf_path: str, hybrid: bool = False):
         # 2026-09-22: visual_lines 行级(y,x)重排(温州程永春两栏结论)
         text = _extract_pdf_text(pdf_path, visual_sort=True,
                                  visual_lines=bool(profile.get("visual_lines")))
+    elif profile and profile.get("conclusion_visual_sort"):
+        # 2026-10-30: 仅结论用视觉重排(张万里/赵瑞阳), 指标链保持线性文本
+        text = _extract_pdf_text(pdf_path, visual_sort=True)
     # 2026-09-28: 档案声明 ocr_content_pages(蔡明) —— hybrid 模式对宽条内容图页补 OCR
     if hybrid and profile.get("ocr_content_pages"):
         _ocr_text = _extract_pdf_text(pdf_path, hybrid=True, ocr_content=True)

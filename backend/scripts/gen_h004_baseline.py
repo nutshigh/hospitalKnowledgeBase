@@ -21,7 +21,7 @@ sys.path.insert(0, str(BACKEND))
 import pymysql
 
 DB = "hospital_H004"
-REPORT_IDS = [1, 2, 3, 5, 6, 21, 22, 23, 24, 25, 26, 27, 29, 38, 39, 40, 41, 43, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108]  # 2026-10-22: +第九批 99-108(用户验收)
+REPORT_IDS = [1, 2, 3, 5, 6, 21, 22, 23, 24, 25, 26, 27, 29, 38, 39, 40, 41, 43, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118]  # 2026-10-30: +第十批 109-118(用户验收)
 OUT = BACKEND / "tests" / "modules" / "report" / "baselines" / "h004_baseline.json"
 
 
@@ -54,11 +54,11 @@ def main():
         iid = r[0]
         cur.execute("""SELECT ij.item_name, ij.color_level FROM indicator_judgment ij
             WHERE ij.interpretation_id=%s AND ij.source='conclusion'""", (iid,))
-        conclusions = sorted((norm(x[0]), x[1]) for x in cur.fetchall())
+        conclusions = sorted({(norm(x[0]), x[1]) for x in cur.fetchall()})
         cur.execute("""SELECT ij.item_name, ij.color_level FROM indicator_judgment ij
             WHERE ij.interpretation_id=%s AND ij.source='indicator'
               AND ij.color_level IN ('yellow','red')""", (iid,))
-        indicators = sorted((norm(x[0]), x[1]) for x in cur.fetchall())
+        indicators = sorted({(norm(x[0]), x[1]) for x in cur.fetchall()})
         out[str(rid)] = {
             "name": f"{name}({unit or ''})",
             "interp_id": iid,

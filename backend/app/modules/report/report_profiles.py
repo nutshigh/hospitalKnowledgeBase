@@ -73,7 +73,22 @@ DEFAULT = {
     "strip_name_prefixes": None,
     "reverse_short_pairs": False,
     "reverse_titles": None,
-    "drop_imaging_pages": False,
+    "drop_indicator_names": None,
+    "clear_refs": None,
+    "split_lymph_thyroid": False,
+    "ocr_two_col_tables": False,
+    # 2026-10-30: 结论段文本流乱序(标题/正文跨栏)时, 仅结论用视觉坐标重排;
+    # 指标链仍用线性文本(visual_sort 会改变表格行序, 影响指标解析)。
+    "conclusion_visual_sort": False,
+    "drop_redundant_heading_labels": False,
+    "explanation_labels": False,
+    "two_col_tables": False,
+    "collapse_name_spaces": False,
+    "drop_result_patterns": None,
+    "strip_first_line_colon": False,
+    "force_flags": None,
+    "ocr_scale": None,
+    "indent_titles": False,
 }
 
 PROFILES = [
@@ -137,8 +152,7 @@ PROFILES = [
     # 温州医科大学附属第一医院: 结论页"发现(左栏)|建议(右栏)"同行两栏, 块级文本流
     # 把右栏建议排到左栏发现之前 → 声明 visual_lines(行级 y,x 重排)
     # (2026-09-23: 曾加 merge_wrapped 合并折行片段, 用户复验效果不好 → 已回滚)
-    dict(keywords=["温州医科大学附属第一医院"], visual_lines=True,
-         drop_imaging_pages=True),
+    dict(keywords=["温州医科大学附属第一医院"], visual_lines=True),
     # 2026-09-23: keyword 由裸"日照"改具体医院名 —— 薄楠报告结论含"增加日照"
 # (骨质疏松建议)误命中本档案(anchor_only+医学建议)导致结论整段丢失
     dict(keywords=["日照市人民医院"],
@@ -494,16 +508,30 @@ PROFILES = [
          extra_break=[r"^温馨提示"]),
 
     # === 2026-10-22: 第十批(10 份) ===
-    # 湖南省人民医院(张万里): 结论为页首编号 1-7 发现 + 健康指导；通用锚点落到
-    # "主检建议："只剩最后一条 → 从"1.超重"起段, 到一般健康问题/签名止。
+    # 湖南省人民医院(张万里): 页面两栏(一般健康问题|主检建议)与下方"健康指导"
+    # 解释段文本流乱序 → 结论仅走视觉重排; 只取"健康指导"段, 跳过跨页页脚。
     dict(keywords=["湖南省人民医院"], anchor_only=True,
-         extra_anchor=[r"^1\.超重"],
-         extra_break=[r"^一般健康问题", r"^主检建议"]),
+         extra_anchor=[r"^健康指导"],
+         extra_break=[r"^主检建议"],
+         extra_skip=[r"^湖南省人民医院岳麓山院区$", r"^登记日期[:：]?$",
+                     r"^\d{4}-\d{2}-\d{2}$"],
+         conclusion_visual_sort=True,
+         strip_first_line_colon=True,
+         drop_indicator_names=[r"^部\s*门$", r"^肝上界$",
+                               r"^心电图$", r"^胸部低剂量CT$"],
+         split_lymph_thyroid=True),
     # 上海市第一人民医院酒泉医院(赵瑞阳): 结论标题"主检结论："不在通用词表 →
     # 专用锚点, 到汇总/审核医生签名止。
     dict(keywords=["上海市第一人民医院酒泉医院", "酒泉市人民医院"], anchor_only=True,
          extra_anchor=[r"^主检结论"],
-         extra_break=[r"^汇总医生", r"^审核医生", r"^审核时间"]),
+         extra_break=[r"^汇总医生", r"^审核医生", r"^审核时间"],
+         extra_skip=[r"^精准检测", r"^姓\s*名[:：]", r"^性\s*别[:：]",
+                     r"^年\s*龄[:：]", r"^贾雯"],
+         clear_refs=["体重指数"],
+         ref_compare=True,
+         conclusion_visual_sort=True,
+         drop_redundant_heading_labels=True,
+         collapse_name_spaces=True),
     # 第十批补充(2026-10-23 用户反馈)
     # 丽江市人民医院(和洁): 结论段保留通用锚点; 页脚广告/字段标签跳过;
     # 汇总段/尿检阳性结果无表头提示列 → 按阳性结果标黄。
@@ -537,6 +565,39 @@ PROFILES = [
          hybrid_ocr=False,
          ref_compare=True,
          strip_name_prefixes=["刘波"]),
+    # 周均平(莱州市中医医院): 结论只取健康指导建议; 双栏化验表走专用坐标解析
+    # (名称/单位折行回接 + 左右栏独立配对, 右侧 ↑/* 不再落到左栏)。
+    dict(keywords=["莱州市中医医院", "莱州中医医院"], anchor_only=True,
+         extra_anchor=[r"^健康指导建议"],
+         extra_break=[r"^体检结果(?:\s+Check Result)?$", r"^体检结果汇总$",
+                      r"^体检信息汇总$"],
+         extra_skip=[r"^体检信息汇总", r"^体检结果汇总", r"^编号[:：]",
+                     r"^姓\s*名[:：]", r"^性\s*别[:：]", r"^年\s*龄[:：]"],
+         explanation_labels=True,
+         indent_titles=True,
+         two_col_tables=True,
+         # 检验表位于"超声骨密度检测报告"影像页之后: 若后续页为扫描件,
+         # 早停会跳过 OCR → 保留全量 OCR(文本层页不受影响)
+         keep_ocr_after_imaging=True,
+         drop_indicator_names=[r"^编号$", r"^联系手机$", r"^检验结果编号$",
+                               r"^受检者ID$", r"^同龄比$"],
+         drop_result_patterns=[r"^\d{1,3}\.$"]),
+
+    # 第十批后 5 份(2026-10-30 用户反馈)
+    # 罗茹鹏(OCR): 结论只保留"第三部分:体检健康建议"; 跨页页眉/页脚跳过。
+    dict(keywords=["第三部分:体检健康建议"], anchor_only=True,
+         extra_anchor=[r"^第三部分[:：]?体检健康建议"],
+         extra_skip=[r"^第三部分[:：]?体检健康建议", r"^第二部分\s*十种健康建议",
+                     r"^精准检测", r"^姓\s*名[:：]", r"^性\s*别[:：]",
+                     r"^年\s*龄[:：]", r"日期[:：]"]),
+    # 张仁星(普洱市人民医院, 纯扫描): 结论取"第三部分 异常结果"; OCR HTML 2 列表格补指标。
+    dict(keywords=["普洱市人民医院"], anchor_only=True,
+         extra_anchor=[r"^第三部分\s*异常结果", r"^第四部分\s*异常结果相关知识科普"],
+         ocr_two_col_tables=True,
+         drop_indicator_names=[r"^心电图$", r"^胸部低剂量CT$"],
+         force_flags=[r"^类风湿因子$"],
+         ocr_scale=2.8),
+
 ]
 
 
@@ -660,8 +721,34 @@ def match_profile(text: str) -> dict:
             merged["reverse_short_pairs"] = True
         if prof.get("reverse_titles"):
             merged["reverse_titles"] = list(prof["reverse_titles"])
-        if prof.get("drop_imaging_pages"):
-            merged["drop_imaging_pages"] = True
+        if prof.get("drop_indicator_names"):
+            merged["drop_indicator_names"] = list(prof["drop_indicator_names"])
+        if prof.get("clear_refs"):
+            merged["clear_refs"] = list(prof["clear_refs"])
+        if prof.get("split_lymph_thyroid"):
+            merged["split_lymph_thyroid"] = True
+        if prof.get("ocr_two_col_tables"):
+            merged["ocr_two_col_tables"] = True
+        if prof.get("conclusion_visual_sort"):
+            merged["conclusion_visual_sort"] = True
+        if prof.get("drop_redundant_heading_labels"):
+            merged["drop_redundant_heading_labels"] = True
+        if prof.get("explanation_labels"):
+            merged["explanation_labels"] = True
+        if prof.get("two_col_tables"):
+            merged["two_col_tables"] = True
+        if prof.get("collapse_name_spaces"):
+            merged["collapse_name_spaces"] = True
+        if prof.get("drop_result_patterns"):
+            merged["drop_result_patterns"] = list(prof["drop_result_patterns"])
+        if prof.get("strip_first_line_colon"):
+            merged["strip_first_line_colon"] = True
+        if prof.get("force_flags"):
+            merged["force_flags"] = list(prof["force_flags"])
+        if prof.get("ocr_scale"):
+            merged["ocr_scale"] = float(prof["ocr_scale"])
+        if prof.get("indent_titles"):
+            merged["indent_titles"] = True
         for f in ("extra_break", "extra_skip", "extra_anchor"):
             if prof.get(f):
                 merged.setdefault(f, []).extend(list(prof[f]))
