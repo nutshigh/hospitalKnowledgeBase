@@ -337,4 +337,26 @@ SAMPLES = [
          smoke=True, min_len=550),    # 酒泉市人民医院: 主检结论(视觉重排)
     dict(key="b10_zhoujunping", rel="1-第10批/周均平243516.pdf",
          smoke=True, min_len=4000),   # 莱州市中医医院: 健康指导建议(解释标签逐条)
+
+    # === 2026-10-30: 第十一批-上海专项(10 份, 待用户验收) ===
+    dict(key="b11_dingyiying", rel="1-第11批-上海专项/丁伊颖01262X.pdf",
+         smoke=True, min_len=300),    # 上海新华医院: 主检结论及健康干预手段
+    dict(key="b11_zhongjun_scan", rel="1-第11批-上海专项/仲君060034.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="b11_zhouchen", rel="1-第11批-上海专项/周晨170020.pdf",
+         smoke=True, min_len=500),    # 江苏省人民医院: 综述+健康建议
+    dict(key="b11_yaojianzhong_scan", rel="1-第11批-上海专项/姚建忠084011.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="b11_yuexiaochun", rel="1-第11批-上海专项/岳晓春046410.pdf",
+         smoke=True, min_len=1000),   # 上海市第一人民医院: 医学建议
+    dict(key="b11_durongrong_scan", rel="1-第11批-上海专项/杜蓉蓉18004X.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
+    dict(key="b11_baixiaomin", rel="1-第11批-上海专项/白晓敏04003X.pdf",
+         smoke=True, min_len=400),    # 山西白求恩医院: 主检结论及建议
+    dict(key="b11_zhaoyongxue", rel="1-第11批-上海专项/赵永学010210.pdf",
+         smoke=True, min_len=650),    # 珲春市人民医院: 健康指导建议(字距空格)
+    dict(key="b11_zhengmin", rel="1-第11批-上海专项/郑敏_044822.pdf",
+         smoke=True, min_len=700),    # 顺德边检: 【N】条目结论
+    dict(key="b11_baojing_scan", rel="1-第11批-上海专项/鲍静190427.pdf", ocr=True,
+         must_contain=[], forbidden=["体检编号", "第 页"], expected_titles=[]),
 ]

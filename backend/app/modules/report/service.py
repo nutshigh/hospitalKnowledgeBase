@@ -1,4 +1,5 @@
 import base64
+import html
 import logging
 import os
 import re
@@ -973,6 +974,38 @@ def _join_profile_fragments(section: str, pairs) -> str:
     return "\n".join(out)
 
 
+def _split_health_advice_items(section: str) -> str:
+    """2026-11-01: 健康建议 OCR 单行多条目(兰州仲君) → 编号条目前换行; 重复标题拆行;
+    去掉误入的"总检结论"重复标题列表与签名行。"""
+    section = re.sub(r"(?m)(?<!^)(?<!\n)(?<!\d)(?=\d{1,2}、)", "\n", section)
+    section = re.sub(r"(?m)^(\d{1,2}、)([^\n]{2,20}?)(\2)", r"\1\2\n\3", section)
+    # OCR 表格把"总检结论"重复列表插在健康建议中间(兰州仲君) → 从重复 1、2、…
+    # 到初审/终审签名整段删除; 再拆两条标题与正文粘连(超重/肺结节)。
+    section = re.sub(
+        r"(?ms)\n1、甲状腺结节\n2、超重.*?(?:初审医生|终审医生|终审日期)[^\n]*\n?",
+        "\n", section)
+    section = re.sub(r"(?m)^(2、超重)(?=体重)", r"\1\n", section)
+    section = re.sub(r"(?m)^(3、[^\n]{5,80}?同前)(?=肺结节)", r"\1\n", section)
+    lines = section.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i].strip()
+        if re.match(r"^(初审|终审|主检|审核)(?:医生|医师|日期)", ln):
+            i += 1
+            continue
+        if re.fullmatch(r"\d{1,2}、[^\n]{1,40}", ln):
+            j = i
+            while j < len(lines) and re.fullmatch(r"\d{1,2}、[^\n]{1,40}", lines[j].strip()):
+                j += 1
+            if j - i >= 5:  # 重复的总检结论标题列表, 非健康建议正文
+                i = j
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 def _split_inline_numbered_findings(section: str) -> str:
     """2026-10-23: 同一行内的编号发现按序号拆行(才溢 "…（LA-B）2、…")。"""
     s = re.sub(r"(?<=[）)】])(?=\d{1,2}、)", "\n", section)
@@ -1568,9 +1601,12 @@ def _strip_ocr_html(text: str) -> str:
     同行内, 导致结论锚点/切段不识别(东方鲍文祥)。把单元格/行边界转为换行并剥除标签;
     无标签文本原样返回。仅用于结论链, 不影响指标提取的 HTML 表格解析。"""
     if not _OCR_HTML_TAG_RE.search(text):
-        return text
+        return html.unescape(text)
     t = _OCR_HTML_BLOCK_END_RE.sub("\n", text)
     t = _OCR_HTML_TAG_RE.sub("", t)
+    # 2026-10-30: OCR HTML 实体还原("&lt;5%"→"<5%", 仲君健康建议)。
+    t = html.unescape(t)
+    t = t.replace("\\geq", "≥").replace("\\leq", "≤")
     t = re.sub(r"\n{2,}", "\n", t)
     return t
 
@@ -1732,6 +1768,12 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
     """
     compiled = _compile_profile_re(profile)
     loc_text = _strip_ocr_html(text)
+    if profile and profile.get("strip_inline_signature"):
+        # 2026-10-30: OCR 表格单元格把"初审医生/终审医生/终审日期"粘在结论尾
+        # (兰州大学第一医院 仲君) → 去掉行内签名尾, 避免通用签名断点吞掉整段。
+        loc_text = re.sub(
+            r"(?:初审|终审|总检|主检|审核)(?:医生|医师)[:：]?.*$",
+            "", loc_text, flags=re.M)
     if profile and profile.get("all_conclusions"):
         return _collect_all_conclusions(
             loc_text,
@@ -1777,6 +1819,15 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
             else:
                 section = "\n".join(_rest + _block)
     if section and len(section) > 50:
+        if profile and profile.get("cut_markers"):
+            for _marker in profile["cut_markers"]:
+                _mm = re.search(_marker, section)
+                if _mm:
+                    section = section[:_mm.start()].rstrip()
+        if profile and profile.get("split_inline_chinese_numbered"):
+            section = re.sub(
+                r"(?<=[。；;])\s*(?=[一二三四五六七八九十]{1,3}\s*[、.])",
+                "\n", section)
         if profile and profile.get("table_conclusion"):
             # 2026-09-08: 表格型结论(弘爱)先重组(序号行独立), 不经过 reflow
             # (reflow 会把块尾序号行拼进上一段, 导致无法按行分块)
@@ -1822,6 +1873,17 @@ async def _extract_conclusion_async(text: str, profile: Optional[dict] = None,
             if _ls:
                 _ls[0] = re.sub(r"[:：]\s*$", "", _ls[0])
                 section = "\n".join(_ls)
+        if profile and profile.get("split_inline_chinese_numbered"):
+            # reflow 可能把中文序号行并回上一条 → 最终展示再拆一次
+            section = re.sub(
+                r"(?<=[。；;])\s*(?=[一二三四五六七八九十]{1,3}\s*[、.])",
+                "\n", section)
+        if profile and profile.get("split_health_advice_items"):
+            section = _split_health_advice_items(section)
+        if profile and profile.get("split_after_hr"):
+            section = re.sub(
+                r"（HR[:：]\s*(\d+)\s*次/分）[:：]\s*",
+                r"（HR: \1次/分）：\n", section)
         return section[:16000]
     from app.ai.llm import get_chat_model, _guarded
 
@@ -1994,6 +2056,18 @@ _SYMPTOM_ONLY_RE = re.compile(
 # 钦州二尿沉渣表参考列与名称列在文本流中粘连)。
 _REF_NAME_PREFIX_RE = re.compile(
     r"^[\d.]+\s*(?:[-~～]\s*[\d.]+)?\s*个?\s*/\s*(?:HP|LP|μL|ul|L)\s*")
+
+
+_JUNK_INDICATOR_NAME_RE = re.compile(
+    r"(?:体检序号|职工工号|肺及呼吸道|检查部位和名称|工号|"
+    r"内径|前后径|上下径|左右径|横径|厚度约|大小约)$")
+
+
+def _is_junk_indicator_name(name: str) -> bool:
+    """2026-11-01: 人员页眉/科室复合名/影像测量句(白晓敏体检序号/职工工号/
+    张江蓉…肺及呼吸道/主动脉瓣环内径/前列腺大小约)不因来源而漏过滤。"""
+    n = str(name or "").strip()
+    return n == "无" or bool(_JUNK_INDICATOR_NAME_RE.search(n))
 
 
 def _clean_indicator_name(name: str) -> str:
@@ -4319,6 +4393,23 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     report_raw_text = text
                     profile = match_profile(text)
                     compiled = _compile_profile_re(profile)
+            # 2026-10-31: 档案声明 force_ocr(PDF 文本层缺结论标题行, 顺德郑敏) ——
+            # 逐页 OCR 重提文本, 否则只有【N】+建议正文, 标题全部丢失。
+            if profile.get("force_ocr") and not _force_ocr and not _pdf_text_probe:
+                try:
+                    _fo = _extract_pdf_text(
+                        processed_path, hybrid=True, force_ocr=True,
+                        keep_ocr_after_imaging=_keep_ocr_after_imaging)
+                    if len(_fo or "") > len(text):
+                        # 与 task 级 FORCE_OCR_TASKS 同构: 标记 probe, 下游指标走
+                        # VLM/OCR-HTML 链(仅设 text 会让纯规则行式只提 4 行)。
+                        _pdf_text_probe = _fo
+                        text = _fo
+                        report_raw_text = text
+                        profile = match_profile(text)
+                        compiled = _compile_profile_re(profile)
+                except Exception as _e_fo:
+                    _log.warning("profile force_ocr failed task=%s: %s", task_id, _e_fo)
             # 2026-10-30: 扫描件档案声明的 OCR 渲染倍率(普洱风湿二项 "*" 在 2.2x
             # 偶被 OCR 丢弃, 2.8x 稳定识别) —— 仅声明院生效, 重提取后重匹配档案。
             if profile.get("ocr_scale") and (_pdf_text_probe or _use_hybrid):
@@ -4752,7 +4843,7 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                         continue
                     if (_x.get("signal_flag") or 0) > (_cur.get("signal_flag") or 0):
                         _cur["signal_flag"] = _x.get("signal_flag")
-                    for _fld in ("ref_low", "ref_high", "unit"):
+                    for _fld in ("ref_low", "ref_high", "unit", "_ref_text"):
                         if not _cur.get(_fld) and _x.get(_fld):
                             _cur[_fld] = _x[_fld]
 
@@ -4784,10 +4875,19 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                     _vlm_inds = normalize_indicators(_vlm_res.get("indicators", [])) or []
                     for _x0 in _vlm_inds:
                         _x0.setdefault("_src", "vlm")
-                    _merge_inds_by_name(_vlm_inds, _ocr_tbl_inds)
-                    _merge_inds_by_name(_vlm_inds, indicators)
-                    if _vlm_inds:
-                        indicators = _vlm_inds
+                    if compiled.get("prefer_ocr_rows") and _ocr_tbl_inds:
+                        # 2026-10-31: 双栏检验表 VLM 名称/结果错位(瑞金特需姚建忠)
+                        # → OCR-HTML 行为权威, 规则/VLM 仅补缺; 截断/数值粘连 VLM 名
+                        # 由档案 drop_indicator_names 清理。
+                        _pref = list(_ocr_tbl_inds)
+                        _merge_inds_by_name(_pref, indicators)
+                        _merge_inds_by_name(_pref, _vlm_inds)
+                        indicators = _pref
+                    else:
+                        _merge_inds_by_name(_vlm_inds, _ocr_tbl_inds)
+                        _merge_inds_by_name(_vlm_inds, indicators)
+                        if _vlm_inds:
+                            indicators = _vlm_inds
                     _pi = _vlm_res.get("personal_info") or {}
                     if _pi.get("name") and not (personal_info or {}).get("name"):
                         personal_info = _pi
@@ -4991,7 +5091,9 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 or compiled.get("split_lymph_thyroid")
                 or compiled.get("collapse_name_spaces")
                 or compiled.get("drop_result_patterns")
-                or compiled.get("force_flags")):
+                or compiled.get("force_flags")
+                or compiled.get("qualitative_ref_compare")
+                or compiled.get("sanitize_refs")):
             from app.modules.report.table_extractor import apply_profile_indicator_fixes
             apply_profile_indicator_fixes(
                 indicators,
@@ -5008,7 +5110,9 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 split_lymph_thyroid=bool(compiled.get("split_lymph_thyroid")),
                 collapse_name_spaces=bool(compiled.get("collapse_name_spaces")),
                 drop_result_patterns=compiled.get("drop_result_patterns"),
-                force_flags=compiled.get("force_flags"))
+                force_flags=compiled.get("force_flags"),
+                qualitative_ref_compare=bool(compiled.get("qualitative_ref_compare")),
+                sanitize_refs=bool(compiled.get("sanitize_refs")))
         if compiled.get("prefer_layout_results"):
             from app.modules.report.table_extractor import prefer_layout_results
             prefer_layout_results(indicators, col_rows, fill_missing=True)
@@ -5035,6 +5139,8 @@ def process_task(db: Session, task_id: int, hospital_id: str,
                 s = s.replace("↑", "").replace("↓", "").strip()
                 s = re.sub(r"\s{2,}", " ", s).strip()
                 return s if s and s != "无" else None
+            if _is_junk_indicator_name(ind.get("item_name")):
+                continue
             db.add(ReportIndicator(
                 report_id=report.id,
                 item_name=_clip_db_field(_clean_indicator_name(ind.get("item_name", "")), 100),

@@ -89,6 +89,15 @@ DEFAULT = {
     "force_flags": None,
     "ocr_scale": None,
     "indent_titles": False,
+    "strip_inline_signature": False,
+    "force_ocr": False,
+    "split_inline_chinese_numbered": False,
+    "cut_markers": None,
+    "qualitative_ref_compare": False,
+    "prefer_ocr_rows": False,
+    "sanitize_refs": False,
+    "split_health_advice_items": False,
+    "split_after_hr": False,
 }
 
 PROFILES = [
@@ -239,6 +248,9 @@ PROFILES = [
     # "和"不在词表), 段尾"主检助理（汇总）："签名; 否则锚点落到正文"建议：…"行,
     # 前 6 条发现丢失。
     dict(keywords=["吉林大学中日联谊医院"],
+         # 2026-10-30: 珲春市人民医院简介提到"与吉林大学中日联谊医院建立医联体" →
+         # 裸关键词误命中, 用 excludes 防跨院污染。
+         exclude_keywords=["珲春市人民医院"],
          anchor_only=True,
          extra_anchor=[r"^主检结论和建议"],
          extra_break=[r"^主检助理"]),
@@ -598,6 +610,88 @@ PROFILES = [
          force_flags=[r"^类风湿因子$"],
          ocr_scale=2.8),
 
+    # 山西白求恩医院(白晓敏): 结论"双侧胸膜/肥厚"被 PDF 折行拆开。
+    dict(keywords=["山西白求恩医院"],
+         join_fragments=[(r"双侧胸膜$", r"^肥厚$")]),
+
+    # === 2026-10-30: 第十一批-上海专项(10 份, 待用户验收) ===
+    # 上海交通大学医学院附属新华医院(丁伊颖): 结论标题"主检结论及健康干预手段",
+    # 到日期+主检签名止; 跨页页眉跳过。
+    dict(keywords=["上海交通大学医学院附属新华医院"], anchor_only=True,
+         extra_anchor=[r"^主检结论及健康干预手段"],
+         extra_break=[r"^\d{4}-\d{2}-\d{2}\s+主检", r"^一般检查$"],
+         extra_skip=[r"^上海交通大学医学院附属新华医院健康管理中心$",
+                     r"^体检编号[:：]", r"^姓名[:：]", r"^\d+\s*/\s*\d+$"],
+         drop_indicator_names=[r"^检验科[-—－]", r"^心电图$", r"^小约$", r"^女年龄$"]),
+    # 兰州大学第一医院(仲君, 纯扫描): "总检结论"表 + "健康建议"段; OCR 把签名
+    # ("初审医生…终审日期…")粘在结论单元格尾 → 先 strips 行内签名, 再收建议段。
+    dict(keywords=["兰州大学第一医院"], anchor_only=True,
+         extra_anchor=[r"^健康建议"],
+         extra_break=[r"^温馨提示"],
+         split_health_advice_items=True),
+    # 江苏省人民医院(周晨, 混合件): 综述 + 健康建议; 跳过跨页页眉/页脚。
+    dict(keywords=["江苏省人民医院", "南京医科大学第一附属医院"], anchor_only=True,
+         extra_anchor=[r"^健康建议"],
+         extra_break=[r"^主检医师", r"^总检时间"],
+         extra_skip=[r"^江苏省人民医院", r"^南京医科大学第一附属医院",
+                     r"^体检代码[:：]?$", r"^姓\s*名[:：]?$", r"^周晨$",
+                     r"^共\d+页", r"^打印日期[:：]"],
+         drop_indicator_names=[r"^浓度$"],
+         split_after_hr=True),
+    # 上海市第一人民医院(岳晓春): 结论取"医学建议"(检查项目异常汇总是摘要)。
+    dict(keywords=["上海市第一人民医院健康管理中心"], anchor_only=True,
+         extra_anchor=[r"^医学建议"],
+         extra_break=[r"^总检医师", r"^主检医师"],
+         extra_skip=[r"^上海市第一人民医院健康管理中心", r"^体检号码[:：]",
+                     r"^第\d+\s*页"],
+         strip_name_prefixes=["#"]),
+    # 瑞金体检中心(杜蓉蓉, 纯扫描): "健康体检结论及建议", 到报告时间/体检号止;
+    # 总检医师字段行跳过(否则通用签名断点截断整段)。
+    dict(keywords=["瑞金体检中心"], anchor_only=True,
+         extra_anchor=[r"^健康体检结论及建议"],
+         extra_skip=[r"^总检医师[:：]?$"],
+         extra_break=[r"^报告时间|^体检号[:：]|^核对[:：]?$"],
+         qualitative_ref_compare=True),
+    # 上海瑞金医院特需(姚建忠, 纯扫描): 双栏检验表 VLM 名称/结果错位,
+    # OCR-HTML 行(名称/结果/参考完整)为权威; 清 VLM 截断名/数值粘连名。
+    dict(keywords=["特需医疗保健中心"], prefer_ocr_rows=True,
+         sanitize_refs=True,
+         drop_indicator_names=[r"^神经元特异性烯醇化$",
+                               r"^三碘甲腺原氨酸\(T3\) 1\.33$",
+                               r"^游离三碘甲腺原氨酸3\.67\(fT3\)$",
+                               r"^标本种类[:：]",
+                               r"^右侧颈总动脉内中膜厚度约$",
+                               r"^左侧颈总动脉内中膜厚度约$",
+                               r"^前列腺大小约$",
+                               r"^胆总管内径约$"]),
+    # 珲春市人民医院(赵永学): 结论取"健康指导建议"(字距空格, despace 压缩);
+    # 关键词需 excludes 吉林大学中日联谊医院档案(医院简介提到医联体)。
+    dict(keywords=["珲春市人民医院"], anchor_only=True,
+         extra_anchor=[r"^健康指导建议"],
+         extra_break=[r"^总检医生"],
+         despace=True,
+         drop_indicator_names=[r"^MM/H$"]),
+    # 顺德出入境边防检查站(郑敏): 结论为【1】-【9】条目, 无标题; 到页脚体检编号止。
+    dict(keywords=["顺德出入境边防检查站"], anchor_only=True,
+         extra_anchor=[r"^【1】"],
+         extra_break=[r"^体检编号[:：]"],
+         extra_skip=[r"^姓名[:：]", r"^性别[:：]",
+                     r"^年龄[:：]", r"^第\d+页"],
+         strip_name_prefixes=["郭晖", "莫石兰", "吴昭斌"],
+         # 2026-10-31: 该 PDF 文本层缺【N】标题行(仅建议正文), 必须逐页 OCR。
+         force_ocr=True),
+    # 上海市第六人民医院(鲍静, 纯扫描): "检查汇总及终检指导建议"; 跳过友情提示/
+    # 欢迎语等模板段落, 到总检医师止。
+    dict(keywords=["上海市第六人民医院"], anchor_only=True,
+         extra_anchor=[r"^检查汇总及终检指导建议"],
+         extra_skip=[r"^感谢您选择六院", r"^友情提示", r"^1、本次检查您自动放弃",
+                     r"^2、您过去患有的疾病", r"^3、查出的疾病请及时治疗",
+                     r"^4、为了您的健康", r"^5、为更好地为广大体检客户服务",
+                     r"^欢迎您再次光临六院", r"^检查汇总及终检指导建议$"],
+         extra_break=[r"^总检医师", r"^审核医师"],
+         split_inline_chinese_numbered=True,
+         cut_markers=[r"《中国血脂管理指南"]),
+
 ]
 
 
@@ -613,6 +707,8 @@ def match_profile(text: str) -> dict:
     merged = {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULT.items()}
     hit = False
     for prof in PROFILES:
+        if any(x in text for x in prof.get("exclude_keywords", [])):
+            continue
         if not any(kw in text for kw in prof.get("keywords", [])):
             continue
         hit = True
@@ -749,6 +845,24 @@ def match_profile(text: str) -> dict:
             merged["ocr_scale"] = float(prof["ocr_scale"])
         if prof.get("indent_titles"):
             merged["indent_titles"] = True
+        if prof.get("strip_inline_signature"):
+            merged["strip_inline_signature"] = True
+        if prof.get("force_ocr"):
+            merged["force_ocr"] = True
+        if prof.get("split_inline_chinese_numbered"):
+            merged["split_inline_chinese_numbered"] = True
+        if prof.get("cut_markers"):
+            merged["cut_markers"] = list(prof["cut_markers"])
+        if prof.get("qualitative_ref_compare"):
+            merged["qualitative_ref_compare"] = True
+        if prof.get("prefer_ocr_rows"):
+            merged["prefer_ocr_rows"] = True
+        if prof.get("sanitize_refs"):
+            merged["sanitize_refs"] = True
+        if prof.get("split_health_advice_items"):
+            merged["split_health_advice_items"] = True
+        if prof.get("split_after_hr"):
+            merged["split_after_hr"] = True
         for f in ("extra_break", "extra_skip", "extra_anchor"):
             if prof.get(f):
                 merged.setdefault(f, []).extend(list(prof[f]))

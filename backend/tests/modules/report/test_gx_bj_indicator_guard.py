@@ -431,6 +431,11 @@ B10 = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))),
     "体检报告样例", "1-第10批")
+# 2026-11-01: 第十一批-上海专项(H004 119-128)
+B11 = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))),
+    "体检报告样例", "1-第11批-上海专项")
 _BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 _BASELINE_CASES = {
@@ -553,6 +558,13 @@ _BASELINE_CASES = {
     "张万里": ("h004", "116", os.path.join(B10, "张万里147411.pdf")),
     "赵瑞阳": ("h004", "117", os.path.join(B10, "赵瑞阳182678.pdf")),
     "周均平": ("h004", "118", os.path.join(B10, "周均平243516.pdf")),
+    # 2026-11-01: 第十一批 119-128 —— 文本规则链可复现的 5 份；
+    # 120/122/123/126/127 纯扫描或 force_ocr, 由 DB 三件套与结论护栏守。
+    "白晓敏": ("h004", "119", os.path.join(B11, "白晓敏04003X.pdf")),
+    "丁伊颖": ("h004", "121", os.path.join(B11, "丁伊颖01262X.pdf")),
+    "岳晓春": ("h004", "124", os.path.join(B11, "岳晓春046410.pdf")),
+    "赵永学": ("h004", "125", os.path.join(B11, "赵永学010210.pdf")),
+    "周晨": ("h004", "128", os.path.join(B11, "周晨170020.pdf")),
 }
 
 def _norm_baseline_name(n: str) -> str:

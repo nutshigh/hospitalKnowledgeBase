@@ -282,7 +282,9 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
                     or profile.get("split_lymph_thyroid")
                     or profile.get("collapse_name_spaces")
                     or profile.get("drop_result_patterns")
-                    or profile.get("force_flags")):
+                    or profile.get("force_flags")
+                    or profile.get("qualitative_ref_compare")
+                    or profile.get("sanitize_refs")):
         from app.modules.report.table_extractor import apply_profile_indicator_fixes
         apply_profile_indicator_fixes(
             indicators,
@@ -299,7 +301,9 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
             split_lymph_thyroid=bool(profile.get("split_lymph_thyroid")),
             collapse_name_spaces=bool(profile.get("collapse_name_spaces")),
             drop_result_patterns=profile.get("drop_result_patterns"),
-            force_flags=profile.get("force_flags"))
+            force_flags=profile.get("force_flags"),
+            qualitative_ref_compare=bool(profile.get("qualitative_ref_compare")),
+            sanitize_refs=bool(profile.get("sanitize_refs")))
     if profile and profile.get("prefer_layout_results"):
         from app.modules.report.table_extractor import prefer_layout_results
         prefer_layout_results(indicators, col_rows, fill_missing=True)
@@ -340,6 +344,9 @@ def assemble(pdf_path: str, hybrid: bool = False, force_ocr: bool = False,
                         _cur[_fld] = _x[_fld]
         except Exception:
             pass
+    from app.modules.report.service import _is_junk_indicator_name
+    indicators = [i for i in indicators
+                  if not _is_junk_indicator_name(i.get("item_name"))]
     for _ind4 in indicators:
         _r4 = _ind4.get("result")
         if isinstance(_r4, str) and ("＋" in _r4 or "－" in _r4 or "−" in _r4):

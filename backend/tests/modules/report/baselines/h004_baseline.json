@@ -7364,5 +7364,604 @@
     "yellow"
    ]
   ]
+ },
+ "119": {
+  "name": "测试6()",
+  "interp_id": 1470,
+  "conclusion_len": 443,
+  "conclusion_hash": "414819570ee334b5",
+  "indicators": [
+   [
+    "促甲状腺素(TSH)",
+    "yellow"
+   ],
+   [
+    "甘油三酯(TG)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "ST改变",
+    "yellow"
+   ],
+   [
+    "双肺下叶背侧间质性改变",
+    "yellow"
+   ],
+   [
+    "楔状缺损",
+    "yellow"
+   ],
+   [
+    "牙结石",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "120": {
+  "name": "测试6(上海出入境边防检查总站)",
+  "interp_id": 1444,
+  "conclusion_len": 615,
+  "conclusion_hash": "28b30cae3fbdff5e",
+  "indicators": [],
+  "conclusions": [
+   [
+    "中度炎症",
+    "yellow"
+   ],
+   [
+    "乳腺低回声区",
+    "yellow"
+   ],
+   [
+    "乳腺小叶增生",
+    "yellow"
+   ],
+   [
+    "宫颈囊肿",
+    "yellow"
+   ],
+   [
+    "宫颈炎",
+    "yellow"
+   ],
+   [
+    "少外用含雌激素的化妆品",
+    "yellow"
+   ],
+   [
+    "情绪稳定",
+    "yellow"
+   ],
+   [
+    "慢性浅表性胃炎伴糜烂",
+    "yellow"
+   ],
+   [
+    "护肤品等",
+    "yellow"
+   ],
+   [
+    "甲状腺回声欠均匀",
+    "yellow"
+   ],
+   [
+    "病理：(胃窦)轻度慢性非萎缩性胃炎",
+    "yellow"
+   ],
+   [
+    "结肠多发息肉",
+    "yellow"
+   ],
+   [
+    "薰腊等制品",
+    "yellow"
+   ],
+   [
+    "规律作息",
+    "yellow"
+   ],
+   [
+    "近视眼底改变",
+    "yellow"
+   ]
+  ]
+ },
+ "121": {
+  "name": "测试6()",
+  "interp_id": 1471,
+  "conclusion_len": 361,
+  "conclusion_hash": "55302ce85334552b",
+  "indicators": [
+   [
+    "α2球蛋白（ALPHA2）",
+    "yellow"
+   ],
+   [
+    "低密度脂蛋白(LDL-C)",
+    "yellow"
+   ],
+   [
+    "前白蛋白",
+    "yellow"
+   ],
+   [
+    "载脂蛋白B（ApoB）",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "乳腺小叶增生",
+    "yellow"
+   ],
+   [
+    "乳腺结节",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "肝脏损害",
+    "yellow"
+   ]
+  ]
+ },
+ "122": {
+  "name": "测试6(中华人民共和国上海出入境边防检查总站)",
+  "interp_id": 1460,
+  "conclusion_len": 792,
+  "conclusion_hash": "7206d1d5c45c6188",
+  "indicators": [
+   [
+    "低密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "白细胞",
+    "yellow"
+   ],
+   [
+    "非高密度脂蛋白胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "乳腺小叶增生",
+    "yellow"
+   ],
+   [
+    "双侧颌下淋巴结触及",
+    "yellow"
+   ],
+   [
+    "子宫内膜息肉",
+    "yellow"
+   ],
+   [
+    "左侧甲状腺结节",
+    "yellow"
+   ],
+   [
+    "甲状腺左侧叶结节",
+    "yellow"
+   ],
+   [
+    "肝内小低密度灶",
+    "yellow"
+   ],
+   [
+    "胆囊结晶",
+    "yellow"
+   ]
+  ]
+ },
+ "123": {
+  "name": "测试6(mm)",
+  "interp_id": 1463,
+  "conclusion_len": 911,
+  "conclusion_hash": "025e08f29e04c7ec",
+  "indicators": [
+   [
+    "尿酸",
+    "yellow"
+   ],
+   [
+    "甘油三酯",
+    "yellow"
+   ],
+   [
+    "神经元特异性烯醇化酶",
+    "yellow"
+   ],
+   [
+    "肌酐",
+    "yellow"
+   ],
+   [
+    "胱抑素C",
+    "yellow"
+   ],
+   [
+    "载脂蛋白AI",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇",
+    "yellow"
+   ],
+   [
+    "鳞状细胞癌相关抗原",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "两肺小、微小结节影",
+    "yellow"
+   ],
+   [
+    "两肺少许斑片条索影",
+    "yellow"
+   ],
+   [
+    "主动脉管壁局部钙化斑块形成",
+    "yellow"
+   ],
+   [
+    "前列腺稍大伴钙化，前列腺囊肿",
+    "yellow"
+   ],
+   [
+    "劳逸结合",
+    "yellow"
+   ],
+   [
+    "双肾实质回声增强",
+    "yellow"
+   ],
+   [
+    "右侧部分型胚胎型大脑后动脉",
+    "yellow"
+   ],
+   [
+    "右肾结石",
+    "yellow"
+   ],
+   [
+    "呼吸科门诊随访",
+    "yellow"
+   ],
+   [
+    "啤酒",
+    "yellow"
+   ],
+   [
+    "左侧椎动脉优势型",
+    "yellow"
+   ],
+   [
+    "左侧甲状腺结节",
+    "yellow"
+   ],
+   [
+    "左肾囊肿",
+    "yellow"
+   ],
+   [
+    "左肾结晶",
+    "yellow"
+   ],
+   [
+    "并与老片比较",
+    "yellow"
+   ],
+   [
+    "忌酒",
+    "yellow"
+   ],
+   [
+    "海鲜",
+    "yellow"
+   ],
+   [
+    "神经内科门诊随访",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "胆囊结石，胆囊隆起样病变（考虑胆囊息肉）",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "药物干预",
+    "yellow"
+   ],
+   [
+    "豆制品等",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "高血压",
+    "yellow"
+   ]
+  ]
+ },
+ "124": {
+  "name": "测试6(上海市第一人民医院)",
+  "interp_id": 1474,
+  "conclusion_len": 1671,
+  "conclusion_hash": "6f01d40a4ca02833",
+  "indicators": [
+   [
+    "AST/ALT比值",
+    "yellow"
+   ],
+   [
+    "丙氨酸氨基转移酶",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ],
+   [
+    "甘油三酯",
+    "yellow"
+   ],
+   [
+    "脂蛋白(a)",
+    "yellow"
+   ],
+   [
+    "间接胆红素",
+    "yellow"
+   ],
+   [
+    "高密度脂蛋白胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "丙氨酸转氨酶",
+    "yellow"
+   ],
+   [
+    "冠心病",
+    "yellow"
+   ],
+   [
+    "双肾结晶",
+    "yellow"
+   ],
+   [
+    "咽炎",
+    "yellow"
+   ],
+   [
+    "肥胖",
+    "yellow"
+   ],
+   [
+    "胆囊壁毛糙",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ]
+  ]
+ },
+ "125": {
+  "name": "测试6(珲春市沙坨子边检体检)",
+  "interp_id": 1493,
+  "conclusion_len": 719,
+  "conclusion_hash": "891c911167359f78",
+  "indicators": [
+   [
+    "红细胞压积(%)",
+    "yellow"
+   ],
+   [
+    "红细胞计数(RBC)",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "乙肝表面抗体定量阳性",
+    "yellow"
+   ],
+   [
+    "双肺散在微小结节",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "脂肪肝",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ]
+  ]
+ },
+ "126": {
+  "name": "测试6()",
+  "interp_id": 1476,
+  "conclusion_len": 880,
+  "conclusion_hash": "3b26aa872db7dd89",
+  "indicators": [
+   [
+    "中性粒与淋巴细胞比值",
+    "yellow"
+   ],
+   [
+    "尿酮体",
+    "yellow"
+   ],
+   [
+    "总胆固醇",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "前纵隔片状异常密度灶",
+    "yellow"
+   ],
+   [
+    "双肺数个结节",
+    "yellow"
+   ],
+   [
+    "左侧肾上腺稍增粗",
+    "yellow"
+   ],
+   [
+    "甲状腺滤泡囊肿",
+    "yellow"
+   ],
+   [
+    "脾脏稍增大",
+    "yellow"
+   ]
+  ]
+ },
+ "127": {
+  "name": "测试6()",
+  "interp_id": 1489,
+  "conclusion_len": 2063,
+  "conclusion_hash": "c398fee32f56f9c7",
+  "indicators": [
+   [
+    "碱性磷酸酶(ALP)",
+    "yellow"
+   ],
+   [
+    "结晶",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "三尖瓣轻度反流多属于功能性",
+    "yellow"
+   ],
+   [
+    "与前片",
+    "yellow"
+   ],
+   [
+    "前列腺钙化灶",
+    "yellow"
+   ],
+   [
+    "咽炎",
+    "yellow"
+   ],
+   [
+    "慢性咽炎",
+    "yellow"
+   ],
+   [
+    "牙龈炎",
+    "yellow"
+   ],
+   [
+    "甲状腺结节",
+    "yellow"
+   ],
+   [
+    "豹纹状眼底改变",
+    "yellow"
+   ],
+   [
+    "超重",
+    "yellow"
+   ],
+   [
+    "骨量减少",
+    "yellow"
+   ],
+   [
+    "鼻中隔偏曲矫正术后",
+    "yellow"
+   ]
+  ]
+ },
+ "128": {
+  "name": "测试6(体检代码)",
+  "interp_id": 1492,
+  "conclusion_len": 574,
+  "conclusion_hash": "09672e95f9e28b1d",
+  "indicators": [
+   [
+    "平均红细胞Hb浓度",
+    "yellow"
+   ]
+  ],
+  "conclusions": [
+   [
+    "右卵巢囊肿",
+    "yellow"
+   ],
+   [
+    "左侧乳腺结节",
+    "yellow"
+   ],
+   [
+    "心脏彩超示轻度二尖瓣关闭不全",
+    "yellow"
+   ],
+   [
+    "甲状腺右侧叶结节",
+    "yellow"
+   ],
+   [
+    "甲状腺回声稍粗",
+    "yellow"
+   ],
+   [
+    "盆腔积液",
+    "yellow"
+   ],
+   [
+    "窦性心动过缓",
+    "yellow"
+   ],
+   [
+    "肌层回声不均匀",
+    "yellow"
+   ]
+  ]
  }
 }

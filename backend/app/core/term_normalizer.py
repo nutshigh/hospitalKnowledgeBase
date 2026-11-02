@@ -605,7 +605,7 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
                 )
                 if ekey != key:
                     continue
-                for _fld in ("unit", "ref_low", "ref_high"):
+                for _fld in ("unit", "ref_low", "ref_high", "_ref_text"):
                     if not existing.get(_fld) and ind.get(_fld):
                         existing[_fld] = ind[_fld]
                 if (ind.get("signal_flag") or 0) > (existing.get("signal_flag") or 0):
@@ -623,7 +623,10 @@ def normalize_indicators(indicators: list[dict]) -> list[dict]:
                   "未见异常", "未见明显异常"}
     _grp: dict = {}
     for _ind in deduped:
-        _k2 = _ind.get("item_name_standard") or _ind.get("item_name", "")
+        # 2026-10-31: 同标准名但**原始名不同**(红细胞 vs 红细胞（镜检）)不互删 ——
+        # 瑞金杜蓉蓉白带"红细胞 阴性(-)"曾被尿沉渣"红细胞（镜检）0"的参考词规则吞掉。
+        _k2 = (_ind.get("item_name_standard") or _ind.get("item_name", ""),
+               _clean_textual_noise(str(_ind.get("item_name") or "")))
         _grp.setdefault(_k2, []).append(_ind)
     _drop_ids = set()
     for _k2, _rows in _grp.items():

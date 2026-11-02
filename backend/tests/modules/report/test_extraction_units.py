@@ -3036,3 +3036,182 @@ def test_zhoujunping_profile_keeps_ocr_after_imaging():
     # 莱州中医: 检验表在"超声骨密度检测报告"影像页之后 → 关闭早停, 防后续扫描页漏检。
     from app.modules.report.report_profiles import match_profile
     assert match_profile("莱州市中医医院").get("keep_ocr_after_imaging") is True
+
+
+# === 第十一批-上海专项(2026-10-30) ===
+
+def test_match_profile_excludes_hospital_intro_cross_match():
+    # 珲春市人民医院简介提到"与吉林大学中日联谊医院建立医联体" → 不得命中吉林档案。
+    from app.modules.report.report_profiles import match_profile
+    text = "珲春市人民医院 健康体检报告 与吉林大学中日联谊医院神经内二科建立紧密型医联体"
+    prof = match_profile(text)
+    assert prof.get("anchor_only") is True
+    assert any("健康指导建议" in p for p in prof.get("extra_anchor", []))
+    assert not any("主检结论和建议" in p for p in prof.get("extra_anchor", []))
+
+
+def test_strip_inline_signature_and_html_entities():
+    # 仲君: OCR 表格把签名粘在结论尾; 健康建议中的 &lt;5% 应还原为 <5%。
+    import asyncio
+    from app.modules.report.report_profiles import match_profile
+    from app.modules.report.service import _extract_conclusion_async
+    text = (
+        "兰州大学第一医院 总检结论\n"
+        "1、甲状腺结节2、超重初审医生：杨宏 终审医生：王晶 终审日期：2026-05-26\n"
+        "健康建议\n1、甲状腺结节 风险&lt;5% 建议复查。\n"
+        "温馨提示：详见分科报告\n"
+    )
+    prof = match_profile(text)
+    out = asyncio.run(_extract_conclusion_async(text, prof))
+    assert out and "初审医生" not in out and "终审医生" not in out
+    assert "健康建议" in out and "<5%" in out and "&lt;" not in out
+
+
+def test_parse_markdown_table_module_title_header_and_time_footer():
+    # 仲君(兰州大学一院): 检验表首格是模块名"全血细胞计数(+五分类)"而非"项目名称";
+    # 表尾"检验时间/检查医生"行不得生成指标。
+    from app.core.vlm_client import _parse_markdown_table
+    html = (
+        "<table><tr><td>全血细胞计数(+五分类)</td><td>结果</td><td>说明</td>"
+        "<td>参考值</td><td>单位</td></tr>"
+        "<tr><td>白细胞</td><td>6.11</td><td></td><td>3.5-9.5</td><td>10^9/L</td></tr>"
+        "<tr><td colspan='3'>检验时间：2026/5/13 11:49:18</td>"
+        "<td>检查医生：</td><td>审核医生：陈文萍</td></tr></table>"
+    )
+    rows = {r["item_name"]: r for r in _parse_markdown_table(html)}
+    assert rows["白细胞"]["result"] == "6.11"
+    assert rows["白细胞"]["ref_low"] == "3.5" and rows["白细胞"]["ref_high"] == "9.5"
+    assert not any("检验时间" in n or "检查医生" in n for n in rows)
+
+
+def test_qualitative_ref_compare_ruijin():
+    # 杜蓉蓉: 白细胞 阳性(++) > 参考上限 阳性(+) → 黄;
+    # 上皮细胞 阳性(+) 低于参考下限 阳性(++) → 绿; 红细胞/酵母阴性/未检出 → 绿。
+    from app.modules.report.table_extractor import apply_profile_indicator_fixes
+    inds = [
+        {"item_name": "白细胞", "result": "阳性(++)", "_ref_text": "阴性(-)~阳性(+)"},
+        {"item_name": "上皮细胞", "result": "阳性(+)", "_ref_text": "阳性(++)~阳性(++++)"},
+        {"item_name": "红细胞", "result": "阴性(-)", "_ref_text": "未检出"},
+        {"item_name": "酵母样菌", "result": "未检出", "_ref_text": "未检出"},
+    ]
+    apply_profile_indicator_fixes(inds, qualitative_ref_compare=True)
+    assert [i.get("signal_flag") or 0 for i in inds] == [3, 0, 0, 0]
+
+
+def test_b11_bai_xiaomin_join_and_baojing_trim():
+    # 白晓敏: "双侧胸膜"+"肥厚" 折行合并
+    out = _conclusion_for_sample("../体检报告样例/1-第11批-上海专项/白晓敏04003X.pdf")
+    assert "双侧胸膜肥厚" in out and "双侧胸膜\n肥厚" not in out
+    # 鲍静(纯扫描): 用构造文本验证档案的"三、"前换行 + 血脂指南截断
+    import asyncio
+    from app.modules.report.report_profiles import match_profile
+    from app.modules.report.service import _extract_conclusion_async
+    text = (
+        "上海市第六人民医院\n检查汇总及终检指导建议\n"
+        "一、 慢性浅表性胃炎\n建议消化内科就诊。\n"
+        "二、 结肠多发息肉\n建议消化内科或普外科就诊。改善饮食结构，增加膳食纤维，戒烟，适当运动。"
+        "三、 宫颈囊肿；TCT：中度炎症\n建议妇科门诊复查随诊。\n"
+        "六、 近视眼底改变\n建议定期眼科复查随诊。\n"
+        "《中国血脂管理指南2023》指出，低密度脂蛋白胆固醇目标值因人而异。\n"
+        "心脑血管疾病危险分层\n慢性肾病3~4期 颈动脉斑块手术 糖尿病+高血压\n"
+        "总检医师：\n审核医师：\n"
+    )
+    prof = match_profile(text)
+    out = asyncio.run(_extract_conclusion_async(text, prof))
+    assert out and "\n三、 宫颈囊肿" in out
+    assert "《中国血脂管理指南" not in out
+    assert "慢性肾病" not in out and "颈动脉斑块手术" not in out
+
+
+def test_normalize_keeps_redcell_reference_row_when_name_differs():
+    # 杜蓉蓉: 白带"红细胞 阴性(-)"与尿沉渣"红细胞（镜检）0"标准名同为红细胞,
+    # 但原名不同 → 参考词去重规则不得吞掉白带行。
+    from app.core.term_normalizer import normalize_indicators
+    out = normalize_indicators([
+        {"item_name": "红细胞", "result": "阴性(-)", "unit": "",
+         "ref_low": None, "ref_high": None},
+        {"item_name": "红细胞（镜检）", "result": "0", "unit": "",
+         "ref_low": "0", "ref_high": "3"},
+    ])
+    names = {r["item_name"] for r in out}
+    assert "红细胞" in names and "红细胞（镜检）" in names
+
+
+def test_yao_jianzhong_junk_indicator_names_profile():
+    # 瑞金特需(姚建忠): 标本种类/影像测量句不得作为指标。
+    import re
+    from app.modules.report.report_profiles import match_profile
+    prof = match_profile("特需医疗保健中心 姚建忠")
+    pats = prof.get("drop_indicator_names") or []
+    for name in ("标本种类：呼气样本", "右侧颈总动脉内中膜厚度约",
+                 "左侧颈总动脉内中膜厚度约", "前列腺大小约", "胆总管内径约"):
+        assert any(re.search(p, name) for p in pats), name
+
+
+def test_parse_markdown_table_drops_footer_and_numeric_rows():
+    # 121/122/123: 表尾"以上检验结果仅供…/标本种类"/纯数字残名/"阴性"参考行不入指标。
+    from app.core.vlm_client import _parse_markdown_table
+    html = (
+        "<table><tr><td>项目</td><td>结果</td><td>参考范围</td></tr>"
+        "<tr><td>以上检验结果仅供临床医师参考</td><td>检验：周嘉悦</td><td></td></tr>"
+        "<tr><td>288</td><td>180--350mg/L</td><td></td></tr>"
+        "<tr><td>阴性</td><td>阴性（-）</td><td></td></tr>"
+        "<tr><td>白细胞</td><td>5.0</td><td>3.5-9.5</td></tr></table>"
+    )
+    names = {r["item_name"] for r in _parse_markdown_table(html)}
+    assert "白细胞" in names
+    assert not any("以上检验结果" in n or n in ("288", "阴性") for n in names)
+
+
+def test_parse_markdown_table_drops_personnel_headers():
+    # 白晓敏 "白晓敏体检序号"; 丁伊颖 "职工工号"/"张江蓉/虞凯文肺及呼吸道"
+    from app.core.vlm_client import _parse_markdown_table
+    html = (
+        "<table><tr><td>项目</td><td>结果</td><td>参考范围</td></tr>"
+        "<tr><td>白晓敏体检序号</td><td>020</td><td></td></tr>"
+        "<tr><td>职工工号</td><td>190998</td><td></td></tr>"
+        "<tr><td>张江蓉/虞凯文肺及呼吸道</td><td>正常</td><td></td></tr>"
+        "<tr><td>白细胞</td><td>5.0</td><td>3.5-9.5</td></tr></table>"
+    )
+    names = {r["item_name"] for r in _parse_markdown_table(html)}
+    assert names == {"白细胞"}, names
+
+
+def test_terminal_junk_indicator_name_filter():
+    from app.modules.report.service import _is_junk_indicator_name
+    assert _is_junk_indicator_name("白晓敏体检序号")
+    assert _is_junk_indicator_name("职工工号")
+    assert _is_junk_indicator_name("张江蓉/虞凯文肺及呼吸道")
+    assert not _is_junk_indicator_name("白细胞")
+    assert not _is_junk_indicator_name("呼吸道感染")
+
+
+def test_split_health_advice_items_zhongjun():
+    from app.modules.report.service import _split_health_advice_items
+    txt = ("健康建议\n1、甲状腺结节甲状腺结节的评估要点是良恶性鉴别。建议复查。"
+           "2、超重体重(kg)除以身高(m)的平方为BMI。3、肺结节肺结节是指影像学表现。")
+    out = _split_health_advice_items(txt)
+    assert "\n2、超重\n体重" in out
+    assert "\n3、肺结节\n肺结节" in out
+    assert "1、甲状腺结节\n甲状腺结节的评估" in out
+
+
+def test_split_health_advice_items_drops_duplicate_conclusion_block():
+    from app.modules.report.service import _split_health_advice_items
+    txt = ("健康建议\n1、甲状腺结节\n正文A\n"
+           "1、甲状腺结节\n2、超重\n3、与前片同前\n4、二尖瓣反流\n"
+           "5、前列腺钙化灶\n初审医生：杨宏 终审医生：王晶\n"
+           "4、 二、三尖瓣反流\n正文D")
+    out = _split_health_advice_items(txt)
+    assert "初审医生" not in out
+    assert out.count("1、甲状腺结节") == 1
+    assert "\n4、 二、三尖瓣反流" in out
+
+
+def test_b11_zhouchen_hr_colon_break():
+    from app.modules.report.service import _reflow_conclusion_lines
+    # 档案后处理在 _extract_conclusion_async 内；这里直接验证正则不会把 HR 拆开
+    import re
+    s = "7、心电图示窦性心动过缓（HR:\n53次/分）：偶尔短暂出现"
+    out = re.sub(r"（HR[:：]\s*(\d+)\s*次/分）[:：]\s*", r"（HR: \1次/分）：\n", s)
+    assert "（HR: 53次/分）：\n偶尔" in out

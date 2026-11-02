@@ -240,6 +240,18 @@ def _parse_markdown_table(text: str) -> list[dict]:
                 _adapted = _adapt_inherited_header(_last_header, _width)
                 if _adapted:
                     rows = [_adapted] + rows
+                elif _width == 4:
+                    rows = [["项目", "结果", "参考值", "单位"]] + rows
+                elif _width == 5:
+                    rows = [["项目", "结果", "标志", "参考值", "单位"]] + rows
+            elif rows and _looks_like_lab_data(rows):
+                # 2026-11-01: 完全无表头的检验表(仲君尿沉渣 4 列) → 合成标准表头,
+                # 否则结晶/管型等整表丢失。
+                _width = max((len(r) for r in rows if len(r) >= 2), default=0)
+                if _width == 4:
+                    rows = [["项目", "结果", "参考值", "单位"]] + rows
+                elif _width == 5:
+                    rows = [["项目", "结果", "标志", "参考值", "单位"]] + rows
             _parsed = _rows_to_indicators(rows)
             if _ctx in ("urine", "stool"):
                 for _p in _parsed:
@@ -315,6 +327,17 @@ def _pick_header_row(rows: list[list[str]]) -> tuple[int, list[str], dict] | Non
     for i, row in enumerate(rows):
         cmap = _match_header_columns(row or [])
         roles = set(cmap.values())
+        # 2026-10-30: 检验表首格是**模块标题**("全血细胞计数(+五分类)|结果|说明|
+        # 参考值|单位")而不是"项目名称" → 首列按名称列处理(仲君 兰州大学一院)。
+        if ("item_name" not in roles and "result" in roles
+                and len(row or []) >= 3
+                and str(row[0] or "").strip()
+                and str(row[0]).strip() not in ("结果", "参考值", "单位", "提示")
+                # 数据行("结晶|470...")第二格是值, 不是表头词 —— 防数据行被当表头
+                and re.search(r"(结果|测定|检测|数值)", str(row[1] or ""))):
+            cmap = dict(cmap)
+            cmap[0] = "item_name"
+            roles = set(cmap.values())
         if "item_name" not in roles or "result" not in roles:
             continue
         score = len(cmap)
@@ -375,9 +398,9 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
     if header_idx is None:
         return []
 
-    # Map header columns
+    # Map header columns(使用 _pick_header_row 的适配映射: 模块标题首列=名称)
     header = table_rows[header_idx]
-    col_map = _match_header_columns(header)
+    col_map = _picked[2] if _picked else _match_header_columns(header)
 
     def _period_of(_hdr: list, _cmap: dict) -> int:
         """表头角色序列的最小重复周期(单表双栏/多栏, 陈海波"分析项目|结果|参考值|单位"×2)。"""
@@ -424,8 +447,27 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
         if re.search(r"(姓名[:：]|性别[:：]|门诊号|体检编号|样本编号|既往病史|家族病史|月经史|"
                      r"遗传病史|过敏史|婚育史|手术史|输血史|神经及精神疾病|科\s*室|单位名称|单位备注)", name):
             return
+        # 2026-10-31: 表头/页脚/结果列残留垃圾(瑞金杜蓉蓉/姚建忠/新华丁伊颖)
+        if (re.fullmatch(r"\d{1,4}", name)
+                or re.search(r"(以上检验结果|仅供临床医师参考|标本种类[:：]|"
+                             r"收到时间[:：]|报告时间[:：]|采样时间[:：]|"
+                             r"打印时间[:：]|核对[:：]|检验[:：]|"
+                             r"体检序号|职工工号|肺及呼吸道)", name)
+                or name in ("阴性", "阴性(-)", "阴性（-）", "-", "--")):
+            return
+        _res_txt = str(indicator.get("result") or "")
+        if re.search(r"(检验者|审核者|检验师|核对|报告时间|收到时间|采样时间|打印时间)[:：]",
+                     _res_txt):
+            return
         if not indicator.get("result") and not (indicator.get("ref_low") or indicator.get("ref_high")):
             return
+        # 2026-10-31: 保留原始参考文本(定性范围如"阴性(-)~阳性(+)"在下方会被清空,
+        # 但瑞金杜蓉蓉需要按定性范围判黄/绿) —— 仅作内存传递, 不落库。
+        _ref_txt = "".join(
+            str(_row[_i]) for _i in range(len(_row))
+            if _cmap.get(_i) in ("ref_low", "ref_high")).replace(" ", "")
+        if _ref_txt:
+            indicator["_ref_text"] = _ref_txt
         # 2026-10-07(用户口径): 结果"弱阳性" + **与参考范围不一致** + 本表**无提示/
         # 标志列** → 置 flag=1(run_rules: flag=1 无数值参考 → 判黄)。
         #  - 有提示列且未标 → 绿(池州粘液丝等用户拍板案例);
@@ -433,9 +475,6 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
         #  (幽门螺杆菌分型抗体表 序号|项目|缩写|结果|单位|参考, 参考"阴性"+结果"弱阳性")
         if "弱阳性" in str(indicator.get("result") or "") \
                 and "flag" not in set(v for v in _cmap.values() if v):
-            _ref_txt = "".join(
-                str(_row[_i]) for _i in range(len(_row))
-                if _cmap.get(_i) in ("ref_low", "ref_high")).replace(" ", "")
             if _ref_txt and "阳性" not in _ref_txt \
                     and ("阴性" in _ref_txt or _ref_txt in ("-", "--")
                          or "negative" in _ref_txt.lower()):
@@ -461,6 +500,10 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
                 if val is None:
                     continue
                 sv = str(val)
+                if re.match(r"^[↑↓]", sv):
+                    indicator["signal_flag"] = max(
+                        indicator.get("signal_flag") or 0, 2)
+                    sv = re.sub(r"^[↑↓]\s*", "", sv)
                 if not re.search(r"\d", sv):
                     indicator[ref_key] = None
                     continue
@@ -472,13 +515,15 @@ def _rows_to_indicators(table_rows: list) -> list[dict]:
         indicators.append(indicator)
 
     for row in table_rows[header_idx + 1:]:
-        if any(("人员" in c) or ("检查时间" in c) or ("审核时间" in c) or ("时间:" in c) for c in row):
+        if any(("人员" in c) or ("检查时间" in c) or ("审核时间" in c)
+               or ("检验时间" in c) or ("检查医生" in c) or ("审核医生" in c)
+               or ("时间:" in c) for c in row):
             continue
         # 2026-08-26: 多表格报告(钦州)后续模块自带表头 → 切换列映射
-        cm = _match_header_columns(row)
-        if cm:
-            col_map = cm
-            period = _period_of(row, cm)
+        _prow = _pick_header_row([row])
+        if _prow is not None:
+            col_map = _prow[2]
+            period = _period_of(row, col_map)
             _name_cols = [i for i in sorted(col_map) if col_map.get(i) == "item_name"]
             _dual_holder[0] = len(_name_cols) >= 2
             continue

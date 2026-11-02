@@ -45,7 +45,7 @@ _PATTERNS = {
     "彩超(乳腺)": "乳腺|乳房|双乳|左乳|右乳|乳结节",
     "彩超(腹部+女泌尿系)": _ABDOMEN,
     "头颅CT/核磁": ("头颅|颅脑|颅内|颅骨|脑梗|脑缺血|脑萎缩|脑白质|脑出血|脑软化|"
-                    "脑膜|脑动脉|腔隙性|垂体|小脑|脑室|脑干|丘脑|额叶|颞叶|"
+                    "脑膜|脑动脉|大脑后动脉|椎动脉优势|头MRA|MRA|腔隙性|垂体|小脑|脑室|脑干|丘脑|额叶|颞叶|"
                     "顶叶|枕叶|脑内"),
 }
 _KEYWORD_RE = {name: re.compile(p) for name, p in _PATTERNS.items()}
@@ -60,7 +60,7 @@ _DEPT_MASK = re.compile(
     "口腔科|普外科|神经内科|神经外科|血液科|肿瘤科|风湿免疫科|胸外科|骨科")
 _LAB_MASK = re.compile("|".join(sorted([
     "宫颈防癌", "液基", "TCT",
-    "肝功能", "肝纤维化检查", "肝功", "乙肝", "丙肝", "甲肝", "戊肝", "两对半", "肝炎病毒",
+    "肝功能", "肝纤维化检查", "肝功", "肝脏损害", "乙肝", "丙肝", "甲肝", "戊肝", "两对半", "肝炎病毒",
     "乙型肝炎", "丙型肝炎", "甲型肝炎", "戊型肝炎", "病毒性肝炎",
     "肾功能", "肾小球", "肾小管", "肾功", "肾病学科", "肾内科",
     "甲状腺功能", "甲功", "甲状腺抗体", "甲状腺球蛋白抗体", "过氧化物酶抗体",
@@ -203,6 +203,11 @@ def _scan_conclusion_text(text):
                             evidence[item].append(line)
                         current.append(item)
         if current and _RED.search(line) and not _COND.search(line):
+            # 2026-11-01(仲君): "请您对超重引起重视" 属生活方式建议, 不是急症红区;
+            # 仅当同句含就诊/就医/及时/尽快等行动词时才保留红。
+            if "引起重视" in line and not re.search(
+                    r"(及时|立即|尽快|就诊|就医|手术|急诊|复诊)", line):
+                continue
             for item in current:
                 levels[item] = "red"
                 if line not in evidence.setdefault(item, []):

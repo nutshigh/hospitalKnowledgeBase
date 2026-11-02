@@ -231,3 +231,19 @@ def test_timely_visit_and_importance_are_red_triggers():
     assert _levels(build_imaging_items(text, None))["头颅CT/核磁"] == "red"
     text2 = "【1】急性脑梗死\n建议立即就医。"
     assert _levels(build_imaging_items(text2, None))["头颅CT/核磁"] == "red"
+
+
+def test_b11_imaging_false_positive_and_mra():
+    # 丁伊颖: "血清前白蛋白减少…肝脏损害" 不是腹部影像
+    _one("彩超(腹部+女泌尿系)", "green",
+         "●血清前白蛋白减少\n血清前白蛋白比白蛋白能更早期反映肝脏损害。建议您去消化内科进一步检查。")
+    # 姚建忠: 头MRA "右侧部分型胚胎型大脑后动脉，左侧椎动脉优势型" → 头颅CT/核磁黄
+    _one("头颅CT/核磁", "yellow", "6、右侧部分型胚胎型大脑后动脉，左侧椎动脉优势型")
+    # 颈动脉项不被椎动脉优势误命中
+    _one("彩超(颈动脉)", "green", "6、右侧部分型胚胎型大脑后动脉，左侧椎动脉优势型")
+
+
+def test_b11_overweight_importance_not_red():
+    # 仲君: "请您对超重引起重视，适当运动" 不构成红区
+    _one("彩超(甲状腺)", "yellow",
+         "1、甲状腺结节\n（1）请您对超重引起重视，适当运动，关注血压、血糖、血脂等变化。")

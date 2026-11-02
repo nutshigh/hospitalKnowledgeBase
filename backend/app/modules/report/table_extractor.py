@@ -1874,6 +1874,44 @@ def recover_folded_units_refs(indicators: list, text: str) -> None:
             continue
 
 
+def _qual_rank(v) -> Optional[float]:
+    """定性结果严重度: 未检出/阴性=0, 弱阳性/±=0.5, 阳性(+)=1, 阳性(++)=2…"""
+    s = re.sub(r"\s+", "", str(v or ""))
+    if not s:
+        return None
+    if "未检出" in s or "阴性" in s or s in ("-", "--", "neg", "/"):
+        return 0.0
+    m = re.search(r"[（(](\++)[）)]", s)
+    if m:
+        return float(len(m.group(1)))
+    if "弱阳性" in s or "±" in s:
+        return 0.5
+    m = re.search(r"(\++)\b", s)
+    if m:
+        return float(len(m.group(1)))
+    if "阳性" in s:
+        return 1.0
+    return None
+
+
+def _qual_ref_compare(ind: dict) -> None:
+    """定性结果 vs 定性参考范围(2026-10-31 瑞金杜蓉蓉):
+    result > 上限 → 黄; result 低于下限或落区间 → 绿(用户口径: 阳性(+) vs 阳性(++)~阳性(++++)
+    为绿)。参考文本来自解析期暂存的 _ref_text。"""
+    if ind.get("signal_flag"):
+        return
+    rv = _qual_rank(ind.get("result"))
+    ref = str(ind.get("_ref_text") or "").strip()
+    if rv is None or not ref:
+        return
+    parts = [x for x in re.split(r"[~～]", ref) if str(x).strip()]
+    if not parts:
+        return
+    hi = _qual_rank(parts[-1])
+    if hi is not None and rv > hi:
+        ind["signal_flag"] = 3
+
+
 def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = False,
                                     clear_flags: list | None = None,
                                     positive_flags: bool = False,
@@ -1887,7 +1925,9 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
                                     split_lymph_thyroid: bool = False,
                                     collapse_name_spaces: bool = False,
                                     drop_result_patterns: list | None = None,
-                                    force_flags: list | None = None) -> None:
+                                    force_flags: list | None = None,
+                                    qualitative_ref_compare: bool = False,
+                                    sanitize_refs: bool = False) -> None:
     """2026-10-22: 档案级指标修整。
 
     - strip_unit_flags: 单位列误并标志("↑kg/㎡"/"↓%") → 单位去箭头, signal_flag=2
@@ -1955,6 +1995,16 @@ def apply_profile_indicator_fixes(indicators: list, strip_unit_flags: bool = Fal
         ]
     _force_res = [re.compile(x) for x in (force_flags or []) if x]
     for ind in indicators:
+        if sanitize_refs:
+            _lo, _hi = ind.get("ref_low"), ind.get("ref_high")
+            if _lo is not None and _hi is not None:
+                _lo_s, _hi_s = str(_lo), str(_hi)
+                _lo_d = re.sub(r"\D", "", _lo_s)
+                _hi_d = re.sub(r"\D", "", _hi_s)
+                if re.search(r"[<>≤≥]", _lo_s) or (_lo_d and _lo_d == _hi_d):
+                    ind["ref_low"] = None
+        if qualitative_ref_compare:
+            _qual_ref_compare(ind)
         if _force_res and any(x.search(str(ind.get("item_name") or ""))
                               for x in _force_res):
             ind["signal_flag"] = 3

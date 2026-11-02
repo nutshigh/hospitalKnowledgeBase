@@ -53,6 +53,7 @@ from app.modules.report.service import (  # noqa: E402
     _reflow_conclusion_lines,
     _reflow_table_conclusion,
     _split_inline_numbered_findings,
+    _split_health_advice_items,
     _strip_ocr_html,
 )
 from app.core.term_normalizer import normalize_compat_chars  # noqa: E402
@@ -78,6 +79,8 @@ B8 = os.path.join(REPO, "体检报告样例", "0-第8批")
 B9 = os.path.join(REPO, "体检报告样例", "1-第9批")
 # 2026-10-30: 第十批(1-第10批, H004 109-113)
 B10 = os.path.join(REPO, "体检报告样例", "1-第10批")
+# 2026-11-01: 第十一批-上海专项(H004 119-128)
+B11 = os.path.join(REPO, "体检报告样例", "1-第11批-上海专项")
 BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
 
 CASES = {
@@ -209,6 +212,17 @@ CASES = {
     ("h004", "116"): os.path.join(B10, "张万里147411.pdf"),
     ("h004", "117"): os.path.join(B10, "赵瑞阳182678.pdf"),
     ("h004", "118"): os.path.join(B10, "周均平243516.pdf"),
+    # 第十一批-上海专项(2026-11-01 用户验收)
+    ("h004", "119"): os.path.join(B11, "白晓敏04003X.pdf"),
+    ("h004", "120"): os.path.join(B11, "鲍静190427.pdf"),
+    ("h004", "121"): os.path.join(B11, "丁伊颖01262X.pdf"),
+    ("h004", "122"): os.path.join(B11, "杜蓉蓉18004X.pdf"),
+    ("h004", "123"): os.path.join(B11, "姚建忠084011.pdf"),
+    ("h004", "124"): os.path.join(B11, "岳晓春046410.pdf"),
+    ("h004", "125"): os.path.join(B11, "赵永学010210.pdf"),
+    ("h004", "126"): os.path.join(B11, "郑敏_044822.pdf"),
+    ("h004", "127"): os.path.join(B11, "仲君060034.pdf"),
+    ("h004", "128"): os.path.join(B11, "周晨170020.pdf"),
 }
 
 # hash == 验收基线(2026-09-15 基线重生成后 24 份; 含原 PENDING 6 份与
@@ -248,6 +262,9 @@ MATCH = {
     ("h004", "109"), ("h004", "110"), ("h004", "112"), ("h004", "113"),
     # 第十批后 5 份(2026-10-30 用户验收): 116/117 结论视觉重排; 118 健康指导段
     ("h004", "116"), ("h004", "117"), ("h004", "118"),
+    # 第十一批-上海专项(2026-11-01 用户验收): 119/121/124/125/128 文本链
+    ("h004", "119"), ("h004", "121"), ("h004", "124"), ("h004", "125"),
+    ("h004", "128"),
 }
 
 # 离线链(hybrid=False)与生产链条不等价: 扫描/图片件(离线取不到段), 或生产链
@@ -309,6 +326,13 @@ HYBRID = {
     # 第十批后 5 份: 114/115 纯扫描(生产 OCR/VLM) → 离线空产物锁
     ("h004", "114"): "da39a3ee5e6b4b0d",
     ("h004", "115"): "da39a3ee5e6b4b0d",
+    # 第十一批-上海专项: 120/122/123/127 纯扫描(离线空); 126 文本层缺标题,
+    # 生产 force_ocr(档案强制) → 离线锁文本层产物
+    ("h004", "120"): "da39a3ee5e6b4b0d",
+    ("h004", "122"): "da39a3ee5e6b4b0d",
+    ("h004", "123"): "da39a3ee5e6b4b0d",
+    ("h004", "126"): "b9e2b048a1c78143",
+    ("h004", "127"): "da39a3ee5e6b4b0d",
 }
 
 BASELINE = {
@@ -349,6 +373,10 @@ def _re_extract_text(key):
                                  visual_lines=bool(profile.get("visual_lines")))
     if profile.get("nfkc"):
         text = normalize_compat_chars(text)
+    if profile.get("strip_inline_signature"):
+        text = re.sub(
+            r"(?:初审|终审|总检|主检|审核)(?:医生|医师)[:：]?.*$",
+            "", text, flags=re.M)
     if profile.get("all_conclusions"):
         return _collect_all_conclusions(
             _strip_ocr_html(text),
@@ -367,6 +395,14 @@ def _re_extract_text(key):
         skip_lines=_REGUARD_SKIP_LINES.get(key))
     if not (section and len(section) > 50):
         return None
+    if profile.get("cut_markers"):
+        for _marker in profile["cut_markers"]:
+            _mm = re.search(_marker, section)
+            if _mm:
+                section = section[:_mm.start()].rstrip()
+    if profile.get("split_inline_chinese_numbered"):
+        section = re.sub(
+            r"(?<=[。；;])\s*(?=[一二三四五六七八九十]{1,3}\s*[、.])", "\n", section)
     if profile and profile.get("table_conclusion"):
         return _reflow_table_conclusion(section)[:16000]
     if profile and profile.get("clean_important_head"):
@@ -383,11 +419,20 @@ def _re_extract_text(key):
             _ln.strip() for _ln in text.splitlines()
             if _ln[:1].isspace() and _ln.strip()}
     section = _reflow_conclusion_lines(
-        section,
+        section, despace=bool(profile.get("despace")),
         explanation_labels=bool(profile.get("explanation_labels")),
         drop_redundant_heading_labels=bool(
             profile.get("drop_redundant_heading_labels")),
         standalone_lines=_standalone_lines)
+    if profile.get("split_inline_chinese_numbered"):
+        section = re.sub(
+            r"(?<=[。；;])\s*(?=[一二三四五六七八九十]{1,3}\s*[、.])", "\n", section)
+    if profile.get("split_health_advice_items"):
+        section = _split_health_advice_items(section)
+    if profile.get("split_after_hr"):
+        section = re.sub(
+            r"（HR[:：]\s*(\d+)\s*次/分）[:：]\s*",
+            r"（HR: \1次/分）：\n", section)
     if profile.get("strip_first_line_colon"):
         _ls = section.split("\n")
         if _ls:

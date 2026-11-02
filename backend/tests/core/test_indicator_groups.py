@@ -191,3 +191,69 @@ def test_bare_glucose_urine_vs_blood_disambiguated():
 def test_caiyi_urine_redcell_analysis_items():
     assert classify("红细胞信息") == "尿常规"
     assert classify("70%红细胞散射光强度", "ch") == "尿常规"
+
+
+def test_b11_ruijin_vaginal_qualitative_classification():
+    # 杜蓉蓉: 白带常规表无单位, 阳性/未检出/阴性(-) 形态归白带常规;
+    # 尿常规裸"白细胞 阴性"不得误归。
+    rows, _order = group_indicators([
+        {"item_name": "白细胞", "result_value": "阳性（++）", "unit": None},
+        {"item_name": "上皮细胞", "result_value": "阳性（+）", "unit": None},
+        {"item_name": "酵母样菌", "result_value": "未检出", "unit": None},
+        {"item_name": "红细胞", "result_value": "阴性(-)", "unit": None},
+        {"item_name": "滴虫", "result_value": "未检出", "unit": None},
+        {"item_name": "白细胞", "result_value": "阴性", "unit": None},
+        {"item_name": "尿比重", "result_value": "1.020", "unit": None},
+    ])
+    by = [(r["item_name"], r["result_value"], r["group"]) for r in rows]
+    assert ("白细胞", "阳性（++）", "白带常规") in by
+    assert ("上皮细胞", "阳性（+）", "白带常规") in by
+    assert ("酵母样菌", "未检出", "白带常规") in by
+    assert ("红细胞", "阴性(-)", "白带常规") in by
+    assert ("滴虫", "未检出", "白带常规") in by
+    assert ("白细胞", "阴性", "尿常规") in by
+
+
+def test_b11_lipid_liver_renal_alias_classification():
+    # 丁伊颖: 脂蛋白α/ApoA1/ApoB 血脂; BUN/CREA 肾功能; RBP 肝功能
+    assert classify("脂蛋白α(LP-α)", "mg/dL") == "血脂"
+    assert classify("ApoA1/ApoB") == "血脂"
+    assert classify("BUN/CREA（B/C）") == "肾功能"
+    assert classify("视黄醇结合蛋白（RBP）", "mg/L") == "肝功能"
+    # 杜蓉蓉/姚建忠: 胆汁酸、游离脂肪酸 肝功能
+    assert classify("胆汁酸") == "肝功能"
+    assert classify("游离脂肪酸") == "肝功能"
+
+
+def test_b11_stool_urine_color_and_alias_classification():
+    # 郑敏：性状*/寄生虫/颜色(无清晰度) → 大便常规；非鳞状/鳞状上皮 → 尿常规
+    rows, _ = group_indicators([
+        {"item_name": "性状*", "result_value": "软便", "unit": None},
+        {"item_name": "寄生虫", "result_value": "未查见", "unit": None},
+        {"item_name": "颜色*", "result_value": "黄色", "unit": None},
+        {"item_name": "非鳞状上皮", "result_value": "0", "unit": "/ul"},
+        {"item_name": "鳞状上皮", "result_value": "11", "unit": "/ul"},
+        {"item_name": "鳞状上皮细胞癌抗原", "result_value": "0.45", "unit": "ug/L"},
+    ])
+    by = {r["item_name"]: r["group"] for r in rows}
+    assert by["性状*"] == "大便常规"
+    assert by["寄生虫"] == "大便常规"
+    assert by["颜色*"] == "大便常规"
+    assert by["非鳞状上皮"] == "尿常规"
+    assert by["鳞状上皮"] == "尿常规"
+    assert by["鳞状上皮细胞癌抗原"] != "尿常规"
+    # 周晨：颜色+清晰度 → 尿常规；Urea/Crea 尿常规
+    rows2, _ = group_indicators([
+        {"item_name": "颜色", "result_value": "黄色", "unit": None},
+        {"item_name": "清晰度", "result_value": "清澈", "unit": None},
+        {"item_name": "Urea/Crea", "result_value": "82", "unit": None},
+    ])
+    by2 = {r["item_name"]: r["group"] for r in rows2}
+    assert by2["颜色"] == "尿常规"
+    assert by2["清晰度"] == "尿常规"
+    assert by2["Urea/Crea"] == "尿常规"
+
+
+def test_b11_anti_o_and_sed_rate_classification():
+    assert classify('抗"O"试验', "IU/mL") == "免疫检测"
+    assert classify("血沉", "MM/H") == "免疫检测"
