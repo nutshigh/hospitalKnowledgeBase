@@ -51,6 +51,10 @@ def create_session(
         raise ValidationException(
             detail="存量用户无身份证后六位,无法创建会话,请联系管理员补齐身份信息"
         )
+    if data.report_id is not None and not service.report_bind_allowed(
+        db, data.report_id, uid, nm, current_user.role
+    ):
+        raise NotFoundException(detail="Report not found")
     return service.create_session(db, uid, nm, current_user.hospital_id, data.report_id)
 
 
@@ -79,6 +83,10 @@ def update_session(
     uid, nm = user_identity(current_user)
     if uid is None:
         raise NotFoundException(detail="Session not found")
+    if data.report_id is not None and not service.report_bind_allowed(
+        db, data.report_id, uid, nm, current_user.role
+    ):
+        raise NotFoundException(detail="Report not found")
     session = service.update_session_report(
         db, session_id, uid, nm, data.report_id
     )
@@ -129,6 +137,10 @@ async def send_message(
     session = service.get_session(db, session_id, uid, nm)
     if not session:
         raise NotFoundException(detail="Session not found")
+    if session.report_id is not None and not service.report_bind_allowed(
+        db, session.report_id, uid, nm, current_user.role
+    ):
+        raise NotFoundException(detail="Report not found")
     token_gen = service.process_chat_stream(
         db, session, data.content, uid, nm
     )

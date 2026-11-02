@@ -113,9 +113,13 @@ def list_reports(
 
 
 @router.get("/{report_id}", response_model=schemas.ReportDetailResponse)
-def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
+def get_report_detail(
+    report_id: int,
+    db: Session = Depends(_get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     report = service.get_report_detail(db, report_id)
-    if not report:
+    if not report or (report.check_type or "") == "SZBF":
         raise NotFoundException(detail="Report not found")
     indicators = service.get_report_indicators(db, report_id)
     # 展示名:与列表一致——解析出真实姓名优先;解析中(未完成)不泄露账号锚定名;
@@ -176,11 +180,18 @@ def get_report_detail(report_id: int, db: Session = Depends(_get_db)):
 
 
 @router.delete("/{report_id}")
-def delete_report(report_id: int, db: Session = Depends(_get_db)):
+def delete_report(
+    report_id: int,
+    db: Session = Depends(_get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     report = service.get_report_detail(db, report_id)
-    if not report:
+    if not report or (report.check_type or "") == "SZBF":
         raise NotFoundException(detail="Report not found")
     from sqlalchemy import text
+    from sqlalchemy import inspect as sa_inspect
+    if sa_inspect(db.get_bind()).has_table("disease_hit"):
+        db.execute(text("DELETE FROM disease_hit WHERE report_id = :rid"), {"rid": report_id})
     db.execute(text("DELETE FROM indicator_judgment WHERE interpretation_id IN (SELECT id FROM report_interpretation WHERE report_id = :rid)"), {"rid": report_id})
     db.execute(text("DELETE FROM report_interpretation WHERE report_id = :rid"), {"rid": report_id})
     db.execute(text("DELETE FROM report_indicator WHERE report_id = :rid"), {"rid": report_id})

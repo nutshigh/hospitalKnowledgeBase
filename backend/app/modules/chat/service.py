@@ -8,6 +8,27 @@ from app.ai.agents import run_chat_agent
 MAX_HISTORY_ROUNDS = 20
 
 
+def report_bind_allowed(db: Session, report_id: int, user_id: Optional[str],
+                        name: Optional[str], role: str) -> bool:
+    """会话只能绑定本人报告(role=user)或本院普通报告(doctor/admin)。
+
+    SZBF 为统计专用数据, 任何角色都不可通过聊天读取。
+    """
+    row = db.execute(
+        text("SELECT user_id, name, check_type FROM report_info WHERE id = :rid"),
+        {"rid": report_id},
+    ).fetchone()
+    if not row:
+        return False
+    if (row[2] or "").upper() == "SZBF":
+        return False
+    if role == "user" or name is not None:
+        if user_id is None or name is None:
+            return False
+        return str(row[0]) == str(user_id) and row[1] == name
+    return True
+
+
 # ---- Session CRUD ----
 
 def create_session(db: Session, user_id: str, name: str, hospital_id: str,

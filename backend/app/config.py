@@ -177,6 +177,18 @@ class Settings(BaseSettings):
     # 为空时服务间端点拒绝服务；生产环境必须配置强随机值
     STAT_SERVICE_API_KEY: str = ""
 
+    # szbf 采集数据同步（总站 -> hospital_<id>）
+    SZBF_SOURCE_HOST: str = ""
+    SZBF_SOURCE_PORT: int = 3306
+    SZBF_SOURCE_USER: str = "readonly"
+    SZBF_SOURCE_PASSWORD: str = ""
+    SZBF_SOURCE_DB: str = ""
+    SZBF_TARGET_HOSPITAL_ID: str = "133"
+    SZBF_ORG_ID: str = "133"
+    SZBF_SYNC_LOOKBACK_MINUTES: int = 10
+    SZBF_SYNC_BATCH_SIZE: int = 100
+    SZBF_INDICATOR_SOURCE: str = "merge"  # merge | con_suggest | detail
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

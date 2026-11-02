@@ -29,7 +29,7 @@ class DiseaseHit(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     report_id = Column(BigInteger, nullable=False)
     interpretation_id = Column(BigInteger, nullable=True)
-    user_id = Column(BigInteger, nullable=False)
+    user_id = Column(String(64), nullable=False)
     unit_name = Column(String(100), nullable=True)
     report_date = Column(Date, nullable=True)
     disease_name = Column(String(100), nullable=False)

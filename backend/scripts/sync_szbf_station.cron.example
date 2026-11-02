@@ -1,0 +1,6 @@
+# /etc/cron.d/szbf-sync
+# 并发保护：增量与全量共用 flock；上一轮未结束时本轮直接跳过，避免互相踩踏。
+# 每 30 分钟增量
+*/30 * * * * root flock -n /tmp/szbf-sync.lock bash -c 'cd /data/project/hospitalKnowledgeBase/backend && .venv/bin/python scripts/sync_szbf_station.py --org-id 133 --target-hospital 133 --incremental >> /data/logs/szbf-sync.log 2>&1'
+# 每周日 03:15 全量重建（避开 :00/:30 增量；对账兜底）
+15 3 * * 0 root flock -n /tmp/szbf-sync.lock bash -c 'cd /data/project/hospitalKnowledgeBase/backend && .venv/bin/python scripts/sync_szbf_station.py --org-id 133 --target-hospital 133 --full-rebuild >> /data/logs/szbf-sync.log 2>&1'

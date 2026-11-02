@@ -270,5 +270,25 @@ BEGIN
         'KEY idx_user_date (user_id, report_date), KEY idx_disease (disease_name)'
         ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.szbf_sync_map ('
+        'id BIGINT AUTO_INCREMENT PRIMARY KEY, '
+        'source_user_id VARCHAR(32) NOT NULL, exam_code VARCHAR(64) NOT NULL, '
+        'report_id BIGINT NOT NULL, source_updated_at VARCHAR(32) DEFAULT NULL, '
+        'raw_conclusion MEDIUMTEXT, raw_con_suggest MEDIUMTEXT, '
+        'synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, '
+        'UNIQUE KEY uk_szbf_exam (source_user_id, exam_code), '
+        'KEY idx_szbf_report (report_id)'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+    SET @sql = CONCAT('CREATE TABLE IF NOT EXISTS `', @db_name, '`.szbf_sync_state ('
+        'source_key VARCHAR(32) PRIMARY KEY, '
+        'last_detail_update VARCHAR(32) DEFAULT NULL, '
+        'last_conclusion_update VARCHAR(32) DEFAULT NULL, '
+        'last_run_at DATETIME DEFAULT NULL, status VARCHAR(16) DEFAULT NULL, '
+        'message TEXT'
+        ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 END//
 DELIMITER ;

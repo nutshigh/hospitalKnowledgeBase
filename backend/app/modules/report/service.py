@@ -5575,7 +5575,7 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[str] = None,
         if name:
             q = q.filter(ReportInfo.name == name)
     if not user_id:
-        # 医生/管理员全量视图:隐藏 parse 失败行与「无任何可展示内容」的空壳残留行。
+        # 医生/管理员全量视图:隐藏 parse 失败行、空壳残留行与采集统计专用报告。
         q = (
             q.outerjoin(ReportTask, ReportTask.id == ReportInfo.task_id)
             .filter(
@@ -5583,6 +5583,8 @@ def list_reports(db: Session, hospital_id: str, user_id: Optional[str] = None,
                 or_(ReportInfo.parsed_name.isnot(None),
                     ReportInfo.name.isnot(None),
                     ReportInfo.report_date.isnot(None)),
+                or_(ReportInfo.check_type.is_(None),
+                    ReportInfo.check_type != "SZBF"),
             )
         )
     total = q.count()

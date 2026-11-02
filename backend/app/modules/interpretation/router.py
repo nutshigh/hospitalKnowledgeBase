@@ -8,8 +8,16 @@ from app.modules.interpretation import schemas, service
 from app.modules.interpretation.schemas import (
     IndicatorJudgmentSchema, CitationSchema, parse_summary_text,
 )
+from app.modules.report.models import ReportInfo
 
 router = APIRouter()
+
+
+def _ensure_visible_report(db: Session, report_id: int) -> None:
+    """SZBF 采集报告仅用于统计, 不暴露按 ID 的解读读取。"""
+    report = db.get(ReportInfo, report_id)
+    if report is not None and (report.check_type or "") == "SZBF":
+        raise NotFoundException(detail="Report not found")
 
 
 def _get_db(
@@ -65,6 +73,7 @@ def delete_rule(rule_id: int, db: Session = Depends(_get_db)):
 
 @router.get("/{report_id}", response_model=schemas.InterpretationResponse)
 def get_interpretation(report_id: int, db: Session = Depends(_get_db)):
+    _ensure_visible_report(db, report_id)
     interp = service.get_interpretation(db, report_id)
     if not interp:
         raise NotFoundException(detail="Interpretation not found")
@@ -99,6 +108,7 @@ def get_interpretation(report_id: int, db: Session = Depends(_get_db)):
 
 @router.get("/{report_id}/indicators")
 def get_judgments(report_id: int, db: Session = Depends(_get_db)):
+    _ensure_visible_report(db, report_id)
     interp = service.get_interpretation(db, report_id)
     if not interp:
         raise NotFoundException(detail="Interpretation not found")
