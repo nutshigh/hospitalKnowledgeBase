@@ -21,7 +21,8 @@ WHERE b.org_id = :org_id AND d.is_combine = '0' AND d.delete_flag = '0'
 """
 
 _USER_SQL = """
-SELECT b.user_id, b.sex, b.birthday, u.real_name, o.org_name
+SELECT b.user_id, b.sex, b.birthday, u.real_name, u.user_nick, u.user_name,
+       o.org_name
 FROM ba_user_basic b
 LEFT JOIN ba_user u ON u.user_id = b.user_id
 LEFT JOIN ba_organization o ON o.org_id = b.org_id
@@ -192,3 +193,37 @@ class SourceReader:
         if not row:
             return None
         return self.fetch_exam(user_id, str(row[0]))
+
+    def station_name(self) -> str:
+        with self.engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT org_name FROM ba_organization WHERE org_id=:org_id LIMIT 1"
+            ), {"org_id": self.org_id}).first()
+        return str(row[0]) if row and row[0] else str(self.org_id)
+
+    def fetch_conclusion_only_users(self) -> list[tuple[str, str]]:
+        with self.engine.connect() as conn:
+            conclusion_rows = conn.execute(text(
+                "SELECT c.user_id FROM szbf_exam_conclusion_record c "
+                "JOIN ba_user_basic b ON b.user_id=c.user_id "
+                "WHERE b.org_id=:org_id"
+            ), {"org_id": self.org_id}).fetchall()
+            detail_rows = conn.execute(text(
+                "SELECT d.user_id FROM szbf_exam_detail d "
+                "JOIN ba_user_basic b ON b.user_id=d.user_id "
+                "WHERE b.org_id=:org_id GROUP BY d.user_id"
+            ), {"org_id": self.org_id}).fetchall()
+        conclusion_users = {str(row[0]) for row in conclusion_rows}
+        detail_users = {str(row[0]) for row in detail_rows}
+        users = self._users()
+        result = []
+        for user_id in conclusion_users - detail_users:
+            user = users.get(user_id, {})
+            name = (
+                user.get("real_name")
+                or user.get("user_nick")
+                or user.get("user_name")
+                or ""
+            )
+            result.append((user_id, str(name)))
+        return result

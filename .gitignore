@@ -64,3 +64,5 @@ backend/artifacts/
 
 # 端到端重跑/diff 证据(2026-09-15)
 log/
+
+docs/

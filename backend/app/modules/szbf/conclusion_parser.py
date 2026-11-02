@@ -97,15 +97,17 @@ _INDICATOR_TERMS = (
     "尿酸", "胆固醇", "甘油三酯", "血糖", "糖化血红蛋白", "胆红素",
     "转氨酶", "转移酶", "肌酸激酶", "肌酐", "尿素", "白细胞", "红细胞",
     "血红蛋白", "血小板", "尿蛋白", "尿糖", "尿酮体", "尿潜血",
-    "尿比重", "尿酸碱度", "尿胆原", "尿上皮细胞", "维生素D",
-    "同型半胱氨酸", "载脂蛋白", "脂蛋白", "前列腺特异抗原",
-    "甲胎蛋白", "癌胚抗原", "促甲状腺激素", "甲状腺素",
+    "尿比重", "尿酸碱度", "尿胆原", "尿上皮细胞", "尿隐血", "尿白细胞",
+    "维生素D", "磷(P)", "无机磷", "同型半胱氨酸", "载脂蛋白", "脂蛋白",
+    "前列腺特异抗原", "甲胎蛋白", "癌胚抗原", "促甲状腺激素", "甲状腺素",
     "三碘甲状腺原氨酸", "乙肝表面抗体", "乙肝表面抗原", "乙肝e抗体",
     "乙肝e抗原", "乙肝核心抗体", "碱性磷酸酶", "胱抑素C",
     "胃蛋白酶原", "红细胞分布宽度", "平均血小板体积",
     "神经元特异性烯醇化酶", "鳞状细胞癌相关抗原", "CA-199",
 )
-_ABNORMAL_TAIL_RE = re.compile(r"(偏高|偏低|升高|降低|增高|不足|异常|阳性)")
+_ABNORMAL_TAIL_RE = re.compile(
+    r"(偏高|偏低|升高|降低|增高|不足|异常|阳性|\d{1,2}\+|\+)"
+)
 _NUM_LAB_RE = re.compile(
     r"(?<![\w])\*?\s*([\u4e00-\u9fa5A-Za-z0-9()（）/·\-]+)\s*[:：]\s*"
     r"([<>≤≥]?\d+(?:\.\d+)?)(?!\d|\.\d)(?!\s*\+)(?!\s*[/／]\s*\d)\s*"
@@ -117,7 +119,7 @@ _QUAL_LAB_RE = re.compile(
     r"(\+-|(?:\d{1,2})?\+|阳性|阴性|弱阳性)"
 )
 _LAB_NAME_SKIP = {"血压", "收缩压", "舒张压"}
-_BAD_INDICATOR_NAME_RE = re.compile(r"[，,；;。+]|检测异常|比值正常|常见原因|病史|本次体检|包括")
+_BAD_INDICATOR_NAME_RE = re.compile(r"[，,；;。]|\+[A-Za-z\u4e00-\u9fa5]|检测异常|比值正常|常见原因|病史|本次体检|包括")
 _BAD_INDICATOR_TAIL_RE = re.compile(r"(?:轻度|中度|重度)$")
 _JUNK_INDICATOR_NAME_RE = re.compile(r"检测室|常见|生理性|分类|增高原因")
 _JUNK_INDICATOR_NAMES = {"II比值", "17检测"}
@@ -165,7 +167,10 @@ def _method_re(profile: SzbfProfile) -> re.Pattern[str]:
     if not prefixes:
         return re.compile(r"(?!x)x")
     alternation = "|".join(re.escape(prefix) for prefix in prefixes)
-    return re.compile(rf"^(?:{alternation})(?:检查|提示|结果)?\s*[：:]\s*")
+    return re.compile(
+        rf"^(?:(?:{alternation})(?:检查|提示|结果)\s*[：:]?"
+        rf"|(?:{alternation})\s*[：:])\s*"
+    )
 
 
 def _strip_trailing_annotation(text: str) -> str:
@@ -184,6 +189,7 @@ def _strip_prefix(text: str, profile: SzbfProfile) -> str:
     text = text.strip().lstrip("*").strip()
     text = _ENUM_RE.sub("", text).strip()
     text = _method_re(profile).sub("", text)
+    text = re.sub(r"^见\s*", "", text)
     text = _strip_trailing_annotation(text)
     return text.strip()
 
@@ -250,7 +256,7 @@ def _classify(text: str) -> str:
 
 def _indicator_base_name(text: str) -> str:
     return re.sub(
-        r"(偏高|偏低|升高|降低|增高|不足|异常|阳性)$",
+        r"(偏高|偏低|升高|降低|增高|不足|异常|阳性|\d{1,2}\+|\+)$",
         "",
         normalize_item_name(text),
     )
@@ -294,6 +300,12 @@ def _candidates(text: str, profile: SzbfProfile):
         if not line:
             continue
         if any(skip in line for skip in profile.extra_skip):
+            continue
+        if "comma_list" in profile.title_patterns:
+            for segment in re.split(r",|\n", line):
+                segment = segment.strip()
+                if segment:
+                    yield segment
             continue
         match = _NUMBERED_RE.match(line)
         if match and "numbered" in profile.title_patterns:
@@ -392,8 +404,11 @@ def parse_con_suggest(text: str | None, profile: SzbfProfile) -> ParsedConclusio
         if kind == "indicator":
             if key not in indicator_index:
                 indicator_index[key] = len(result.indicators)
+                deviation = normalize_deviation(title)
+                if deviation is None and re.search(r"\d{1,2}\+|\+$", title):
+                    deviation = "异常"
                 result.indicators.append(
-                    ParsedIndicator(key, None, None, normalize_deviation(title), title)
+                    ParsedIndicator(key, None, None, deviation, title)
                 )
     for parsed in _parse_lab_lines(text or ""):
         key = parsed.item_name

@@ -2118,3 +2118,20 @@ stale classify 断言)。
 
 - **全量护栏(2026-11-01 收口)**: `tests/modules/report/ tests/test_safety_net.py tests/core/`
   = **1155 passed / 68 skipped**。
+
+## szbf 总站采集数据同步（2026-11-01 起）
+
+- 入口：`backend/scripts/sync_szbf_station.py --org-id 133 --target-hospital 133 --incremental`
+- 源表：`szbf_exam_detail` / `szbf_exam_conclusion_record` / `ba_user_basic` / `ba_user` / `ba_organization`
+- 目标：`hospital_<id>` 的 `report_info` / `report_indicator` / `report_interpretation` / `indicator_judgment` / `disease_hit`
+- 标记：`report_info.check_type='SZBF'`，医生/管理员报告列表默认隐藏；用户端真实锚定不匹配，仅统计使用
+- 口径：`is_combine=1` 大类行排除；影像/检查行不进指标；`con_suggest` 解析标题与指标补充；默认 `SZBF_INDICATOR_SOURCE=merge`
+- 同步表：`szbf_sync_map` / `szbf_sync_state`；首次 `--full-rebuild`，之后 cron 增量 + 每周全量对账
+- 生产 Java `hkb.stat.hospital-ids` 必须包含 133；`ba_organization.org_id=133` 为北京总站
+- 多总站：133 北京总站（numbered/bracket/legacy）与 280 天津总站（comma_list，`con_suggest` 为逗号清单）均已支持；280 目标库 hospital_280，实测 267 份报告 / 1,302 指标判定 / 2,690 结论判定 / 2,615 disease_hit
+- 280 覆盖待办：结论表有 558 人，明细表仅 267 人；当前按 267 人入库（与 133 口径一致），另有 291 人仅有结论（update_time 2026-10-29~30），暂不生成报告，待口径确认
+- `--full-rebuild` 成功后自动输出 `docs/output/<总站名>_仅有结论无明细用户.md`（结论表有记录、明细表无任何行；目录可用 `--conclusion-report-dir` 覆盖；生成失败只告警不影响同步）
+- 部署前置：对每个目标租户库执行 `009_szbf_sync_tables.sql` 与 `010_widen_disease_hit_user_id.sql`；在 `hospital_tenant` 登记 `hospital_<id>`；在该租户库执行 `risk.seed.sync_central`（否则 `disease_hit` 为空，CLI 预检会告警）；源库使用只读账号（默认 `SZBF_SOURCE_USER=readonly`）
+- cron 并发：增量/全量共用 `flock -n /tmp/szbf-sync.lock`，重叠轮次直接跳过；全量重建先读源并转换，成功后才删旧数据
+- 回滚：停 cron，调 `delete_all_szbf` / 删除 `check_type='SZBF'` 的报告及子表，清空同步表
+- 验证：北京 _BJ 源表基线 613 份报告 / 2,662 条异常化验明细 / 1,653 条结论记录；ETL 目标库实测 3,589 条 source='indicator' 判定（2,662 明细 + 927 条 con_suggest 补缺）与 4,193 条 source='conclusion' 判定；disease_hit 3,941 条。

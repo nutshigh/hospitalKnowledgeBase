@@ -328,6 +328,11 @@ def test_parse_filename_id_suffix_matches():
     assert _parse_filename("李四_12345X.pdf") == ("李四", "12345X")
     assert _parse_filename("LiSi_204800.pdf") == ("LiSi", "204800")
     assert _parse_filename("sub/dir/王五_204800.jpg") == ("王五", "204800")
+    # 2026-10-29: 末位小写 x / NBSP 前导空白
+    assert _parse_filename("张三_12345x.pdf") == ("张三", "12345X")
+    assert _parse_filename("徐杰08003x.pdf") == ("徐杰", "08003X")
+    assert _parse_filename("乔惠芬190020\u00a0.pdf") == ("乔惠芬", "190020")
+    assert _parse_filename("陈磊27441X\u00a0.pdf") == ("陈磊", "27441X")
 
 
 # ---------------------------------------------------------------------------

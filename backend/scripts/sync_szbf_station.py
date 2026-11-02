@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import settings
 from app.core.database import get_session
 from app.core.logging_config import setup_logging
+from app.modules.szbf.conclusion_report import write_conclusion_only_report
 from app.modules.szbf.profiles import get_profile
 from app.modules.szbf.source import SourceReader
 from app.modules.szbf.transformer import transform_exam
@@ -29,6 +30,8 @@ from app.modules.szbf.writer import (
 import logging
 
 log = logging.getLogger("app.szbf.sync")
+
+_DEFAULT_REPORT_DIR = Path(__file__).resolve().parents[2] / "docs" / "output"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--incremental", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument(
+        "--conclusion-report-dir",
+        default=str(_DEFAULT_REPORT_DIR),
+        help="全量导入后输出仅结论无明细用户 md 的目录",
+    )
     return parser
 
 
@@ -142,6 +150,21 @@ def main(argv=None) -> int:
                 status="ok",
                 message=f"exams={total_exams} indicators={total_indicators} diseases={total_diseases}",
             )
+            if args.full_rebuild:
+                try:
+                    report_rows = reader.fetch_conclusion_only_users()
+                    report_path = write_conclusion_only_report(
+                        reader.station_name(),
+                        args.org_id,
+                        report_rows,
+                        args.conclusion_report_dir,
+                    )
+                    log.info(
+                        "仅结论无明细用户已输出: %s (%d 人)",
+                        report_path, len(report_rows),
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("生成仅结论无明细用户失败(不影响同步)")
         log.info(
             "完成 source=%s target=%s exams=%s indicators=%s diseases=%s elapsed=%.1fs",
             args.org_id, args.target_hospital, total_exams, total_indicators,

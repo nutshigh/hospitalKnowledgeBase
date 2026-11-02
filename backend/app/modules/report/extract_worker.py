@@ -25,24 +25,26 @@ _log = logging.getLogger("app.batch.extract")
 ALLOWED_EXTS = {"pdf", "doc", "jpg", "jpeg", "png"}
 
 # 文件名约定: <姓名>_<身份证后六位>.<ext>  (后六位 = 5 位数字 + 末位数字或 X)
-_FILENAME_RE = re.compile(r"^([^_]+)_([0-9]{5}[0-9X])$")
+# 2026-10-29: 末位 x 小写也接受(归一为大写); base 先 strip 掉 NBSP/空白。
+_FILENAME_RE = re.compile(r"^([^_]+)_([0-9]{5}[0-9Xx])$")
 # 兼容无下划线形式 <姓名><后六位>.<ext>: 姓名限中文, 最后 6 位为后六位;
 # 姓名与后六位之间混入的多余数字忽略(如 王超1251011 -> 王超/251011)。
-_FILENAME_NO_SEP_RE = re.compile(r"^([\u4e00-\u9fff·]+)[0-9]*([0-9]{5}[0-9X])$")
+_FILENAME_NO_SEP_RE = re.compile(r"^([\u4e00-\u9fff·]+)[0-9]*([0-9]{5}[0-9Xx])$")
 
 
 def _parse_filename(filename: str) -> Optional[tuple[str, str]]:
     """从 zip/tar 内文件名抽取 (姓名, 身份证后六位)。
-    支持 <姓名>_<后六位> 与 <姓名><后六位>(姓名限中文)。
+    支持 <姓名>_<后六位> 与 <姓名><后六位>(姓名限中文);
+    后六位末位 x/X 大小写不敏感, 首尾 NBSP/空白忽略。
     Returns (str, str) on match, None on mismatch。
     """
-    base = os.path.splitext(os.path.basename(filename))[0]
+    base = os.path.splitext(os.path.basename(filename))[0].strip()
     m = _FILENAME_RE.match(base)
     if m:
-        return m.group(1), m.group(2)
+        return m.group(1), m.group(2).upper()
     m = _FILENAME_NO_SEP_RE.match(base)
     if m:
-        return m.group(1), m.group(2)
+        return m.group(1), m.group(2).upper()
     return None
 
 
